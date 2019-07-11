@@ -1856,6 +1856,25 @@ sub load_extra_tests_udev {
     loadtest "kernel/udev_no_symlink";
 }
 
+sub load_extra_tests_clemix {
+    my $basedir   = $bmwqemu::vars{CASEDIR} . '/tests/';
+    my $tests_dir = $basedir . 'clemix/';
+    my $exclude   = get_var('CLEMIX_EXCLUDE', '$a');
+    my @tests;
+    find({wanted => sub {
+                return unless -f $_;
+                return unless $_ =~ /\.pm$/;
+                my $name = substr($_, length($basedir), -3);
+                return if (basename($name) =~ $exclude);
+                push(@tests, $name);
+    }, no_chdir => 1}, $tests_dir);
+    @tests = sort(@tests);
+
+    for my $t (@tests) {
+        loadtest $t;
+    }
+}
+
 sub load_networkd_tests {
     loadtest 'networkd/networkd_init';
     loadtest 'networkd/networkd_dhcp';
