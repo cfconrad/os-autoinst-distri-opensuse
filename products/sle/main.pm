@@ -621,6 +621,11 @@ $testapi::distri->set_expected_autoinst_failures(create_list_of_autoinst_failure
 
 return 1 if load_yaml_schedule;
 
+if (get_var('CLEMIX')) {
+    load_extra_tests();
+    return 1;
+}
+
 if (is_jeos) {
     load_jeos_tests();
 }
