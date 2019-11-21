@@ -37,7 +37,7 @@ sub create_test_data
 sub run {
     my $self   = shift;
     my $size   = get_var('VIRTIO_CONSOLE_TEST_FILESIZE') // 100 * 1024;
-    my $repeat = 1;
+    my $repeat = 1000;
 
     my $console = $self->select_serial_terminal;
 
@@ -76,7 +76,7 @@ sub run {
         }
         my $sha1sum_2 = sha1_sum($output);
         if ($sha1sum eq $sha1sum_2) {
-            record_info('OK ' . $i);
+            record_info('OK ' . $i, "");
         } else {
             script_run("cat /sys/kernel/debug/virtio-ports/*");
             record_info("FAILED $i", "ORIG: $sha1sum\nFAIL: $sha1sum_2", result => 'fail');
@@ -85,12 +85,6 @@ sub run {
             die("OUTPUT MISSMATCH");
         }
     }
-    die("FOOF");
-}
-
-sub poist_fail_hook
-{
-    die("Die in post fail hook");
 }
 
 sub test_flags {

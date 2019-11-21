@@ -68,9 +68,12 @@ sub hyperv_cmd_with_retry {
 }
 
 sub run {
-    my $svirt               = select_console('svirt');
+    print("CLEMIX Before select console svirt");
+    my $svirt = select_console('svirt');
+    print("CLEMIX Before select console hyperv-intermediary");
     my $hyperv_intermediary = select_console('hyperv-intermediary');
-    my $name                = $svirt->name;
+    print("CLEMIX After  select console hyperv-intermediary");
+    my $name = $svirt->name;
 
     # Following two variables specify where the root with expected directories is located.
     # Beware that we deal with Windows so backslash ('\') is used and multiple backslashes
@@ -239,9 +242,9 @@ sub run {
     my ($jobid) = get_required_var('NAME') =~ /(\d+)/;
     my $xfreerdp_log = "/tmp/${jobid}-xfreerdp-${name}-\$(date +%s).log";
     type_string "rm -fv xfreerdp_${name}_stop* xfreerdp_${name}.log; while true; do inotifywait xfreerdp_${name}_stop; DISPLAY=:$xvncport xfreerdp /u:"
-      . get_var('HYPERV_USERNAME') . " /p:'"
-      . get_var('HYPERV_PASSWORD') . "' /v:"
-      . get_var('HYPERV_SERVER') . ' +auto-reconnect /auto-reconnect-max-retries:10'
+      . get_var('HYPERV_USERNAME') . " /p:'";
+    type_string get_var('HYPERV_PASSWORD'), secret => 1;
+    type_string "' /v:" . get_var('HYPERV_SERVER') . ' +auto-reconnect /auto-reconnect-max-retries:10'
       . " /cert-ignore /vmconnect:$vmguid /f -floatbar /log-level:DEBUG 2>&1 > $xfreerdp_log; echo $vmguid > xfreerdp_${name}_stop; done; ";
 
     hyperv_cmd_with_retry("$ps Start-VM $name");
