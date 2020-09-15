@@ -17,8 +17,22 @@ use strict;
 use warnings;
 use lockapi;
 
+sub wait_for_user
+{
+    my $match = '666-CONTINUE-666';
+
+    assert_script_run('echo "WAIT_FOR_USER_TO_CONTINUE"');
+    assert_script_run(qq(echo "echo '$match' | wall" > /tmp/continue.sh  ));
+    assert_script_run('chmod +x /tmp/continue.sh');
+    bmwqemu::diag('WAIT_FOR_USER_TO_CONTIUE');
+    wait_serial($match, no_regex => 1, timeout => 60 * 60 * 2);
+}
+
+
 sub run {
     my ($self, $ctx) = @_;
+    wait_for_user();
+
     mutex_wait('radvdipv6t01');
     $self->check_ipv6($ctx);
 
