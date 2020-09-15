@@ -54,6 +54,7 @@ sub run {
     systemctl('is-active network');
     systemctl('is-active wicked');
 
+    sleep;
     $self->download_data_dir();
 
     my $package_list = 'openvpn';
