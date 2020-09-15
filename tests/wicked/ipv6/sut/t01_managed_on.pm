@@ -16,6 +16,7 @@ use base 'wickedbase';
 use strict;
 use warnings;
 use lockapi;
+use testapi;
 
 sub wait_for_user
 {
