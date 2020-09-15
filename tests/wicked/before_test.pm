@@ -67,7 +67,7 @@ sub run {
     systemctl('is-active network');
     systemctl('is-active wicked');
 
-    bmwqemu::diag("(cd '" . WICKED_DATA_DIR . "'; curl -L -v " . autoinst_url . "/data/wicked > wicked.data && cpio -id < wicked.data && mv data wicked && rm wicked.data)");
+    bmwqemu::diag("(cd '" . wicked_base::WICKED_DATA_DIR . "'; curl -L -v " . autoinst_url . "/data/wicked > wicked.data && cpio -id < wicked.data && mv data wicked && rm wicked.data)");
     wait_for_user();
     $self->download_data_dir();
 
