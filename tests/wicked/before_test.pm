@@ -21,6 +21,19 @@ use serial_terminal;
 use main_common 'is_updates_tests';
 use repo_tools 'generate_version';
 
+
+sub wait_for_user
+{
+    my $match = '666-CONTINUE-666';
+
+    bmwqemu::diag('WAIT_FOR_USER_TO_CONTIUE');
+    assert_script_run('echo "WAIT_FOR_USER_TO_CONTINUE"');
+    assert_script_run(qq(echo "echo '$match' | wall" > /tmp/continue.sh  ));
+    assert_script_run('chmod +x /tmp/continue.sh');
+    wait_serial($match, no_regex => 1, timeout => 60 * 60 * 2);
+}
+
+
 sub run {
     my ($self, $ctx) = @_;
     $self->select_serial_terminal;
@@ -54,7 +67,8 @@ sub run {
     systemctl('is-active network');
     systemctl('is-active wicked');
 
-    sleep;
+    bmwqemu::diag("(cd '" . WICKED_DATA_DIR . "'; curl -L -v " . autoinst_url . "/data/wicked > wicked.data && cpio -id < wicked.data && mv data wicked && rm wicked.data)");
+    wait_for_user();
     $self->download_data_dir();
 
     my $package_list = 'openvpn';
