@@ -22,6 +22,16 @@ use main_common 'is_updates_tests';
 use repo_tools 'generate_version';
 
 
+sub wait_for_user
+{
+    my $match = '666-CONTINUE-666';
+
+    assert_script_run('echo "WAIT_FOR_USER_TO_CONTINUE"');
+    assert_script_run(qq(echo "echo '$match' | wall" > /tmp/continue.sh  ));
+    assert_script_run('chmod +x /tmp/continue.sh');
+    bmwqemu::diag('WAIT_FOR_USER_TO_CONTIUE');
+    wait_serial($match, no_regex => 1, timeout => 60 * 60 * 2);
+}
 
 sub run {
     my ($self, $ctx) = @_;
@@ -112,6 +122,7 @@ sub run {
                 record_info('COMMIT', $commit_sha);
             }
         }
+        wait_for_user();
         if (check_var('WICKED', 'ipv6')) {
             my $repo_url = 'https://download.opensuse.org/repositories/home:/asmorodskyi/';
             $repo_url = 'http://download.suse.de/ibs/home:/wicked-maintainers:/openQA/' if (is_sle());
