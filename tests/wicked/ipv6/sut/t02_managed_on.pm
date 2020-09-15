@@ -19,6 +19,18 @@ use lockapi;
 
 sub run {
     my ($self, $ctx) = @_;
+
+    assert_script_run('ip link set dev eth0 up');
+    my $responses = 0;
+    while ($responses < 1){
+        my $out = script_output('arping -D -I eth0 10.0.2.2', proceed_on_failure => 1);
+        record_info('OUT', $out);
+        if ($out =~ m/Received\s+(\d+)\s+response/){
+            $responses = $1;
+        }
+    }
+
+
     mutex_wait('radvdipv6t02');
     $self->check_ipv6($ctx);
 }
