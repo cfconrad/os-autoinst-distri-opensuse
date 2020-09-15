@@ -42,7 +42,7 @@ sub run {
         }
     }
 
-    wait_for_user();
+    #    wait_for_user();
 
     mutex_wait('radvdipv6t01');
     $self->check_ipv6($ctx);
