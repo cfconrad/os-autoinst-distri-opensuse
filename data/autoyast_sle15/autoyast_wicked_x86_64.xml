@@ -80,11 +80,18 @@
     </products>
     <install_recommended config:type="boolean">true</install_recommended>
     <packages config:type="list">
-      <package>iputils</package>
       <package>sles-release</package>
       <package>sle-module-server-applications-release</package>
       <package>sle-module-development-tools-release</package>
       <package>sle-module-basesystem-release</package>
+      <package>openvpn</package>
+      <package>tcpdump</package>
+      <package>openvswitch</package>
+      <package>iputils</package>
+      <package>libteam-tools</package>
+      <package>libteamdctl0</package>
+      <package>gcc</package>
+      <package>vim</package>
     </packages>
     <patterns config:type="list">
       <pattern>base</pattern>
