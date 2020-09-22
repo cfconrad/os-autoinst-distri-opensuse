@@ -35,7 +35,18 @@
       </addon>
     </addons>
   </suse_register>
-
+  <software>
+    <packages  config:type="list">
+      <package>openvpn</package>
+      <package>tcpdump</package>
+      <package>openvswitch</package>
+      <package>iputils</package>
+      <package>libteam-tools</package>
+      <package>libteamdctl0</package>
+      <package>gcc</package>
+      <package>vim</package>
+    </packages>
+  </software>
   <scripts>
     <chroot-scripts config:type="list">
       <script>
