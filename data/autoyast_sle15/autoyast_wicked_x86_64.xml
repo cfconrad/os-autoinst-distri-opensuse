@@ -58,6 +58,24 @@
         </source>
       </script>
     </chroot-scripts>
+    <post-scripts config:type="list">
+      <script>
+        <debug config:type="boolean">true</debug>
+        <interpreter>shell</interpreter>
+        <source>
+          <![CDATA[
+            #!/bin/sh
+            sed -i 's/\bresume=\/dev\/vda[0-9]\+\b//g' /etc/default/grub
+            sed -i 's/\bsplash=silent\b//g' /etc/default/grub
+            sed -i 's/\bquiet\b//g' /etc/default/grub
+            sed -i '/GRUB_DISABLE_LINUX_UUID/s/^# //' /etc/default/grub
+            cp /etc/default/grub /root/grub.foo_post_scripts
+            grub2-mkconfig -o /boot/grub2/grub.cfg | tee -a /root/mkconfig.foo
+            ]]>
+        </source>
+      </script>
+    </post-scripts>
+
   </scripts>
   <partitioning config:type="list">
     <drive>
