@@ -49,7 +49,8 @@
             sed -i 's/\bsplash=silent\b//g' /etc/default/grub
             sed -i 's/\bquiet\b//g' /etc/default/grub
             sed -i '/GRUB_DISABLE_LINUX_UUID/s/^# //' /etc/default/grub
-            grub2-mkconfig -o /boot/grub2/grub.cfg
+            cp /etc/default/grub /root/grub.foo
+            grub2-mkconfig -o /boot/grub2/grub.cfg | tee -a /root/mkconfig.foo
             ]]>
         </source>
       </script>
