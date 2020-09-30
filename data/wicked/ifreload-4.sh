@@ -7,6 +7,22 @@ pause()
 	read
 }
 
+show_bridge()
+{
+	br=$1
+	echo -n "bridge:$br {"
+	bridge link | grep "master $br" | awk -F': ' '{print $2}' | xargs echo -n
+	echo "}"
+}
+
+show_all_bridges()
+{
+        for br in $(ip -o link show type bridge | awk -F': ' '{print $2}'); do
+		show_bridge "$br"
+	done
+}
+
+
 unset wdebug
 unset cprep
 unset only
@@ -23,13 +39,13 @@ while test $# -gt 0 ; do
 done
 
 err=0
-dir=${1:-"/etc/sysconfig/network"}
+dir=${dir:-"/etc/sysconfig/network"}
 cfg=${dir:+--ifconfig "compat:suse:$dir"}
 
 test "X${dir}" != "X" -a -d "${dir}" || exit 2
 
-bridge_name="br3"
-bridge_port="eth3"
+bridge_name="${brdige_name:-br3}"
+bridge_port="${bridge_port:-eth3}"
 
 # permit to override above variables
 config="${0//.sh/.conf}"
@@ -67,7 +83,7 @@ step1()
 	wicked ifstatus $cfg $bridge_name $bridge_port
 	ip a s dev $bridge_name
 	ip a s dev $bridge_port
-	brctl show $bridge_name
+	show_bridge $bridge_name
 
 	echo ""
 	if ip a s dev $bridge_port | grep -qs "master .*$bridge_name" ; then
@@ -117,7 +133,7 @@ step2()
 	wicked ifstatus $cfg $bridge_name $bridge_port
 	ip a s dev $bridge_name
 	ip a s dev $bridge_port
-	brctl show $bridge_name
+	show_bridge $bridge_name
 
 	echo ""
 	if ip a s dev $bridge_port | grep -qs "master .*$bridge_name" ; then
@@ -167,7 +183,7 @@ step3()
 	wicked ifstatus $cfg $bridge_name $bridge_port
 	ip a s dev $bridge_name
 	ip a s dev $bridge_port
-	brctl show $bridge_name
+	show_bridge $bridge_name
 
 	echo ""
 	if ip a s dev $bridge_port | grep -qs "master .*$bridge_name" ; then
@@ -217,7 +233,7 @@ step4()
 	wicked ifstatus $cfg $bridge_name $bridge_port
 	ip a s dev $bridge_name
 	ip a s dev $bridge_port
-	brctl show $bridge_name
+	show_bridge $bridge_name
 
 	echo ""
 	if ip a s dev $bridge_port | grep -qs "master .*$bridge_name" ; then
@@ -267,7 +283,7 @@ step5()
 	wicked ifstatus $cfg $bridge_name $bridge_port
 	ip a s dev $bridge_name
 	ip a s dev $bridge_port
-	brctl show $bridge_name
+	show_bridge $bridge_name
 
 	echo ""
 	if ip a s dev $bridge_port | grep -qs "master .*$bridge_name" ; then
@@ -317,7 +333,7 @@ step6()
 	wicked ifstatus $cfg $bridge_name $bridge_port
 	ip a s dev $bridge_name
 	ip a s dev $bridge_port
-	brctl show $bridge_name
+	show_bridge $bridge_name
 
 	echo ""
 	if ip a s dev $bridge_port | grep -qs "master .*$bridge_name" ; then
@@ -367,7 +383,7 @@ step7()
 	wicked ifstatus $cfg $bridge_name $bridge_port
 	ip a s dev $bridge_name
 	ip a s dev $bridge_port
-	brctl show $bridge_name
+	show_bridge $bridge_name
 
 	echo ""
 	if ip a s dev $bridge_port | grep -qs "master .*$bridge_name" ; then
@@ -409,7 +425,7 @@ cleanup()
 	echo "-----------------------------------"
 	wicked ifstatus all
 	echo "-----------------------------------"
-	brctl show
+	show_all_bridges
 	echo "-----------------------------------"
 	ls -l /var/run/wicked/nanny/
 	echo "==================================="
