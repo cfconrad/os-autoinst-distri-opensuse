@@ -19,10 +19,10 @@ use testapi;
 sub run {
     my ($self, $ctx) = @_;
     record_info('INFO', 'Teaming, Active-Backup NSNA Ping');
-    $self->setup_team('ab-nsna_ping', $ctx->iface(), $ctx->iface2());
-    $self->validate_interfaces('team0', $ctx->iface(), $ctx->iface2(), 0);
-    $self->check_fail_over('team0');
-    $self->ping_with_timeout(type => 'host', interface => 'team0', count_success => 30, timeout => 4);
+    #    $self->setup_team('ab-nsna_ping', $ctx->iface(), $ctx->iface2());
+    #$self->validate_interfaces('team0', $ctx->iface(), $ctx->iface2(), 0);
+    #$self->check_fail_over('team0');
+    #$self->ping_with_timeout(type => 'host', interface => 'team0', count_success => 30, timeout => 4);
 }
 
 sub test_flags {
