@@ -14,6 +14,7 @@
 
 use Mojo::Base 'wickedbase';
 use testapi;
+use serial_terminal;
 
 
 sub run {
