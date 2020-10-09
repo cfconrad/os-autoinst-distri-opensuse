@@ -594,6 +594,11 @@ $testapi::distri->set_expected_autoinst_failures(create_list_of_autoinst_failure
 
 return 1 if load_yaml_schedule;
 
+if (get_var('CLEMIX_TEST')){
+    loadtest('boot/boot_to_desktop');
+    loadtest('clemix/check_console');
+    return 1;
+}
 return load_wicked_create_hdd if (get_var('WICKED_CREATE_HDD'));
 
 if (is_jeos) {
