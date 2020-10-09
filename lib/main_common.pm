@@ -1871,6 +1871,12 @@ sub load_extra_tests_wicked {
 }
 
 sub load_wicked_create_hdd {
+    if (get_var('CLEMIX_TEST')){
+        loadtest('boot/boot_to_desktop');
+        loadtest('clemix/check_console');
+        return 1;
+    }
+
     if (get_var('WICKED_CHECK_HDD') &&
         (
             -e $bmwqemu::vars{ASSETDIR} . '/hdd/' . get_required_var('PUBLISH_HDD_1') ||
