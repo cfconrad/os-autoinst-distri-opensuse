@@ -478,6 +478,8 @@ sub setup_bond {
 
     file_content_replace($cfg_bond0, ipaddr4 => $ipaddr4, ipaddr6 => $ipaddr6, iface0 => $iface0, iface1 => $iface1, ping_ip_1 => $ping_ip_1, ping_ip_2 => $ping_ip_2, '--sed-modifier' => 'g');
 
+    $self->type_marker("DO 'wicked ifup all' now, going to sleep");
+    sleep;
     $self->wicked_command('ifup', 'all');
 }
 
