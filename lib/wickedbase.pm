@@ -693,7 +693,7 @@ sub pre_run_hook {
         add_serial_console($serial_terminal);
     }
 
-    $self->select_console('root-console');
+    $select_console('root-console');
     $self->type_marker('## START: ' . $self->{name});
 
     if (get_var('VIRTIO_CONSOLE_NUM', 1) > 1){
