@@ -120,8 +120,8 @@ sub run {
         $package_list .= ' gcc'                         if check_var('WICKED', 'advanced');
         zypper_call('-q in ' . $package_list, timeout => 400);
 
-        assert_script_run('zypper ar http://download.suse.de/ibs/home:/tsbogend:/bsc1177678/standard/home:tsbogend:bsc1177678.repo');
-        assert_script_run('zypper in --allow-vendor-change -y --force kernel-default ');
+        assert_script_run('echo "zypper ar http://download.suse.de/ibs/home:/tsbogend:/bsc1177678/standard/home:tsbogend:bsc1177678.repo" > do_it');
+        $self->wait_for_user();
         $self->reset_wicked();
         record_info('PKG', script_output(q(rpm -qa 'wicked*' --qf '%{NAME}\n' | sort | uniq | xargs rpm -qi)));
     }
