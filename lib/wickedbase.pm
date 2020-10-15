@@ -461,6 +461,19 @@ sub validate_macvtap {
     validate_script_output("cat $macvtap_log", sub { m/Success listening to tap device/ });
 }
 
+
+
+sub wait_for_user
+{
+    my $match = '666-CONTINUE-666';
+    assert_script_run('echo "WAIT_FOR_USER_TO_CONTINUE"');
+    assert_script_run(qq(echo "echo '$match' | wall" > /tmp/continue.sh  ));
+    assert_script_run('chmod +x /tmp/continue.sh');
+    wait_serial($match, no_regex => 1, timeout => 60 * 60 * 2);
+}
+
+
+
 sub setup_bond {
     my ($self, $mode, $iface0, $iface1) = @_;
 
