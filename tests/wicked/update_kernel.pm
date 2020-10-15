@@ -22,9 +22,12 @@ sub run {
     }
 
 
-    assert_script_run('zypper ar --no-gpgcheck --refresh http://download.suse.de/ibs/home:/tsbogend:/bsc1177678/standard/home:tsbogend:bsc1177678.repo  -n "custom_kernel_repo"');
+    assert_script_run('zypper ar --no-gpgcheck --refresh  -n "custom_kernel_repo" http://download.suse.de/ibs/home:/tsbogend:/bsc1177678/standard/home:tsbogend:bsc1177678.repo ');
+    assert_script_run('zypper in -y --from custom_kernel_repo --force kernel-default');
+    assert_script_run('zypper rm -y kernel-default-5.3.18-33.2.x86_64');
 
-    assert_script_run('zypper in --from custom_kernel_repo --force kernel-default');
+    assert_script_run '[ "$(zypper se -s kernel-default | grep -c i+)" = "1" ]', fail_message => 'More than one kernel was installed';
+
     power_action('reboot');
 }
 
