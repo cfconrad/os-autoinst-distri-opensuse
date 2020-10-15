@@ -1838,6 +1838,7 @@ sub get_wicked_tests {
     }, no_chdir => 1}, $tests_dir);
     @tests = sort(@tests);
 
+    unshift(@tests, 'wicked/update_kernel') if (get_var('WICKED_UPDATE_KERNEL'));
     unshift(@tests, 'wicked/before_test');
     if ($args{only_names}) {
         @tests = map(basename($_), @tests);
