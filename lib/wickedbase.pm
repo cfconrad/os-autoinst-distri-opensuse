@@ -478,8 +478,6 @@ sub setup_bond {
 
     file_content_replace($cfg_bond0, ipaddr4 => $ipaddr4, ipaddr6 => $ipaddr6, iface0 => $iface0, iface1 => $iface1, ping_ip_1 => $ping_ip_1, ping_ip_2 => $ping_ip_2, '--sed-modifier' => 'g');
 
-    $self->type_marker("WAIT");
-    sleep;
     $self->wicked_command('ifup', 'all');
 }
 
@@ -695,7 +693,7 @@ sub pre_run_hook {
     select_console('root-console');
     type_string qq(echo "$coninfo" > /dev/$testapi::serialdev\n);
     $self->type_marker('## START: ' . $self->{name});
-    if (get_var('VIRTIO_CONSOLE_NUM', 1) > 1){
+    if (get_var('VIRTIO_CONSOLE_NUM', 1) > 1) {
         select_console('root-virtio-terminal1');
         $self->type_marker('## START: ' . $self->{name});
     }
