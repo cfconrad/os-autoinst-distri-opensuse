@@ -27,3 +27,5 @@ sub run {
     assert_script_run('zypper in --from custom_kernel_repo --force kernel-default');
     power_action('reboot');
 }
+
+1;
