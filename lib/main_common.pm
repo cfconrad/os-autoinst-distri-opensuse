@@ -2788,6 +2788,11 @@ sub load_extra_tests_kernel {
     loadtest "kernel/tuned";
 }
 
+sub load_extra_tests_virtio_console_test {
+    loadtest 'kernel/virtio_console';
+    loadtest 'kernel/virtio_console_long_output';
+}
+
 sub load_publiccloud_tests {
     if (get_var('PUBLIC_CLOUD_PREPARE_TOOLS')) {
         loadtest "publiccloud/prepare_tools";
