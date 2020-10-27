@@ -673,7 +673,7 @@ sub post_run {
 
     select_console('root-virtio-terminal1') if (get_var('VIRTIO_CONSOLE_NUM', 1) > 1);
     $self->do_barrier('post_run');
-    if ($self->{name} ne 'before_test' && get_var('WICKED_TCPDUMP')) {
+    if ($self->{name} =~ m/^t\d+_/ && get_var('WICKED_TCPDUMP')) {
         script_run('kill ' . get_var('WICKED_TCPDUMP_PID'));
         eval {
             upload_file('/tmp/tcpdump' . $self->{name} . '.pcap', 'tcpdump' . $self->{name} . '.pcap');
@@ -711,7 +711,7 @@ sub pre_run_hook {
         $self->type_marker('## START: ' . $self->{name});
     }
 
-    if ($self->{name} ne 'before_test' && get_var('WICKED_TCPDUMP')) {
+    if ($self->{name} =~ m/^t\d+_/ && get_var('WICKED_TCPDUMP')) {
         script_run('tcpdump -s0 -U -w "/tmp/tcpdump' . $self->{name} . '.pcap" >& /dev/null & export CHECK_TCPDUMP_PID=$!');
         set_var('WICKED_TCPDUMP_PID', script_output('echo $CHECK_TCPDUMP_PID'));
     }
