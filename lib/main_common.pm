@@ -2791,6 +2791,19 @@ sub load_extra_tests_kernel {
 sub load_extra_tests_virtio_console_test {
     loadtest 'kernel/virtio_console';
     loadtest 'kernel/virtio_console_long_output';
+
+    if (get_var('VIRTIO_CONSOLE_NUM', 1) > 1) {
+        my $start_number = check_var('ARCH', 'ppc64le') ? 2 : 1;
+        for (my $i = 1; $i < get_var('VIRTIO_CONSOLE_NUM'); $start_number++, $i++) {
+            my $args = OpenQA::Test::RunArgs->new();
+            $args->{serial_console_name}  = 'hvc' . $i;
+            $args->{virtio_terminal_name} = 'root-virtio-terminal' . $i;
+            loadtest('kernel/virtio_console_enable',      name => "term_${i}_virtio_console_enable",      run_args => $args);
+            loadtest('kernel/virtio_console',             name => "term_${i}_virtio_console",             run_args => $args);
+            loadtest('kernel/virtio_console_long_output', name => "term_${i}_virtio_console_long_output", run_args => $args);
+        }
+    }
+
 }
 
 sub load_publiccloud_tests {

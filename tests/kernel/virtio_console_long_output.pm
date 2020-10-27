@@ -36,11 +36,16 @@ sub create_test_data
 }
 
 sub run {
-    my $self   = shift;
+    my ($self, $args) = @_;
     my $size   = get_var('VIRTIO_CONSOLE_TEST_FILESIZE') // 200 * 1024;
     my $repeat = 1000;
 
-    $self->select_serial_terminal;
+    if ($args && $args->{virtio_terminal_name}) {
+        select_console($args->{virtio_terminal_name});
+    } else {
+        $self->select_serial_terminal;
+    }
+
 
     # prepare upload directory
     system('mkdir -p ulogs/') == 0 or die('Failed to create ulogs/ directory');

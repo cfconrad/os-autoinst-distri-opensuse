@@ -24,11 +24,15 @@ done
 FIN.
 
 sub run {
-    my $self = shift;
-    my $m    = get_var('VIRTIO_CONSOLE_TEST_M') || 10;
-    my $n    = get_var('VIRTIO_CONSOLE_TEST_N') || 10;
+    my ($self, $args) = @_;
+    my $m = get_var('VIRTIO_CONSOLE_TEST_M') || 10;
+    my $n = get_var('VIRTIO_CONSOLE_TEST_N') || 10;
 
-    $self->select_serial_terminal;
+    if ($args && $args->{virtio_terminal_name}) {
+        select_console($args->{virtio_terminal_name});
+    } else {
+        $self->select_serial_terminal;
+    }
     for my $i (0 .. $m) {
         script_run("echo '#$i'");
         script_output(sprintf($multiline_script, $n));
