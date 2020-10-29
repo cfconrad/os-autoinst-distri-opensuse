@@ -105,11 +105,10 @@ sub run {
             zypper_call("in --from $repo_id $resolv_options --force -y --force-resolution  wicked wicked-service", log => 'zypper_in_wicked.log');
             my ($zypper_in_output) = script_output('cat /tmp/zypper_in_wicked.log');
             my @installed_packages;
-            if ($zypper_in_output =~ m/(?s)(?:The following \d+ packages? are going to be upgraded:(?<packages>.*?))(?:(?:\r*\n){2})/) {
-                push(@installed_packages, split(/\s+/, $+{packages}));
-            }
-            if ($zypper_in_output =~ m/(?s)(?:The following NEW packages? is going to be installed:(?<packages>.*?))(?:(?:\r*\n){2})/) {
-                push(@installed_packages, split(/\s+/, $+{packages}));
+            for my $reg (('The following \d+ packages? (are|is) going to be upgraded:',
+                    'The following NEW packages? (are|is) going to be installed:',
+                    'The following \d+ packages? (are|is) going to be reinstalled:')) {
+                push(@installed_packages, split(/\s+/, $+{packages})) if ($zypper_in_output =~ m/(?s)($reg(?<packages>.*?))(?:\r*\n){2}/);
             }
             record_info('INSTALLED', join("\n", @installed_packages));
             my @zypper_ps_progs = split(/\s+/, script_output('zypper ps  --print "%s"', qr/^\s*$/));
