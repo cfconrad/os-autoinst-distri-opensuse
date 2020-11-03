@@ -38,6 +38,7 @@ sub run {
     for ($cnt = 1; $cnt <= $num_primary; $cnt++) {
         assert_script_run(sprintf('parted -s /dev/vdb mkpart primary %dMiB %dMiB', $cnt, $cnt + 1));
     }
+    sleep;
     for (; $cnt <= $num_primary + $num_openqapart; $cnt++) {
         assert_script_run(sprintf('parted -s /dev/vdb mkpart logical %dMiB %dMiB', $cnt, $cnt + 1));
     }
