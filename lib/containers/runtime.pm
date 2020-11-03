@@ -11,7 +11,7 @@
 # Maintainer: qac team <qa-c@suse.de>
 
 package containers::runtime;
-use Mojo::Base qw(consoletest);
+use Mojo::Base -base;
 use testapi;
 use Test::Assert 'assert_equals';
 

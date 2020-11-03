@@ -20,6 +20,7 @@
 use Mojo::Base qw(consoletest);
 use testapi;
 use containers::runtime;
+use Data::Dumper;
 
 sub _sanity_test_btrfs {
     my ($rt, $dev_path) = @_;
@@ -67,7 +68,8 @@ sub _test_btrfs_device_mgmt {
 }
 
 sub run {
-    my $docker    = containers::runtime->new->runtime('docker');
+    my $docker = containers::runtime->new(runtime => 'docker');
+    print Dumper($docker);
     my $btrfs_dev = '/var/lib/docker';
     _sanity_test_btrfs($docker, $btrfs_dev);
     _test_btrfs_thin_partitioning($docker, $btrfs_dev);
