@@ -17,6 +17,21 @@ use Test::Assert 'assert_equals';
 
 has runtime => undef;
 
+sub _assert_script_run {
+    my ($self, $cmd, @args) = @_;
+    assert_script_run($self->runtime . " " . $cmd, @args);
+}
+
+sub _script_run {
+    my ($self, $cmd, @args) = @_;
+    return script_run($self->runtime . " " . $cmd, @args);
+}
+
+sub _script_output {
+    my ($self, $cmd, @args) = @_;
+    return script_output($self->runtime . " " . $cmd, @args);
+}
+
 sub build {
     my ($self, $dockerfile_path, $container_tag) = @_;
     die 'wrong number of arguments' if @_ < 3;
@@ -78,4 +93,11 @@ sub cleanup_system {
     assert_equals(0, scalar @{$self->retrieve_images()},     "images have not been removed");
 }
 
+package containers::docker;
+use Mojo::Base 'containers::runtime';
+has runtime => 'docker';
+
+package containers::podman;
+use Mojo::Base 'containers::runtime';
+has runtime => 'podman';
 1;

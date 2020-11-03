@@ -70,6 +70,10 @@ sub _test_btrfs_device_mgmt {
 sub run {
     my $docker = containers::runtime->new(runtime => 'docker');
     print Dumper($docker);
+    my $docker2 = containers::docker->new();
+    print Dumper($docker2);
+    my $podman = containers::podman->new();
+    print Dumper($podman);
     my $btrfs_dev = '/var/lib/docker';
     _sanity_test_btrfs($docker, $btrfs_dev);
     _test_btrfs_thin_partitioning($docker, $btrfs_dev);
