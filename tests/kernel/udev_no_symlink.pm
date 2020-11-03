@@ -39,7 +39,7 @@ sub run {
         assert_script_run(sprintf('parted -s /dev/vdb mkpart primary %dMiB %dMiB', $cnt, $cnt + 1));
     }
     for (; $cnt <= $num_primary + $num_openqapart; $cnt++) {
-        assert_script_run(sprintf('parted -s /dev/vdb mkpart openqapart %dMiB %dMiB', $cnt, $cnt + 1));
+        assert_script_run(sprintf('parted -s /dev/vdb mkpart logical %dMiB %dMiB', $cnt, $cnt + 1));
     }
     record_info('INFO', "Created $num_primary partitions with name primary.\nCreated $num_openqapart partitions with name openqapart");
 
