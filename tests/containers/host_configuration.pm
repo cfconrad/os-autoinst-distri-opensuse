@@ -17,9 +17,13 @@ use Mojo::Base qw(consoletest);
 use testapi;
 use utils;
 use version_utils 'check_os_release';
+use containers::runtime;
+use Data::Dumper;
 
 sub run {
     my ($self) = @_;
+    my $docker = containers::runtime->new(runtime => 'docker');
+    print Dumper($docker);
     $self->select_serial_terminal;
     if (check_os_release('suse', 'PRETTY_NAME')) {
         ensure_ca_certificates_suse_installed();
