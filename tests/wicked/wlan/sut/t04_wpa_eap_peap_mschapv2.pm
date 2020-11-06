@@ -7,11 +7,12 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
-# Summary: Test WiFi setup with wicked (WPA-PSK with DHCP)
+# Summary: Test WiFi setup with wicked (WPA-EAP/PEAP/MSCHAPv2 with DHCP)
 # - WiFi Access point:
 #   - Use virtual wlan devices
 #   - AP with hostapd is running in network namespace
 #   - dnsmasq for DHCP server
+#   - freeradius as authenticator
 # - WiFi Station:
 #   - connect using ifcfg-wlan1 and `wicked ifup`
 #   - check if STA is associated to AP
@@ -34,29 +35,53 @@ ctrl_interface=/var/run/hostapd
 interface=${\$self->ref_ifc}
 driver=nl80211
 country_code=DE
-ssid=Virtual Wifi
-channel=0
-hw_mode=b
-wpa=3
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP CCMP
-wpa_passphrase=TopSecretWifiPassphrase
+ssid=Virtual Wifi EAP
+channel=1
 auth_algs=3
-beacon_int=100
+wpa=2
+wpa_key_mgmt=WPA-EAP
+wpa_pairwise=CCMP
+rsn_pairwise=CCMP
+group_cipher=CCMP
+
+# Require IEEE 802.1X authorization
+ieee8021x=1
+eapol_version=2
+eap_message=ping-from-hostapd
+## RADIUS authentication server
+nas_identifier=theap
+auth_server_addr=127.0.0.1
+auth_server_port=1812
+auth_server_shared_secret=testing123
 EOTEXT
 
     $self->ref_enable_DHCP_server();
+    $self->netns_exec('radiusd -d /etc/raddb/');
     $self->netns_exec('hostapd -B hostapd.conf');
+
 
 
     $self->spurt_file('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, <<EOTEXT);
 BOOTPROTO='dhcp'
 STARTMODE='auto'
 
+# Global settings
+WIRELESS_AP_SCANMODE='1'
+WIRELESS_WPA_DRIVER='nl80211'
+
+# Network settings
+WIRELESS_ESSID='Virtual Wifi EAP'
+WIRELESS_AUTH_MODE='eap'
+WIRELESS_CLIENT_CERT='/etc/raddb/certs/client.crt'
+WIRELESS_CLIENT_KEY='/etc/raddb/certs/client.key'
+WIRELESS_CLIENT_KEY_PASSWORD='whatever'
+WIRELESS_EAP_AUTH='mschapv2'
+WIRELESS_EAP_MODE='PEAP'
 WIRELESS_MODE='Managed'
-WIRELESS_AUTH_MODE='psk'
-WIRELESS_ESSID='Virtual Wifi'
-WIRELESS_WPA_PSK='TopSecretWifiPassphrase'
+#WIRELESS_PEAP_VERSION='2'
+WIRELESS_WPA_ANONID='anonymous'
+WIRELESS_WPA_IDENTITY='${\$self->eap_user}'
+WIRELESS_WPA_PASSWORD='${\$self->eap_password}'
 EOTEXT
 
     $self->wicked_command('ifup', $self->sut_ifc);

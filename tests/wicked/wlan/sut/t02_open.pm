@@ -7,7 +7,7 @@
 # notice and this notice are preserved.  This file is offered as-is,
 # without any warranty.
 
-# Summary: Test WiFi setup with wicked (WPA-PSK with DHCP)
+# Summary: Test WiFi setup with wicked (Open with DHCP)
 # - WiFi Access point:
 #   - Use virtual wlan devices
 #   - AP with hostapd is running in network namespace
@@ -27,40 +27,34 @@ sub run {
     my $self = shift;
     $self->select_serial_terminal;
 
+    # Setup ref
     $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
-
     $self->spurt_file('hostapd.conf', <<EOTEXT);
 ctrl_interface=/var/run/hostapd
 interface=${\$self->ref_ifc}
 driver=nl80211
 country_code=DE
-ssid=Virtual Wifi
+ssid=Open Virtual Wifi
 channel=0
-hw_mode=b
-wpa=3
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP CCMP
-wpa_passphrase=TopSecretWifiPassphrase
-auth_algs=3
-beacon_int=100
+hw_mode=g
 EOTEXT
 
     $self->ref_enable_DHCP_server();
     $self->netns_exec('hostapd -B hostapd.conf');
 
 
+    # Setup sut
     $self->spurt_file('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, <<EOTEXT);
-BOOTPROTO='dhcp'
 STARTMODE='auto'
 
+BOOTPROTO='dhcp'
 WIRELESS_MODE='Managed'
-WIRELESS_AUTH_MODE='psk'
-WIRELESS_ESSID='Virtual Wifi'
-WIRELESS_WPA_PSK='TopSecretWifiPassphrase'
+WIRELESS_ESSID='Open Virtual Wifi'
 EOTEXT
 
     $self->wicked_command('ifup', $self->sut_ifc);
 
+    # Check
     $self->hostapd_check_if_connected();
     $self->check_ping();
 }
