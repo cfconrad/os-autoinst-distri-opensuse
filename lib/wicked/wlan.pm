@@ -127,6 +127,7 @@ sub get_hw_address {
 sub lookup {
     my ($self, $name, $env) = @_;
 
+
     return $env->{$name} if (exists $env->{$name});
     if (my $v = eval { return $self->$name }) {
         return $v;
@@ -149,7 +150,7 @@ sub spurt_file {
     $replacements //= {};
     my $rand = random_string;
     # replace variables
-    $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $replacements)/e;
+    $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $replacements)/em;
     # unwrap content
     my ($indent) = $content =~ /^(\s*)/;
     $content =~ s/^$indent//m;
