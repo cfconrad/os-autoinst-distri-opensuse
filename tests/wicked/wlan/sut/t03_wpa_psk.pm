@@ -23,13 +23,10 @@
 use Mojo::Base 'wicked::wlan';
 use testapi;
 
-sub run {
-    my $self = shift;
-    $self->select_serial_terminal;
+has ssid => 'Virtual WiFi PSK Secured';
+has psk  => 'TopSecretWifiPassphrase!';
 
-    $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
-
-    $self->spurt_file('hostapd.conf', <<EOTEXT);
+my $hostapd_conf = q(
 ctrl_interface=/var/run/hostapd
 interface=${\$self->ref_ifc}
 driver=nl80211
@@ -43,7 +40,15 @@ wpa_pairwise=TKIP CCMP
 wpa_passphrase=TopSecretWifiPassphrase
 auth_algs=3
 beacon_int=100
-EOTEXT
+);
+
+sub run {
+    my $self = shift;
+    $self->select_serial_terminal;
+
+    $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
+
+    $self->spurt_file('hostapd.conf', $hostapd_conf);
 
     $self->ref_enable_DHCP_server();
     $self->netns_exec('hostapd -B hostapd.conf');
