@@ -27,7 +27,7 @@ has ssid => 'Open Virutal WiFi';
 my $hostapd_conf = q(
     ctrl_interface=/var/run/hostapd
     interface={{ref_ifc}}
-        driver=nl80211
+    driver=nl80211
     country_code=DE
     ssid={{ssid}}
 
@@ -36,21 +36,20 @@ my $hostapd_conf = q(
 );
 
 my $ifcfg_wlan = q(
-STARTMODE='auto'
+    STARTMODE='auto'
 
-BOOTPROTO='static'
-IPADDR='{{sut_ip}}'
-NETMASK='255.255.255.0'
+    BOOTPROTO='static'
+    IPADDR='{{sut_ip}}'
+    NETMASK='255.255.255.0'
 
-WIRELESS_MODE='Managed'
-WIRELESS_ESSID='{{ssid}}'
+    WIRELESS_MODE='Managed'
+    WIRELESS_ESSID='{{ssid}}'
 );
 
 sub run {
     my $self = shift;
     $self->select_serial_terminal;
 
-    record_info($self->ssid(), "");
     # Setup ref
     $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
     $self->spurt_file('hostapd.conf', $hostapd_conf);

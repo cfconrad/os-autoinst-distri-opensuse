@@ -61,7 +61,7 @@ sub netns_output {
     return script_output($cmd, @args);
 }
 
-sub ref_enable_DHCP_server {
+sub restart_DHCP_server {
     my $self = shift;
     $self->ref_disable_DHCP_server();
     $self->dhcp_enabled(1);
@@ -69,7 +69,7 @@ sub ref_enable_DHCP_server {
             $self->ref_ifc, $self->sut_ip, $self->sut_hw_addr, $self->sut_ip));
 }
 
-sub ref_disable_DHCP_server {
+sub stop_DHCP_server {
     my $self = shift;
     $self->dhcp_enabled(0);
     assert_script_run('test -e /var/run/dnsmasq.pid && kill $(cat /var/run/dnsmasq.pid) || true');
@@ -126,10 +126,9 @@ sub get_hw_address {
 
 sub lookup {
     my ($self, $name, $env) = @_;
-
-
-    return $env->{$name} if (exists $env->{$name});
-    if (my $v = eval { return $self->$name }) {
+    if (exists $env->{$name}){
+        return $env->{$name};
+    } elsif (my $v = eval { return $self->$name }){
         return $v;
     }
     die("Failed to lookup '{{$name}}' variable");
@@ -137,22 +136,22 @@ sub lookup {
 
 =head2 write_file
 
-  write_file($filename, $content[, $replacements]);
+  write_file($filename, $content[, $env]);
 
 Write all data at once to the file. Replace all ocurance of C<{{name}}>.
-First lookup is the given c<$replacements> hash and if it doesn't exists
+First lookup is the given c<$env> hash and if it doesn't exists
 it try to lookup a member function with the given c<name> and replace the string
 with return value
 
 =cut
 sub spurt_file {
-    my ($self, $filename, $content, $replacements) = @_;
-    $replacements //= {};
+    my ($self, $filename, $content, $env) = @_;
+    $env //= {};
     my $rand = random_string;
     # replace variables
-    $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $replacements)/eg;
+    $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $env)/eg;
     # unwrap content
-    my ($indent) = $content =~ /^(\s*)/;
+    my ($indent) = $content =~ /^\r?\n?([ ]*)/m;
     $content =~ s/^$indent//mg;
     script_output(qq(cat > '$filename' << 'END_OF_CONTENT_$rand'
 $content

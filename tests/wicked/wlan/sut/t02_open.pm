@@ -26,20 +26,20 @@ use testapi;
 has ssid => 'Open Virutal WiFi';
 
 my $hostapd_conf = q(
-ctrl_interface=/var/run/hostapd
-interface={{ref_ifc}}
-driver=nl80211
-country_code=DE
-ssid={{ssid}}
-channel=0
-hw_mode=g
+    ctrl_interface=/var/run/hostapd
+    interface={{ref_ifc}}
+    driver=nl80211
+    country_code=DE
+    ssid={{ssid}}
+    channel=0
+    hw_mode=g
 );
 
 my $ifcfg_wlan = q(
-STARTMODE='auto'
-BOOTPROTO='dhcp'
-WIRELESS_MODE='Managed'
-WIRELESS_ESSID='{{ssid}}'
+    STARTMODE='auto'
+    BOOTPROTO='dhcp'
+    WIRELESS_MODE='Managed'
+    WIRELESS_ESSID='{{ssid}}'
 );
 
 sub run {
@@ -48,7 +48,7 @@ sub run {
 
     # Setup ref
     $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
-    $self->ref_enable_DHCP_server();
+    $self->restart_DHCP_server();
     $self->spurt_file('hostapd.conf', $hostapd_conf);
     $self->netns_exec('hostapd -B hostapd.conf');
 

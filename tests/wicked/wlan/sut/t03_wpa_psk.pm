@@ -27,45 +27,47 @@ has ssid => 'Virtual WiFi PSK Secured';
 has psk  => 'TopSecretWifiPassphrase!';
 
 my $hostapd_conf = q(
-ctrl_interface=/var/run/hostapd
-interface=${\$self->ref_ifc}
-driver=nl80211
-country_code=DE
-ssid=Virtual Wifi
-channel=0
-hw_mode=b
-wpa=3
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP CCMP
-wpa_passphrase=TopSecretWifiPassphrase
-auth_algs=3
-beacon_int=100
+    ctrl_interface=/var/run/hostapd
+    interface={{ref_ifc}}
+    driver=nl80211
+    country_code=DE
+    ssid={{ssid}}
+    channel=0
+    hw_mode=b
+    wpa=3
+    wpa_key_mgmt=WPA-PSK
+    wpa_pairwise=TKIP CCMP
+    wpa_passphrase={{psk}}
+    auth_algs=3
+    beacon_int=100
+);
+
+my $ifcfg_wlan = q(
+    BOOTPROTO='dhcp'
+    STARTMODE='auto'
+
+    WIRELESS_MODE='Managed'
+    WIRELESS_AUTH_MODE='psk'
+    WIRELESS_ESSID='{{ssid}}'
+    WIRELESS_WPA_PSK='{{psk}}'
 );
 
 sub run {
     my $self = shift;
     $self->select_serial_terminal;
 
+    # Setup ref
     $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
+    $self->restart_DHCP_server();
 
     $self->spurt_file('hostapd.conf', $hostapd_conf);
-
-    $self->ref_enable_DHCP_server();
     $self->netns_exec('hostapd -B hostapd.conf');
 
-
-    $self->spurt_file('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, <<EOTEXT);
-BOOTPROTO='dhcp'
-STARTMODE='auto'
-
-WIRELESS_MODE='Managed'
-WIRELESS_AUTH_MODE='psk'
-WIRELESS_ESSID='Virtual Wifi'
-WIRELESS_WPA_PSK='TopSecretWifiPassphrase'
-EOTEXT
-
+    # Setup sut
+    $self->spurt_file('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $ifcfg_wlan);
     $self->wicked_command('ifup', $self->sut_ifc);
 
+    # Check
     $self->assert_sta_connected();
     $self->assert_connection();
 }
