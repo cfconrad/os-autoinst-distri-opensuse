@@ -22,12 +22,14 @@
 use Mojo::Base 'wicked::wlan';
 use testapi;
 
+has ssid => 'Open Virutal WiFi';
+
 my $hostapd_conf = q(
 ctrl_interface=/var/run/hostapd
 interface={{ref_ifc}}
 driver=nl80211
 country_code=DE
-ssid=Open Virtual Wifi
+ssid={{ssid}}
 channel=0
 hw_mode=g
 );
@@ -40,7 +42,7 @@ IPADDR='{{sut_ip}}'
 NETMASK='255.255.255.0'
 
 WIRELESS_MODE='Managed'
-WIRELESS_ESSID='Open Virtual Wifi'
+WIRELESS_ESSID='{{ssid}}'
 );
 
 sub run {
@@ -51,7 +53,6 @@ sub run {
     $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
     $self->spurt_file('hostapd.conf', $hostapd_conf);
     $self->netns_exec('hostapd -B hostapd.conf');
-
 
     # Setup sut
     $self->spurt_file('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $ifcfg_wlan);

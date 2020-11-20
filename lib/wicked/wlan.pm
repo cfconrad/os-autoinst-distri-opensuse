@@ -149,9 +149,9 @@ sub spurt_file {
     $replacements //= {};
     my $rand = random_string;
     $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $replacements)/e;
-    script_output(qq(cat > '$filename' << 'EOT_$rand'
+    script_output(qq(cat > '$filename' << 'END_OF_CONTENT_$rand'
 $content
-EOT_$rand
+END_OF_CONTENT_$rand
 ));
 }
 
