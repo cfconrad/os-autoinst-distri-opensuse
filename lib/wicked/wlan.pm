@@ -77,12 +77,12 @@ sub ref_disable_DHCP_server {
 
 sub before_test {
     my $self = shift // wicked::wlan->new();
-    $self->install_packages();
+    $self->prepare_packages();
     $self->prepare_radios();
     $self->prepare_freeradius_server();
 }
 
-sub prepare_install_packages {
+sub prepare_packages {
     my $self = shift;
     if (is_sle()) {
         add_suseconnect_product('PackageHub');    # needed for hopstapd
