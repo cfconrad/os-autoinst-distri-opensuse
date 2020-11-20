@@ -65,7 +65,7 @@ sub netns_output {
 
 sub restart_DHCP_server {
     my $self = shift;
-    $self->ref_disable_DHCP_server();
+    $self->stop_DHCP_server();
     $self->dhcp_enabled(1);
     $self->netns_exec(sprintf('dnsmasq --no-resolv --interface=%s --dhcp-range=%s,static --dhcp-host=%s,%s',
             $self->ref_ifc, $self->sut_ip, $self->sut_hw_addr, $self->sut_ip));
