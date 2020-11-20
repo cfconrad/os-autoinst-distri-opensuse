@@ -150,7 +150,7 @@ sub spurt_file {
     $replacements //= {};
     my $rand = random_string;
     # replace variables
-    $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $replacements)/em;
+    $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $replacements)/eg;
     # unwrap content
     my ($indent) = $content =~ /^(\s*)/;
     $content =~ s/^$indent//m;
