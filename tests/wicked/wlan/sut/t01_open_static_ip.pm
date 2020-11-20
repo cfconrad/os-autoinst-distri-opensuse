@@ -52,11 +52,11 @@ sub run {
 
     # Setup ref
     $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
-    $self->spurt_file('hostapd.conf', $hostapd_conf);
+    $self->write_cfg('hostapd.conf', $hostapd_conf);
     $self->netns_exec('hostapd -B hostapd.conf');
 
     # Setup sut
-    $self->spurt_file('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $ifcfg_wlan);
+    $self->write_cfg('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $ifcfg_wlan);
     $self->wicked_command('ifup', $self->sut_ifc);
 
     # Check

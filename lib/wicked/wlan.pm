@@ -18,6 +18,8 @@ use utils qw(random_string);
 use version_utils qw(is_sle);
 use registration qw(add_suseconnect_product);
 use utils qw(zypper_call);
+use Mojo::File 'path';
+use File::Basename;
 use testapi;
 
 has dhcp_enabled => 0;
@@ -126,17 +128,17 @@ sub get_hw_address {
 
 sub lookup {
     my ($self, $name, $env) = @_;
-    if (exists $env->{$name}){
+    if (exists $env->{$name}) {
         return $env->{$name};
-    } elsif (my $v = eval { return $self->$name }){
+    } elsif (my $v = eval { return $self->$name }) {
         return $v;
     }
     die("Failed to lookup '{{$name}}' variable");
 }
 
-=head2 write_file
+=head2 write_cfg
 
-  write_file($filename, $content[, $env]);
+  write_cfg($filename, $content[, $env]);
 
 Write all data at once to the file. Replace all ocurance of C<{{name}}>.
 First lookup is the given c<$env> hash and if it doesn't exists
@@ -144,7 +146,7 @@ it try to lookup a member function with the given c<name> and replace the string
 with return value
 
 =cut
-sub spurt_file {
+sub write_cfg {
     my ($self, $filename, $content, $env) = @_;
     $env //= {};
     my $rand = random_string;
@@ -157,6 +159,8 @@ sub spurt_file {
 $content
 END_OF_CONTENT_$rand
 ));
+    system('test -d ulogs/ || mkdir ulogs/');
+    path('ulogs/' . $self->{name} . '-' . basename($filename))->spurt($content);
 }
 
 sub assert_sta_connected {
