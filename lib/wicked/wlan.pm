@@ -153,7 +153,7 @@ sub spurt_file {
     $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $replacements)/eg;
     # unwrap content
     my ($indent) = $content =~ /^(\s*)/;
-    $content =~ s/^$indent//m;
+    $content =~ s/^$indent//mg;
     script_output(qq(cat > '$filename' << 'END_OF_CONTENT_$rand'
 $content
 END_OF_CONTENT_$rand
