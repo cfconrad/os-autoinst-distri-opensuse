@@ -128,7 +128,7 @@ sub run {
             $package_list .= ' ndisc6';
         }
         if (check_var('WICKED', 'wlan')) {
-            wicked::wlan->new->prepare();
+            wicked::wlan::before_test();
         }
         $package_list .= ' openvswitch iputils';
         $package_list .= ' libteam-tools libteamdctl0 ' if check_var('WICKED', 'advanced') || check_var('WICKED', 'aggregate');

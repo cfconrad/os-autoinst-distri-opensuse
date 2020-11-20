@@ -22,42 +22,44 @@
 use Mojo::Base 'wicked::wlan';
 use testapi;
 
+my $hostapd_conf = q(
+ctrl_interface=/var/run/hostapd
+interface={{ref_ifc}}
+driver=nl80211
+country_code=DE
+ssid=Open Virtual Wifi
+channel=0
+hw_mode=g
+);
+
+my $ifcfg_wlan = q(
+STARTMODE='auto'
+
+BOOTPROTO='static'
+IPADDR='{{sut_ip}}'
+NETMASK='255.255.255.0'
+
+WIRELESS_MODE='Managed'
+WIRELESS_ESSID='Open Virtual Wifi'
+);
+
 sub run {
     my $self = shift;
     $self->select_serial_terminal;
 
     # Setup ref
     $self->netns_exec('ip addr add dev wlan0 ' . $self->ref_ip . '/24');
-    $self->spurt_file('hostapd.conf', <<EOTEXT);
-ctrl_interface=/var/run/hostapd
-interface=${\$self->ref_ifc}
-driver=nl80211
-country_code=DE
-ssid=Open Virtual Wifi
-channel=0
-hw_mode=g
-EOTEXT
-
+    $self->spurt_file('hostapd.conf', $hostapd_conf);
     $self->netns_exec('hostapd -B hostapd.conf');
 
 
     # Setup sut
-    $self->spurt_file('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, <<EOTEXT);
-STARTMODE='auto'
-
-BOOTPROTO='static'
-IPADDR='${\$self->sut_ip}'
-NETMASK='255.255.255.0'
-
-WIRELESS_MODE='Managed'
-WIRELESS_ESSID='Open Virtual Wifi'
-EOTEXT
-
+    $self->spurt_file('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $ifcfg_wlan);
     $self->wicked_command('ifup', $self->sut_ifc);
 
     # Check
-    $self->hostapd_check_if_connected();
-    $self->check_ping();
+    $self->assert_sta_connected();
+    $self->assert_connection();
 }
 
 sub test_flags {

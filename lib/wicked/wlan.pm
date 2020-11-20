@@ -24,9 +24,9 @@ has dhcp_enabled => 0;
 has eap_user     => 'tester';
 has eap_password => 'test1234';
 
-has netns_name   => 'wifi_ref';
-has ref_ifc      => 'wlan0';
-has ref_phy      => 'phy0';
+has netns_name => 'wifi_ref';
+has ref_ifc    => 'wlan0';
+has ref_phy    => 'phy0';
 
 sub ref_ip {
     my $self = shift;
@@ -75,17 +75,17 @@ sub ref_disable_DHCP_server {
     assert_script_run('test -e /var/run/dnsmasq.pid && kill $(cat /var/run/dnsmasq.pid) || true');
 }
 
-sub prepare {
-    my $self = shift;
-    $self->prepare_install_packages();
+sub before_test {
+    my $self = shift // wicked::wlan->new();
+    $self->install_packages();
     $self->prepare_radios();
-    $self->prepare_radiusd();
+    $self->prepare_freeradius_server();
 }
 
 sub prepare_install_packages {
     my $self = shift;
     if (is_sle()) {
-        add_suseconnect_product('PackageHub'); # needed for hopstapd
+        add_suseconnect_product('PackageHub');    # needed for hopstapd
     }
     zypper_call('-q in iw hostapd wpa_supplicant dnsmasq freeradius-server freeradius-server-utils vim');
     # make sure, we do not run these deamons, as we need to run them in network namespace
@@ -105,7 +105,7 @@ sub prepare_radios {
     $self->netns_exec('ip link set dev lo up');
 }
 
-sub prepare_radiusd {
+sub prepare_freeradius_server {
     my $self = shift;
     # The default installation of freeradius-server gives us a config where
     # we can authenticate with PEAP+MSCHAPv2, TLS and TTLS/PAP
@@ -124,17 +124,38 @@ sub get_hw_address {
     return $output;
 }
 
-# Candidate for wickedbase.pm
+sub lookup {
+    my ($self, $name, $env) = @_;
+
+    return $env->{$name} if (exists $env->{$name});
+    if (my $v = eval { return $self->$name }) {
+        return $v;
+    }
+    die("Failed to lookup '{{$name}}' variable");
+}
+
+=head2 write_file
+
+  write_file($filename, $content[, $replacements]);
+
+Write all data at once to the file. Replace all ocurance of C<{{name}}>.
+First lookup is the given c<$replacements> hash and if it doesn't exists
+it try to lookup a member function with the given c<name> and replace the string
+with return value
+
+=cut
 sub spurt_file {
-    my ($self, $filename, $content) = @_;
+    my ($self, $filename, $content, $replacements) = @_;
+    $replacements //= {};
     my $rand = random_string;
+    $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $replacements)/e;
     script_output(qq(cat > '$filename' << 'EOT_$rand'
 $content
 EOT_$rand
 ));
 }
 
-sub hostapd_check_if_connected {
+sub assert_sta_connected {
     my ($self, $sta) = @_;
     $sta //= $self->sut_hw_addr;
 
@@ -149,7 +170,7 @@ sub hostapd_check_if_connected {
     return 1;
 }
 
-sub check_ping {
+sub assert_connection {
     my $self = shift;
 
     assert_script_run('ping -c 1 -I ' . $self->sut_ifc . ' ' . $self->ref_ip);

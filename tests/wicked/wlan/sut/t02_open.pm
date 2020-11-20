@@ -55,8 +55,8 @@ EOTEXT
     $self->wicked_command('ifup', $self->sut_ifc);
 
     # Check
-    $self->hostapd_check_if_connected();
-    $self->check_ping();
+    $self->assert_sta_connected();
+    $self->assert_connection();
 }
 
 1;
