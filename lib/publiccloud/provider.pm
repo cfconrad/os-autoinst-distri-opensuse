@@ -318,7 +318,7 @@ sub terraform_apply {
 
     $args{count} //= '1';
     my $instance_type        = get_var('PUBLIC_CLOUD_INSTANCE_TYPE');
-    my $image                = $self->get_image_id();
+    my $image                = get_var('PUBLIC_CLOUD_IMAGE_ID', $self->get_image_id());
     my $ssh_private_key_file = '/root/.ssh/id_rsa';
     my $name                 = get_var('PUBLIC_CLOUD_RESOURCE_NAME', 'openqa-vm');
     my $cloud_name           = $self->conv_openqa_tf_name;
