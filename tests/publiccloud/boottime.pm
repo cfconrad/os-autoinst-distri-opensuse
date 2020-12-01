@@ -150,7 +150,8 @@ sub extract_analyze {
     my $res    = {};
     $string =~ s/Startup finished in\s*//;
     $string =~ s/=(.+)$/+$1 (overall)/;
-    for my $time (split(/\s*\+\s*/, $string)) {
+    $string =~ /^(.*)$/m;
+    for my $time (split(/\s*\+\s*/, $1)) {
         $time = trim($time);
         my ($time, $type) = $time =~ /^(.+)\s*\((\w+)\)$/;
         $res->{$type} = systemd_time_to_sec($time);
