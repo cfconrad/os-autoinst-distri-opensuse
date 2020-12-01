@@ -18,6 +18,7 @@ use publiccloud::instance;
 use Data::Dumper;
 use Mojo::JSON 'decode_json';
 use utils qw(file_content_replace script_retry);
+use publiccloud::utils qw(is_azure);
 
 use constant TERRAFORM_DIR     => '/root/terraform';
 use constant TERRAFORM_TIMEOUT => 30 * 60;
@@ -235,14 +236,20 @@ sub get_image_id {
     my ($self, $img_url) = @_;
     my $predefined_id = get_var('PUBLIC_CLOUD_IMAGE_ID');
     return $predefined_id if ($predefined_id);
-    $img_url //= get_required_var('PUBLIC_CLOUD_IMAGE_LOCATION');
-    my ($img_name) = $img_url =~ /([^\/]+)$/;
-    $self->{image_cache} //= {};
-    return $self->{image_cache}->{$img_name} if ($self->{image_cache}->{$img_name});
-    my $image_id = $self->find_img($img_name);
-    die("Image $img_name is not available in the cloud provider") unless ($image_id);
-    $self->{image_cache}->{$img_name} = $image_id;
-    return $image_id;
+    $img_url //= get_var('PUBLIC_CLOUD_IMAGE_LOCATION');
+    if ($img_url) {
+        my ($img_name) = $img_url =~ /([^\/]+)$/;
+        $self->{image_cache} //= {};
+        return $self->{image_cache}->{$img_name} if ($self->{image_cache}->{$img_name});
+        my $image_id = $self->find_img($img_name);
+        die("Image $img_name is not available in the cloud provider") unless ($image_id);
+        $self->{image_cache}->{$img_name} = $image_id;
+        return $image_id;
+    } else {
+        # QEM Azure runs are based on OFFER and SKU variables and do not set PUBLIC_CLOUD_IMAGE_ID or PUBLIC_CLOUD_IMAGE_LOCATION
+        return "" if (is_azure && get_var('PUBLIC_CLOUD_AZURE_OFFER') && get_var('PUBLIC_CLOUD_AZURE_SKU'));
+        die "Missing required setting PUBLIC_CLOUD_IMAGE_LOCATION";
+    }
 }
 
 =head2 create_instance
@@ -359,7 +366,12 @@ sub terraform_apply {
 
     my $cmd = 'terraform plan -no-color ';
     if (!get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        $cmd .= "-var 'image_id=" . $image . "' ";
+        # Some auxiliary variables, requires for fine control and public cloud provider specifics
+        my $offer = get_var("PUBLIC_CLOUD_AZURE_OFFER");
+        my $sku   = get_var("PUBLIC_CLOUD_AZURE_SKU");
+        $cmd .= "-var 'image_id=" . $image . "' " if ($image);
+        $cmd .= "-var 'offer=" . $offer . "' "    if (is_azure && $offer);
+        $cmd .= "-var 'sku=" . $sku . "' "        if (is_azure && $sku);
         $cmd .= "-var 'instance_count=" . $args{count} . "' ";
         $cmd .= "-var 'type=" . $instance_type . "' ";
         $cmd .= "-var 'region=" . $self->region . "' ";
