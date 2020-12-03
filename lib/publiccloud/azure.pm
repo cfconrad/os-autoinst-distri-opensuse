@@ -195,6 +195,17 @@ sub img_proof {
     return $self->run_img_proof(%args);
 }
 
+sub terraform_apply {
+    my ($self, %args) = @_;
+    $args{vars} //= {};
+    my $offer = get_var("PUBLIC_CLOUD_AZURE_OFFER");
+    my $sku   = get_var("PUBLIC_CLOUD_AZURE_SKU");
+    $args{vars}->{offer} = $offer if ($offer);
+    $args{vars}->{sku}   = $sku   if ($sku);
+
+    $self->SUPER::terraform_apply(%args);
+}
+
 sub on_terraform_apply_timeout {
     my ($self) = @_;
     my $resgroup;

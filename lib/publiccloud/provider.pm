@@ -327,6 +327,7 @@ sub terraform_apply {
     my $terraform_timeout = get_var('TERRAFORM_TIMEOUT', TERRAFORM_TIMEOUT);
 
     $args{count} //= '1';
+    $args{vars}  //= {};
     my $instance_type        = get_var('PUBLIC_CLOUD_INSTANCE_TYPE');
     my $image                = $self->get_image_id();
     my $ssh_private_key_file = '/root/.ssh/id_rsa';
@@ -367,11 +368,12 @@ sub terraform_apply {
     my $cmd = 'terraform plan -no-color ';
     if (!get_var('PUBLIC_CLOUD_SLES4SAP')) {
         # Some auxiliary variables, requires for fine control and public cloud provider specifics
-        my $offer = get_var("PUBLIC_CLOUD_AZURE_OFFER");
-        my $sku   = get_var("PUBLIC_CLOUD_AZURE_SKU");
+        for my $key (keys %{$args{vars}}) {
+            my $value = $args{vars}->{$key};
+            $value =~ s/'/'"'"'/;
+            $cmd .= sprintf(q(-var '%s="%s"' ), $key, $value);
+        }
         $cmd .= "-var 'image_id=" . $image . "' " if ($image);
-        $cmd .= "-var 'offer=" . $offer . "' "    if (is_azure && $offer);
-        $cmd .= "-var 'sku=" . $sku . "' "        if (is_azure && $sku);
         $cmd .= "-var 'instance_count=" . $args{count} . "' ";
         $cmd .= "-var 'type=" . $instance_type . "' ";
         $cmd .= "-var 'region=" . $self->region . "' ";
