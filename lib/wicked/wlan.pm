@@ -216,6 +216,7 @@ sub run {
     $self->write_cfg('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $self->ifcfg_wlan());
     $self->wicked_command('ifup', $self->sut_ifc);
 
+    sleep;
     # Check
     $self->assert_sta_connected();
     $self->assert_connection();
