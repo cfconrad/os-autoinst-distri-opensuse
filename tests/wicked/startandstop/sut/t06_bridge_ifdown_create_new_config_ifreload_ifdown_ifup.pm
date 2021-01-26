@@ -18,6 +18,18 @@ use warnings;
 use testapi;
 use network_utils 'ifc_exists';
 
+
+sub wait_for_user
+{
+    my $match = '666-CONTINUE-666';
+    assert_script_run('echo "WAIT_FOR_USER_TO_CONTINUE"');
+    assert_script_run(qq(echo "echo '$match' | wall" > /tmp/continue.sh  ));
+    assert_script_run('chmod +x /tmp/continue.sh');
+    wait_serial($match, no_regex => 1, timeout => 60 * 60 * 2);
+}
+
+
+
 sub run {
     my ($self) = @_;
     my $config = '/etc/sysconfig/network/ifcfg-br0';
@@ -28,6 +40,8 @@ sub run {
     $self->wicked_command('ifdown', 'br0');
     $self->wicked_command('ifdown', 'dummy0');
     die if (ifc_exists('dummy0') || ifc_exists('br0'));
+
+    wait_for_user();
     $self->wicked_command('ifreload', 'all');
     die unless (ifc_exists('br0') && ifc_exists('dummy0'));
     my $current_ip  = $self->get_current_ip('br0');
