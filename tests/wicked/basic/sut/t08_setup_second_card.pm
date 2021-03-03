@@ -33,9 +33,7 @@ sub run {
     assert_script_run('echo "default ' . $static_ip_ref . ' - -" > /etc/sysconfig/network/routes');
     mutex_wait('dhcpdbasict08');
 
-    assert_script_run('sysctl -w net.ipv4.conf.all.rp_filter=0');
-
-    $self->wicked_command('ifup', $ctx->iface());
+    $self->wicked_command('ifup --timeout 60', $ctx->iface());
     $self->wicked_command('ifup', $ctx->iface2());
 
     my $ip_iface1 = $self->get_current_ip($ctx->iface());
