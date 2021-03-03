@@ -23,7 +23,8 @@ sub run {
     my ($self, $ctx) = @_;
     record_info('Info', 'Set up a second card');
     assert_script_run(sprintf("ip a a %s/24 dev %s", $self->get_ip(type => 'dhcp_2nic'),   $ctx->iface()));
-    assert_script_run(sprintf("ip a a %s/24 dev %s", $self->get_ip(type => 'second_card'), $ctx->iface()));
+    assert_script_run(sprintf("ip a a %s/24 dev %s", $self->get_ip(type => 'second_card'), $ctx->iface2()));
+    assert_script_run(sprintf("ip link set dev %s up", $ctx->iface2()));
     systemctl 'stop dhcpd.service';
     $self->get_from_data('wicked/dhcp/dhcpd_2nics.conf', '/etc/dhcpd.conf');
     $self->sync_start_of('dhcpd', 'dhcpdbasict08');
