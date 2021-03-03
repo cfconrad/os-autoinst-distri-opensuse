@@ -33,6 +33,8 @@ sub run {
     assert_script_run('echo "default ' . $static_ip_ref . ' - -" > /etc/sysconfig/network/routes');
     mutex_wait('dhcpdbasict08');
 
+    sleep 30;
+
     $self->wicked_command('ifup', $ctx->iface());
     $self->wicked_command('ifup', $ctx->iface2());
 
