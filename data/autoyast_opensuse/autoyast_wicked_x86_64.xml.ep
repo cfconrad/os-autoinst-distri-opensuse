@@ -5,7 +5,7 @@
     <add-on t="map">
         <add_on_others t="list">
             % for my $repo (split(/\s*,\s*/, $get_var->('AUTOYAST_ADD_REPOS'))) {
-            <listentry>
+            <listentry t="map">
                 <media_url><%= $repo %></media_url>
             </listentry>
             % }
