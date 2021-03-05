@@ -1,20 +1,22 @@
 <?xml version="1.0"?>
 <!DOCTYPE profile>
 <profile xmlns="http://www.suse.com/1.0/yast2ns" xmlns:config="http://www.suse.com/1.0/configns">
-  <add-on>
-    <add_on_products config:type="list">
-      % for my $repo (split(/,/, $get_var->('AUTOYAST_ADD_REPOS'))) {
-      <listentry>
-        <media_url><%= $repo %></media_url>
-      </listentry>
-      % }
-    </add_on_products>
-  </add-on>
-  <general>
-    <mode>
-        <confirm config:type="boolean"><%= $get_var->('AUTOYAST_CONFIRM') ? 'true' : 'false' %></confirm>
-    </mode>
-  </general>
+
+    <add-on t="map">
+        <add_on_others t="list">
+            % for my $repo (split(/\s*,\s*/, $get_var->('AUTOYAST_ADD_REPOS'))) {
+            <listentry>
+                <media_url><%= $repo %></media_url>
+            </listentry>
+            % }
+        </add_on_others>
+    </add-on>
+
+    <general>
+        <mode>
+            <confirm config:type="boolean"><%= $get_var->('AUTOYAST_CONFIRM') ? 'true' : 'false' %></confirm>
+        </mode>
+    </general>
   <networking>
     <keep_install_network config:type="boolean">true</keep_install_network>
   </networking>
