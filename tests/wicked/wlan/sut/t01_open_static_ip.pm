@@ -24,7 +24,7 @@ use testapi;
 
 has use_dhcp => 0;
 has ssid     => 'Open Virutal WiFi StaticIP';
-
+asdf
 has hostapd_conf => q(
     ctrl_interface=/var/run/hostapd
     interface={{ref_ifc}}
