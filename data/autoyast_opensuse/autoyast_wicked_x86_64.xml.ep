@@ -1,54 +1,80 @@
 <?xml version="1.0"?>
 <!DOCTYPE profile>
 <profile xmlns="http://www.suse.com/1.0/yast2ns" xmlns:config="http://www.suse.com/1.0/configns">
-
-    <add-on t="map">
-        <add_on_others t="list">
-            % for my $repo (split(/\s*,\s*/, $get_var->('AUTOYAST_ADD_REPOS'))) {
-            <listentry t="map">
-                <media_url><%= $repo %></media_url>
-            </listentry>
-            % }
-        </add_on_others>
-    </add-on>
-
-    <general>
-        <mode>
-            <confirm config:type="boolean"><%= $get_var->('AUTOYAST_CONFIRM') ? 'true' : 'false' %></confirm>
-        </mode>
-    </general>
+  <add-on>
+    <add_on_others config:type="list">
+      <listentry>
+        <alias>LEAP_15.2_UPDATE</alias>
+        <media_url><![CDATA[http://download.opensuse.org/update/leap/15.2/oss/]]></media_url>
+        <name>LEAP_15.2_UPDATE</name>
+        <priority config:type="integer">99</priority>
+        <product_dir/>
+      </listentry>
+    </add_on_others>
+    <add_on_products config:type="list"/>
+  </add-on>
+  <bootloader>
+    <global>
+      <timeout config:type="integer">1</timeout>
+    </global>
+  </bootloader>
+  <general>
+    <mode>
+      <confirm config:type="boolean">false</confirm>
+    </mode>
+  </general>
   <networking>
     <keep_install_network config:type="boolean">true</keep_install_network>
   </networking>
-  <bootloader>
-        <global>
-            <timeout config:type="integer">1</timeout>
-        </global>
-  </bootloader>
   <software>
     <install_recommended config:type="boolean">true</install_recommended>
-    <products config:type="list">
-        <product>openSUSE</product>
-    </products>
-    <patterns config:type="list">
-      <pattern>base</pattern>
-    </patterns>
+    <do_online_update config:type="boolean">true</do_online_update>
     <packages config:type="list">
       <package>zypper</package>
-      <package>wicked</package>
+      <package>yast2-users</package>
+      <package>yast2-network</package>
+      <package>yast2-bootloader</package>
+      <package>yast2-add-on</package>
       <package>wicked-service</package>
-      </packages>
-      <do_online_update config:type="boolean">true</do_online_update>
+      <package>wicked</package>
+      <package>snapper</package>
+      <package>openSUSE-release</package>
+      <package>kexec-tools</package>
+      <package>grub2</package>
+      <package>glibc</package>
+      <package>e2fsprogs</package>
+      <package>btrfsprogs</package>
+      <package>autoyast2-installation</package>
+      <package>autoyast2</package>
+    </packages>
+    <patterns config:type="list">
+      <pattern>base</pattern>
+      <pattern>minimal_base</pattern>
+    </patterns>
+    <products config:type="list">
+      <product>openSUSE</product>
+    </products>
   </software>
   <users config:type="list">
     <user>
-      <fullname>Bernhard M. Wiedemann</fullname>
       <encrypted config:type="boolean">false</encrypted>
+      <fullname>Bernhard M. Wiedemann</fullname>
+      <gid>100</gid>
+      <home>/home/bernhard</home>
+      <home_btrfs_subvolume config:type="boolean">false</home_btrfs_subvolume>
+      <shell>/bin/bash</shell>
+      <uid>1000</uid>
       <user_password>nots3cr3t</user_password>
       <username>bernhard</username>
     </user>
     <user>
       <encrypted config:type="boolean">false</encrypted>
+      <fullname>root</fullname>
+      <gid>0</gid>
+      <home>/root</home>
+      <home_btrfs_subvolume config:type="boolean">false</home_btrfs_subvolume>
+      <shell>/bin/bash</shell>
+      <uid>0</uid>
       <user_password>nots3cr3t</user_password>
       <username>root</username>
     </user>
