@@ -49,6 +49,10 @@ END_SCRIPT
 
     prepare_serial_console;
 
+    record_info("find", script_output("find /var/cache/zypp/"));
+    record_info("lr", script_output("zypper lr -u"));
+    record_info("ref", script_output("zypper ref"));
+
     # Proceed with dhcp cleanup on qemu backend only.
     # Cleanup is made, because if same hdd image used in multimachine scenario
     # on several nodes, the dhcp clients use same id and cause conflicts on dhcpd server.
@@ -73,9 +77,6 @@ END_SCRIPT
         assert_script_run(q{systemctl restart systemd-journald}, 120);
     }
 
-    record_info("find", script_output("find /var/cache/zypp/"));
-    record_info("lr", script_output("zypper lr -u"));
-    record_info("ref", script_output("zypper ref"));
 }
 
 sub post_fail_hook {
