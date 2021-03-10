@@ -49,6 +49,7 @@ END_SCRIPT
 
     prepare_serial_console;
 
+    record_info("inet", script_output("curl http://download.opensuse.org"));
     record_info("find", script_output("find /var/cache/zypp/"));
     record_info("lr", script_output("zypper lr -u"));
     record_info("ref", script_output("zypper ref"));
