@@ -73,8 +73,9 @@ END_SCRIPT
         assert_script_run(q{systemctl restart systemd-journald}, 120);
     }
 
-    record_info("FIND", script_output("find /var/cache/zypp/"));
-    record_info("FIND", script_output("zypper lr -u"));
+    record_info("find", script_output("find /var/cache/zypp/"));
+    record_info("lr", script_output("zypper lr -u"));
+    record_info("ref", script_output("zypper ref"));
 }
 
 sub post_fail_hook {
