@@ -90,6 +90,7 @@ our @EXPORT = qw(
   validate_repo_properties
   parse_repo_data
   verify_software
+  ensure_ca_certificates_suse_installed
 );
 
 =head2 add_qa_head_repo
@@ -557,5 +558,21 @@ sub verify_software {
     }
     return '';
 }
+
+=head2 ensure_ca_certificates_suse_installed
+    ensure_ca_certificates_suse_installed();
+
+This functions checks if ca-certificates-suse is installed and if it is not it adds the repository and installs it.
+
+=cut
+
+sub ensure_ca_certificates_suse_installed {
+    return unless (is_sle || is_tumbleweed || is_leap);
+    if (script_run('rpm -qi ca-certificates-suse') == 1) {
+        zypper_call('ar --refresh http://download.suse.de/ibs/SUSE:/CA/' . generate_version() . '/SUSE:CA.repo');
+        zypper_call("in ca-certificates-suse");
+    }
+}
+
 
 1;
