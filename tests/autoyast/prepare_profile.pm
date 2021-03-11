@@ -30,8 +30,10 @@ use autoyast qw(
 
 sub run {
     my $path = get_required_var('AUTOYAST');
+    record_info("AY", $path);
     # Get file from data directory
     my $profile = get_test_data($path);
+    record_info("AY", $profile);
 
     $path    = detect_profile_directory(profile => $profile, path => $path);
     $profile = get_test_data($path);
