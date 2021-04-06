@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright © 2019 SUSE LLC
+# Copyright © 2021 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -18,6 +18,7 @@ use testapi;
 use strict;
 use utils;
 use publiccloud::utils "select_host_console";
+use File::Basename;
 
 # Get the status of the update repos
 # 0 = no repo, 1 = repos already downloaded, 2 = repos downloading
@@ -30,7 +31,7 @@ sub get_repo_status {
 sub run {
     my ($self, $args) = @_;
 
-    select_host_console();    # select console on the host, not the PC instance
+    $self->select_serial_terminal();
 
     # Trigger to skip the download to speed up verification runs
     if (get_var('QAM_PUBLICCLOUD_SKIP_DOWNLOAD') == 1) {
@@ -50,27 +51,41 @@ sub run {
         set_var('MAINT_TEST_REPO', get_var('INCIDENT_REPO')) unless get_var('MAINT_TEST_REPO');
         my @repos = split(/,/, get_var('MAINT_TEST_REPO'));
         assert_script_run('touch /tmp/repos.list.txt');
+        zypper_call('in lftp');
 
         my $ret = 0;
         for my $maintrepo (@repos) {
-            next if $maintrepo !~ m/^http/;
-            script_run("echo 'Downloading $maintrepo ...' >> ~/repos/qem_download_status.txt");
-            my ($parent) = $maintrepo =~ 'https?://(.*)$';
-            my ($domain) = $parent    =~ '^([a-zA-Z.]*)';
-            $ret = script_run "wget --no-clobber -r -R 'robots.txt,*.ico,*.png,*.gif,*.css,*.js,*.htm*' --domains $domain --no-parent $parent $maintrepo", timeout => 600;
+            next if $maintrepo !~ 'https?://(([^/]+)/(.*))$';
+            my $parent = $1;
+            my $domain = $2;
+            my $path   = $3;
+            my $dl_cmd;
+            assert_script_run("echo 'Downloading $maintrepo ...' >> ~/repos/qem_download_status.txt");
+
+            if ($domain eq "download.suse.de") {
+                my $host     = "dist.nue.suse.com";
+                my $dst_path = dirname($parent);
+                $dl_cmd = sprintf('(mkdir -p %s && cd %s && time lftp -c "connect %s; mirror -P 10 --recursion=always %s")', $dst_path, $dst_path, $host, $path);
+
+            } else {
+                $dl_cmd = "time wget --no-clobber -r -R 'robots.txt,*.ico,*.png,*.gif,*.css,*.js,*.htm*' --domains $domain --no-parent $parent $maintrepo";
+            }
+
+            $ret = script_run($dl_cmd, timeout => 600);
+
             if ($ret !~ /0|8/) {
                 # softfailure, if repo doesn't exist (anymore). This is required for cloning jobs, because the original test repos could be empty already
                 record_soft_failure("Download failed (rc=$ret):\n$maintrepo");
                 script_run("echo 'Download failed for $maintrepo ...' >> ~/repos/qem_download_status.txt");
             } else {
-                assert_script_run("echo -en '# $maintrepo:\\n\\n' >> /tmp/repos.list.txt");
-                script_run("echo 'Downloaded $maintrepo: `du -hs $maintrepo`' >> ~/repos/qem_download_status.txt");
+                assert_script_run("echo -en '\\n" . ('#' x 80) . "\\n# $maintrepo:\\n' >> /tmp/repos.list.txt");
+                assert_script_run("echo 'Downloaded $maintrepo:' \$(du -hs $parent | cut -f1) >> ~/repos/qem_download_status.txt");
                 if (script_run("ls $parent*.repo") == 0) {
                     assert_script_run("sed -i \"1 s/\\]/_\$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 4)]/\" $parent*.repo");
                     assert_script_run("find $parent >> /tmp/repos.list.txt");
                 } else {
                     record_soft_failure("No .repo file found in $parent. This directory will be removed.");
-                    script_run("echo 'No .repo found for $maintrepo' >> ~/repos/qem_download_status.txt");
+                    assert_script_run("echo 'No .repo found for $maintrepo' >> ~/repos/qem_download_status.txt");
                     assert_script_run("rm -rf $parent");
                 }
             }
@@ -78,7 +93,7 @@ sub run {
 
         my $size = script_output("du -hs ~/repos");
         record_info("Repo size", "Total repositories size: $size");
-        script_run("echo 'Download completed' >> ~/repos/qem_download_status.txt");
+        assert_script_run("echo 'Download completed' >> ~/repos/qem_download_status.txt");
         upload_logs('/tmp/repos.list.txt');
         upload_logs('qem_download_status.txt');
     }
