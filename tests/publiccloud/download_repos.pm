@@ -30,7 +30,7 @@ sub get_repo_status {
 sub run {
     my ($self, $args) = @_;
 
-    $self->select_serial_terminal();
+    select_host_console();    # select console on the host, not the PC instance
 
     # Trigger to skip the download to speed up verification runs
     if (get_var('QAM_PUBLICCLOUD_SKIP_DOWNLOAD') == 1) {

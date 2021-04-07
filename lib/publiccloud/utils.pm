@@ -27,7 +27,14 @@ our @EXPORT = qw(select_host_console is_publiccloud is_byos is_ondemand is_ec2 i
 sub select_host_console {
     my (@args) = @_;
     if (check_var('TUNNELED', '1')) {
-        select_console('tunnel-console', @args);
+        if (get_var('_SSH_TUNNELS_INITIALIZED')) {
+            select_console('tunnel-console', @args);
+        } else {
+            set_var('TUNNELED', 0);
+            opensusebasetest::select_serial_terminal();
+            set_var('TUNNELED', 1);
+            return; # Avoid using send_key() on serial_terminal
+        }
     } else {
         select_console('root-console', @args);
     }

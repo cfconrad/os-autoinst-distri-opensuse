@@ -16,17 +16,25 @@ use Mojo::Base 'publiccloud::ssh_interactive_init';
 use publiccloud::ssh_interactive;
 use testapi;
 use utils;
+use publiccloud::utils "select_host_console";
 
 sub run {
     my ($self, $args) = @_;
-    select_console 'tunnel-console';
+
+    select_host_console();    # select console on the host, not the PC instance
 
     # Establish the tunnel (it will stay active in foreground and occupy this console!)
+    select_console('tunnel-console');
     ssh_interactive_tunnel($args->{my_instance});
 
     # Switch to root-console and SSH to the instance
     # every other loaded test must stay in root-console
     select_console 'root-console';
+
+    # Fix serial terminal to use TUNNELED stuff
+    $self->select_serial_terminal();
+    ssh_interactive_join();
+
 }
 
 1;
