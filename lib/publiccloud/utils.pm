@@ -26,13 +26,16 @@ our @EXPORT = qw(select_host_console is_publiccloud is_byos is_ondemand is_ec2 i
 # Select console on the test host, regardless of the TUNNELED variable.
 sub select_host_console {
     my (@args) = @_;
-    if (check_var('TUNNELED', '1')) {
+    if (check_var('TUNNELED', '1') && check_var('_SSH_TUNNELS_INITIALIZED', 1)) {
         select_console('tunnel-console', @args);
+        send_key "ctrl-c";
+        send_key "ret";
     } else {
-        select_console('root-console', @args);
+        my $tunneled = get_var('TUNNELED');
+        set_var('TUNNELED', 0) if ($tunneled);
+        opensusebasetest::select_serial_terminal();
+        set_var('TUNNELED', $tunneled) if ($tunneled);
     }
-    send_key "ctrl-c";
-    send_key "ret";
 }
 
 sub is_publiccloud() {
