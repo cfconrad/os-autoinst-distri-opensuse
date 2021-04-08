@@ -840,8 +840,12 @@ sub activate_console {
     }
     if (get_var('TUNNELED') && $name !~ /tunnel/) {
         die "Console '$console' activated in TUNNEL mode activated but tunnel(s) are not yet initialized, use the 'tunnel' console and call 'setup_ssh_tunnels' first" unless get_var('_SSH_TUNNELS_INITIALIZED');
-        (get_var('PUBLIC_CLOUD')) ? ssh_interactive_join() : $self->script_run('ssh -t sut', 0);
-        ensure_user($user) unless (get_var('PUBLIC_CLOUD'));
+        if (get_var('PUBLIC_CLOUD')) {
+            ssh_interactive_join();
+        } else {
+            $self->script_run('ssh -t sut', 0);
+            ensure_user($user);
+        }
     }
     set_var('CONSOLE_JUST_ACTIVATED', 1);
 }
