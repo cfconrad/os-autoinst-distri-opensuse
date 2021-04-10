@@ -41,16 +41,16 @@ sub select_host_console {
         ssh_interactive_leave();
 
         select_console('tunnel-console', await_console => 0);
-        send_key "ctrl-c";
-        send_key "ret";
+        send_key 'ctrl-c';
+        send_key 'ret';
 
         set_var('_SSH_TUNNELS_INITIALIZED', 0);
-        sleep 3;
+        opensusebasetest::clear_and_verify_console();
         save_screenshot;
     }
-    set_var('TUNNELED', 0) if ($tunneled);
+    set_var('TUNNELED', 0) if $tunneled;
     opensusebasetest::select_serial_terminal();
-    set_var('TUNNELED', $tunneled) if ($tunneled);
+    set_var('TUNNELED', $tunneled) if $tunneled;
 }
 
 sub is_publiccloud() {

@@ -29,7 +29,8 @@ sub run {
     select_console('tunnel-console');
     ssh_interactive_tunnel($args->{my_instance});
 
-    # Fix serial terminal to use TUNNELED stuff
+    # Enable ssh connection on setup console, this is done normally with the
+    # first activation hook in susedistribution:activate_console()
     if ($setup_console !~ /tunnel/) {
         select_console($setup_console);
         script_run('ssh -t sut', timeout => 0);
