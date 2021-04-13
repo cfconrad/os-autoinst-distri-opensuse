@@ -238,7 +238,7 @@ sub integration_services_check_ip {
         $ips_host_pov = console('svirt')->get_cmd_output(
             "set -x; vmid=\$(vim-cmd vmsvc/getallvms | awk '/$vmname/ { print \$1 }');" .
               "if [ \$vmid ]; then vim-cmd vmsvc/get.guest \$vmid | awk '/ipAddress/ {print \$3}' " .
-              "| head -n1 | sed -e 's/\"//g' | sed -e 's/,//g'; fi", {domain => 'sshVMwareServer'});
+              "| head -n1 | sed -e 's/\"//g' | sed -e 's/,//g'; fi", {domain => 'sshVMwareServer', keep_open => 0});
     }
     $ips_host_pov =~ m/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/;
     $ips_host_pov = $1;
