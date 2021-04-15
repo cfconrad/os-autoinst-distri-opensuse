@@ -580,9 +580,9 @@ sub ensure_ca_certificates_suse_installed {
 
     if (script_run('rpm -qi ca-certificates-suse') == 1) {
         $args{repo} //= 'https://download.opensuse.org/repositories/openSUSE:/infrastructure/' . generate_version();
-        $args{repo} = $2 if ($args{repo} =~ m/^((.*)[\/])[^\/]*$/);
+        $args{repo} =~ s/\/[^\/]+\.repo$//;
         zypper_ar($args{repo}, name => 'ca-certificates-suse-repo');
-        zypper_call('in --gpg-auto-import-keys ca-certificates-suse');
+        zypper_call('in --from ' . $args{repo} . ' ca-certificates-suse');
         zypper_call('mr -d ' . $args{repo});
     }
 }
