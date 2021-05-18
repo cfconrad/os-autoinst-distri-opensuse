@@ -1244,7 +1244,7 @@ sub select_serial_terminal {
     my $console;
 
     if ($backend eq 'qemu') {
-        if (check_var('VIRTIO_CONSOLE', 0)) {
+        if (get_var('VIRTIO_CONSOLE', 0)) {
             $console = $root ? 'root-console' : 'user-console';
         } else {
             $console = $root ? 'root-virtio-terminal' : 'virtio-terminal';
