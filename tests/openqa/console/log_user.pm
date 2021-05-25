@@ -12,7 +12,7 @@ use Data::Dumper;
 sub run {
     my ($self) = @_;
 
-    $self->select_serial_terminal();
+    select_console 'user-console';
     assert_script_run('echo "The live is live!"');
 }
 
