@@ -15,7 +15,7 @@ sub run {
     record_info('FLAGS', Dumper($self->test_flags()));
     record_info('CONSOLE', current_console());
 
-    power_action('reboot');
+    power_action('reboot', observe => 1);
 }
 
 sub test_flags {
