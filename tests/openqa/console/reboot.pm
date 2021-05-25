@@ -8,6 +8,7 @@
 use Mojo::Base 'opensusebasetest';
 use testapi;
 use Data::Dumper;
+use power_action_utils;
 
 sub run {
     my ($self) = @_;
