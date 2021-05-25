@@ -72,6 +72,29 @@ function openqa_run_load_snapshot_after_reboot_03 {
     trigger_openqa "http://cfconrad-vm.qa.suse.de" 8134 "$SCHEDULE"
 }
 
+function openqa_run_load_snapshot_after_reboot_04 {
+    # Use `root-console` and type a lot of garbage to the console before creating
+    # The snapshot. Then execute that garbage and reboot.
+
+
+
+    SCHEDULE=''
+    SCHEDULE='tests/installation/bootloader_start'
+    SCHEDULE="$SCHEDULE,tests/boot/boot_to_desktop"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/log_root.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/type_string_500xA.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/milestone.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/hit_enter.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/reboot.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/log_root.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/always_rollback.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/hit_enter.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/log_root.pm"
+
+    trigger_openqa "http://cfconrad-vm.qa.suse.de" 8134 "$SCHEDULE"
+}
+
+
 
 
 if [ -z "$1" ]
