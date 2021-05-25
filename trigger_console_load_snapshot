@@ -1,0 +1,40 @@
+#!/bin/bash  -x
+FROM=https://openqa.suse.de
+TO_HOST=cfconrad-vm.qa.suse.de
+CASEDIR='https://github.com/cfconrad/os-autoinst-distri-opensuse#DEBUG_console_snapshot_handling'
+
+function openqa_run_load_snapshot_after_reboot {
+    SCHEDULE=''
+    SCHEDULE='tests/installation/bootloader_start'
+    SCHEDULE="$SCHEDULE,tests/boot/boot_to_desktop"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/ok.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/check_serial_terminal.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/milestone.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/fail.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/reboot.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/always_rollback.pm"
+    
+    openqa-clone-job --skip-chained-deps --within-instance http://cfconrad-vm.qa.suse.de 8134 \
+        "CASEDIR=$CASEDIR" \
+        SCHEDULE="$SCHEDULE" \
+        | openqa-wait-job
+
+}
+
+
+
+PREFIX="openqa_run_"
+if [ -z "$1" ]
+then
+    set +x
+    echo ""
+    echo "ERROR: Missing parameter"
+    echo "usage:"
+    echo "   $0 <wifi config>"
+    echo ""
+    echo "Available wifi configurations:"
+    typeset -f | grep -P -o "^${PREFIX}\w+" | sort | while read -r XX; do echo "    ${XX:${#PREFIX}}"; done
+else
+    "$PREFIX$1"
+fi
+
