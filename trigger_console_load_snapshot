@@ -84,13 +84,13 @@ then
     echo "usage:"
     echo "   $0 <scenario>"
     echo ""
-    echo "Available wifi configurations:"
+    echo "Available scenarios:"
     for i in $(typeset -f | grep -P -o "^${PREFIX}\w+" | sort | while read -r XX; do echo "    ${XX:${#PREFIX}}"; done); do
         echo   $bold $i $normal
         cat  $0 | sed -En '/'$i'/,${p;/^\}/q}' | grep -E '\s*#';
     done
     echo ""
-    echo "Availabe variables"
+    echo "Available variables"
     echo "   TO_HOST=$TO_HOST"
     echo "   SKIP_DOWNLOAD=$SKIP_DOWNLOAD"
     echo "   CASEDIR=$CASEDIR"
