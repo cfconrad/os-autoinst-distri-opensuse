@@ -1,24 +1,70 @@
 #!/bin/bash  -x
 FROM=https://openqa.suse.de
 TO_HOST=cfconrad-vm.qa.suse.de
-CASEDIR='https://github.com/cfconrad/os-autoinst-distri-opensuse#DEBUG_console_snapshot_handling'
+CASEDIR=${CASEDIR:-https://github.com/cfconrad/os-autoinst-distri-opensuse#DEBUG_console_snapshot_handling_local}
+SKIP_DOWNLOAD=${SKIP_DOWNLOAD:---skip-download}
 
-function openqa_run_load_snapshot_after_reboot {
-    SCHEDULE=''
-    SCHEDULE='tests/installation/bootloader_start'
-    SCHEDULE="$SCHEDULE,tests/boot/boot_to_desktop"
-    SCHEDULE="$SCHEDULE,tests/openqa/console/ok.pm"
-    SCHEDULE="$SCHEDULE,tests/openqa/console/check_serial_terminal.pm"
-    SCHEDULE="$SCHEDULE,tests/openqa/console/milestone.pm"
-    SCHEDULE="$SCHEDULE,tests/openqa/console/fail.pm"
-    SCHEDULE="$SCHEDULE,tests/openqa/console/reboot.pm"
-    SCHEDULE="$SCHEDULE,tests/openqa/console/always_rollback.pm"
-    
-    openqa-clone-job --skip-chained-deps --within-instance http://cfconrad-vm.qa.suse.de 8134 \
+
+function trigger_openqa {
+    FROM_HOST="$1"
+    FROM_JOB="$2"
+    SCHEDULE="$3"
+
+    openqa-clone-job $SKIP_DOWNLOAD --skip-chained-deps --from $FROM_HOST --host $TO_HOST $FROM_JOB \
         "CASEDIR=$CASEDIR" \
         SCHEDULE="$SCHEDULE" \
         | openqa-wait-job
+}
 
+
+function openqa_run_load_snapshot_after_reboot_01 {
+    # Use __ONLY__ virtio-terminal, so `autotest::last_milestone_console` is `root-virtio-terminal`
+    # This scenario is working with current openQA
+
+    SCHEDULE=''
+    SCHEDULE='tests/installation/bootloader_start'
+    SCHEDULE="$SCHEDULE,tests/boot/boot_to_desktop"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/check_serial_terminal.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/milestone.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/reboot.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/always_rollback.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/check_serial_terminal.pm"
+
+    trigger_openqa "http://cfconrad-vm.qa.suse.de" 8134 "$SCHEDULE"
+}
+
+function openqa_run_load_snapshot_after_reboot_02 {
+    # Use root-console before milestone so `autotest::last_milestone_console` is `root-console`
+    # This scenario is __not__ working with current openQA
+
+    SCHEDULE=''
+    SCHEDULE='tests/installation/bootloader_start'
+    SCHEDULE="$SCHEDULE,tests/boot/boot_to_desktop"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/check_serial_terminal.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/log_root.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/milestone.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/reboot.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/always_rollback.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/check_serial_terminal.pm"
+
+    trigger_openqa "http://cfconrad-vm.qa.suse.de" 8134 "$SCHEDULE"
+}
+
+function openqa_run_load_snapshot_after_reboot_03 {
+    # Use virtio-console before milestone so `autotest::last_milestone_console` is `virtio-console`
+    # This scenario is __not__ working with current openQA
+
+    SCHEDULE=''
+    SCHEDULE='tests/installation/bootloader_start'
+    SCHEDULE="$SCHEDULE,tests/boot/boot_to_desktop"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/log_root.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/check_serial_terminal.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/milestone.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/reboot.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/always_rollback.pm"
+    SCHEDULE="$SCHEDULE,tests/openqa/console/log_root.pm"
+
+    trigger_openqa "http://cfconrad-vm.qa.suse.de" 8134 "$SCHEDULE"
 }
 
 
@@ -27,13 +73,24 @@ PREFIX="openqa_run_"
 if [ -z "$1" ]
 then
     set +x
+    bold=$(tput bold)
+    normal=$(tput sgr0)
     echo ""
     echo "ERROR: Missing parameter"
     echo "usage:"
-    echo "   $0 <wifi config>"
+    echo "   $0 <scenario>"
     echo ""
     echo "Available wifi configurations:"
-    typeset -f | grep -P -o "^${PREFIX}\w+" | sort | while read -r XX; do echo "    ${XX:${#PREFIX}}"; done
+    for i in $(typeset -f | grep -P -o "^${PREFIX}\w+" | sort | while read -r XX; do echo "    ${XX:${#PREFIX}}"; done); do
+        echo   $bold $i $normal
+        cat  $0 | sed -En '/'$i'/,${p;/^\}/q}' | grep -E '\s*#';
+    done
+    echo ""
+    echo "Availabe variables"
+    echo "   TO_HOST=$TO_HOST"
+    echo "   SKIP_DOWNLOAD=$SKIP_DOWNLOAD"
+    echo "   CASEDIR=$CASEDIR"
+    echo ""
 else
     "$PREFIX$1"
 fi
