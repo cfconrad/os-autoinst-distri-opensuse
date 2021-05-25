@@ -3,16 +3,19 @@ FROM=https://openqa.suse.de
 TO_HOST=cfconrad-vm.qa.suse.de
 CASEDIR=${CASEDIR:-https://github.com/cfconrad/os-autoinst-distri-opensuse#DEBUG_console_snapshot_handling_local}
 SKIP_DOWNLOAD=${SKIP_DOWNLOAD:---skip-download}
+PREFIX="openqa_run_"
 
 
 function trigger_openqa {
     FROM_HOST="$1"
     FROM_JOB="$2"
     SCHEDULE="$3"
+    CALLEE=${FUNCNAME[1]}
 
     openqa-clone-job $SKIP_DOWNLOAD --skip-chained-deps --from $FROM_HOST --host $TO_HOST $FROM_JOB \
         "CASEDIR=$CASEDIR" \
         SCHEDULE="$SCHEDULE" \
+        TEST=${CALLEE:${#PREFIX}} \
         | openqa-wait-job
 }
 
@@ -69,7 +72,6 @@ function openqa_run_load_snapshot_after_reboot_03 {
 
 
 
-PREFIX="openqa_run_"
 if [ -z "$1" ]
 then
     set +x
