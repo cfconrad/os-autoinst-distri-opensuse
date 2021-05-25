@@ -55,7 +55,9 @@ function openqa_run_load_snapshot_after_reboot_02 {
 
 function openqa_run_load_snapshot_after_reboot_03 {
     # Use virtio-console before milestone so `autotest::last_milestone_console` is `virtio-console`
-    # This scenario is __not__ working with current openQA
+    # This scenario is working with current openQA, because the `root-console`
+    # login procedure catch both cases. Means there is a needed for a logged in
+    # and the login-prompt, either one of these match we do the login or not.
 
     SCHEDULE=''
     SCHEDULE='tests/installation/bootloader_start'
