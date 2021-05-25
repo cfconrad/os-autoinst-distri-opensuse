@@ -10,6 +10,9 @@ use testapi;
 
 sub run {
     my ($self) = @_;
+    record_info('FLAGS', Dumper($self->test_flags()));
+    record_info('CONSOLE', current_console());
+
     record_info("OK");
 }
 

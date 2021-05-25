@@ -11,8 +11,11 @@ use Data::Dumper;
 
 sub run {
     my ($self) = @_;
+    record_info('FLAGS', Dumper($self->test_flags()));
+    record_info('CONSOLE', current_console());
 
     $self->select_serial_terminal();
+    record_info('SELECTED CONSOLE', current_console());
     assert_script_run('echo "The live is live!"');
 }
 

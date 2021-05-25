@@ -12,6 +12,7 @@ use Data::Dumper;
 sub run {
     my ($self) = @_;
     record_info('FLAGS', Dumper($self->test_flags()));
+    record_info('CONSOLE', current_console());
 }
 
 sub test_flags {
