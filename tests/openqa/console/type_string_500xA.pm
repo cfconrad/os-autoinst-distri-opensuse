@@ -14,7 +14,7 @@ sub run {
     record_info('FLAGS',   Dumper($self->test_flags()));
     record_info('CONSOLE', current_console());
 
-    my $s = 'A'x(80*60);
+    my $s = 'A'x(80*2);
     assert_script_run("echo $s");
     record_info("s", $s);
     type_string($s);
