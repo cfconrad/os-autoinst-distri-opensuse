@@ -50,7 +50,7 @@ sub find_whitelist_testsuite {
     my ($env, $suite) = @_;
 
     my $path = get_var('LTP_KNOWN_ISSUES');
-    return undef unless defined($path) or ! -e $path;
+    return undef unless defined($path) or !-e $path;
 
     my $content = path($path)->slurp;
     my $issues  = Mojo::JSON::decode_json($content);
@@ -61,11 +61,11 @@ sub find_whitelist_testsuite {
 sub list_skipped_tests {
     my ($env, $suite) = @_;
     my @skipped_tests;
-    $suite = find_whitelist_testsuite($env, $suite); 
+    $suite = find_whitelist_testsuite($env, $suite);
 
     die 'Unsupported format for `list_skipped_tests()`' if (ref($suite) eq 'ARRAY');
 
-    for my $test (keys(%$suite)){
+    for my $test (keys(%$suite)) {
         my @entrys = grep { $_->{skip} && whitelist_entry_match($_, $env) } @{$suite->{$_}};
         push @skipped_tests, $test if @entrys;
     }
@@ -77,10 +77,10 @@ sub whitelist_entry_match
     my ($entry, $env) = @_;
     my @mandatory_attributes = qw(product ltp_version revision arch kernel backend retval flavor);
 
-    die("Given environment is missing one of the following attributes: @mandatory_attributes" if grep { ! exists $env->{$_} } @mandatory_attributes;
+    die("Given environment is missing one of the following attributes: @mandatory_attributes") if grep { !exists $env->{$_} } @mandatory_attributes;
 
-    foreach my $attr (@mandatory_attributes){
-        return undef if( exists $entry->{$attr} && $env->{$attr} !~ m/$entry->{$attr}/);
+    foreach my $attr (@mandatory_attributes) {
+        return undef if (exists $entry->{$attr} && $env->{$attr} !~ m/$entry->{$attr}/);
     }
     return $entry;
 }
@@ -88,7 +88,7 @@ sub whitelist_entry_match
 sub find_whitelist_entry {
     my ($env, $suite, $test) = @_;
 
-    $suite = find_whitelist_testsuite($env, $suite); 
+    $suite = find_whitelist_testsuite($env, $suite);
 
     my @issues;
     if (ref($suite) eq 'ARRAY') {
