@@ -67,7 +67,7 @@ sub run {
         $instance = $self->{my_instance} = $provider->create_instance();
         $instance->wait_for_guestregister();
     }
-    
+
     download_whitelist();
     my $ltp_env = gen_ltp_env($instance);
 
@@ -185,16 +185,16 @@ sub gen_ltp_env {
         arch        => get_var('PUBLIC_CLOUD_ARCH', get_required_var("ARCH")),
         kernel      => $instance->run_ssh_cmd(cmd => 'uname -r'),
         backend     => get_required_var('BACKEND'),
-        flavor => get_required_var('FLAVOR'),
-        libc    => $instance->run_ssh_cmd(cmd => q(rpm -q --qf '%{VERSION}\n' glibc)),
-        gcc     => $instance->run_ssh_cmd(cmd => 'gcc --version | head -n1'),
-        ltp_version => $instance->run_ssh_cmd(cmd => q(rpm -q --qf '%{VERSION}\n' ltp));
-        harness => 'SUSE OpenQA',
-        
+        flavor      => get_required_var('FLAVOR'),
+        libc        => $instance->run_ssh_cmd(cmd => q(rpm -q --qf '%{VERSION}\n' glibc)),
+        gcc         => $instance->run_ssh_cmd(cmd => 'gcc --version | head -n1'),
+        ltp_version => $instance->run_ssh_cmd(cmd => q(rpm -q --qf '%{VERSION}\n' ltp)),
+        harness     => 'SUSE OpenQA',
+
         # The retval should be overwritten by test
         retval => '1',
     };
-  
+
     record_info("LTP Environment", Dumper($environment));
 
     return $environment;
