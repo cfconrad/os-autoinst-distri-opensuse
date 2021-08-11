@@ -96,7 +96,7 @@ sub run {
     # Use lib/LTP/WhiteList module to exclude tests
     if (get_var('LTP_KNOWN_ISSUES')) {
         my $exclude       = get_required_var('COMMAND_EXCLUDE');
-        my @skipped_tests = list_skipped_test($self->get_ltp_env(), get_required_var('COMMAND_FILE'));
+        my @skipped_tests = list_skipped_test($self->gen_ltp_env(), get_required_var('COMMAND_FILE'));
         for my $skip (@skipped_tests) {
             if (length($exclude > 0)) {
                 $exclude .= '|';
@@ -145,7 +145,7 @@ sub cleanup {
         parse_extra_log(LTP => "$root_dir/ltp_log.json");
         foreach my $extra_result (@{$self->{extra_test_results}}) {
             if ($extra_result->{result} ne 'ok') {
-                override_known_failures($self, get_ltp_env(), get_required_var('COMMAND_FILE'), $extra_result->{skript});
+                override_known_failures($self, gen_ltp_env(), get_required_var('COMMAND_FILE'), $extra_result->{skript});
             }
         }
     }
