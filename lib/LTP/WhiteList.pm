@@ -46,34 +46,62 @@ sub download_whitelist {
     bmwqemu::save_json_file($res->json, "ulogs/$basename");
 }
 
-sub find_whitelist_entry {
-    my ($env, $suite, $test) = @_;
+sub find_whitelist_testsuite {
+    my ($env, $suite) = @_;
 
     my $path = get_var('LTP_KNOWN_ISSUES');
-    return undef unless defined($path);
+    return undef unless defined($path) or ! -e $path;
 
     my $content = path($path)->slurp;
     my $issues  = Mojo::JSON::decode_json($content);
     return undef unless $issues;
-    return undef unless exists $issues->{$suite};
+    return $issues->{$suite};
+}
+
+sub list_skipped_tests {
+    my ($env, $suite) = @_;
+    my @skipped_tests;
+    $suite = find_whitelist_testsuite($env, $suite); 
+
+    die 'Unsupported format for `list_skipped_tests()`' if (ref($suite) eq 'ARRAY');
+
+    for my $test (keys(%$suite)){
+        my @entrys = grep { $_->{skip} && whitelist_entry_match($_, $env) } @{$suite->{$_}};
+        push @skipped_tests, $test if @entrys;
+    }
+    return @skipped_tests;
+}
+
+sub whitelist_entry_match
+{
+    my ($entry, $env) = @_;
+    my @mandatory_attributes = qw(product ltp_version revision arch kernel backend retval flavor);
+
+    die("Given environment is missing one of the following attributes: @mandatory_attributes" if grep { ! exists $env->{$_} } @mandatory_attributes;
+
+    foreach my $attr (@mandatory_attributes){
+        return undef if( exists $entry->{$attr} && $env->{$attr} !~ m/$entry->{$attr}/);
+    }
+    return $entry;
+}
+
+sub find_whitelist_entry {
+    my ($env, $suite, $test) = @_;
+
+    $suite = find_whitelist_testsuite($env, $suite); 
 
     my @issues;
-    if (ref($issues->{$suite}) eq 'ARRAY') {
-        @issues = @{$issues->{$suite}};
+    if (ref($suite) eq 'ARRAY') {
+        @issues = @{$suite};
     }
     else {
         $test =~ s/_postun$//g if check_var('KGRAFT', 1) && check_var('UNINSTALL_INCIDENT', 1);
-        return undef unless exists $issues->{$suite}->{$test};
-        @issues = @{$issues->{$suite}->{$test}};
+        return undef unless exists $suite->{$test};
+        @issues = @{$suite->{$test}};
     }
 
-  ISSUE:
     foreach my $cond (@issues) {
-        foreach my $filter (qw(product ltp_version revision arch kernel backend retval flavor)) {
-            next ISSUE if exists $cond->{$filter} and $env->{$filter} !~ m/$cond->{$filter}/;
-        }
-
-        return $cond;
+        return $cond if (whiltelist_entry_match($cond, $env));
     }
 
     return undef;
