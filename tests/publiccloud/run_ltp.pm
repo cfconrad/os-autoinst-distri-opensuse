@@ -23,6 +23,7 @@ use LTP::utils qw(get_ltproot get_ltp_version_file);
 use LTP::WhiteList qw(download_whitelist);
 use Mojo::File;
 use publiccloud::utils qw(is_byos select_host_console);
+use Data::Dumper;
 
 our $root_dir      = '/root';
 our $ver_linux_log = '';
@@ -56,7 +57,6 @@ sub run {
     my $instance;
 
     select_host_console();
-    download_whitelist();
 
     my $qam = get_var('PUBLIC_CLOUD_QAM', 0);
     if ($qam) {
@@ -67,6 +67,9 @@ sub run {
         $instance = $self->{my_instance} = $provider->create_instance();
         $instance->wait_for_guestregister();
     }
+    
+    download_whitelist();
+    my $ltp_env = gen_ltp_env($instance);
 
     assert_script_run("cd $root_dir");
     assert_script_run('curl ' . data_url('publiccloud/restart_instance.sh') . ' -o restart_instance.sh');
@@ -174,34 +177,25 @@ sub process_ltp_known_issues {
 }
 
 sub gen_ltp_env {
+    my $instance = shift;
+
     my $environment = {
         product     => get_required_var('DISTRI') . ':' . get_required_var('VERSION'),
-        ltp_version => '',
         revision    => get_required_var('BUILD'),
         arch        => get_var('PUBLIC_CLOUD_ARCH', get_required_var("ARCH")),
-        kernel      => '',
+        kernel      => $instance->run_ssh_cmd(cmd => 'uname -r'),
         backend     => get_required_var('BACKEND'),
-        #TODO currently we getting only pass or fail due to use of '--openqa-filter' need to properly solve retval issue
-        # from runltp-ng side to get smarter logic on this side
-        retval => '1',
         flavor => get_required_var('FLAVOR'),
-
-
-        libc    => '',
-        gcc     => '',
+        libc    => $instance->run_ssh_cmd(cmd => q(rpm -q --qf '%{VERSION}\n' glibc)),
+        gcc     => $instance->run_ssh_cmd(cmd => 'gcc --version | head -n1'),
+        ltp_version => $instance->run_ssh_cmd(cmd => q(rpm -q --qf '%{VERSION}\n' ltp));
         harness => 'SUSE OpenQA',
+        
+        # The retval should be overwritten by test
+        retval => '1',
     };
-    if ($ver_linux_log =~ qr'^Linux\s+(.*?)\s*$'m) {
-        $environment->{kernel} = $1;
-    }
-    if ($ver_linux_log =~ qr'^Linux C Library\s*>?\s*(.*?)\s*$'m) {
-        $environment->{libc} = $1;
-    }
-    if ($ver_linux_log =~ qr'^Gnu C\s*(.*?)\s*$'m) {
-        $environment->{gcc} = $1;
-    }
-    $environment->{ltp_version} = script_output("cat " . get_ltp_version_file());
-    record_info("LTP version", $environment->{ltp_version});
+  
+    record_info("LTP Environment", Dumper($environment));
 
     return $environment;
 }
