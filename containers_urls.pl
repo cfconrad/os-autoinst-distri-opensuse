@@ -61,27 +61,26 @@ sub get_suse_container_urls {
     $args{version} //= get_required_var('VERSION');
     $args{arch}    //= get_required_var('ARCH');
     $args{distri}  //= get_required_var('DISTRI');
+    my @totest = ();
+    my @released = ();
 
     my $distri = __find_key($registries, $args{distri});
     unless($distri){
         say 'ERROR: didn\'t found matching entry for '. $args{distri};
-        return undef;
+        return (\@totest, \@released);
     }
 
     my $version = __find_key($distri, $args{version});
     unless($version){
         say 'ERROR: didn\'t found matching entry for '. join('->', $args{distri}, $args{version});
-        return undef;
+        return (\@totest, \@released);
     }
 
     my $arch = __find_key($version, $args{arch});
     unless($arch){
         say 'ERROR: didn\'t found matching entry for '. join('->', $args{distri}, $args{version}, $args{arch});
-        return undef;
+        return (\@totest, \@released);
     }
-
-    my @totest = ();
-    my @released = ();
 
     if (ref($arch->{totest}) eq 'CODE'){
         push @totest, $arch->{totest}->(%args);
