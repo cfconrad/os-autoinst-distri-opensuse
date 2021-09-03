@@ -42,22 +42,17 @@ my $registries = {
     },
 };
 
-sub check_image_arch_in_registry {
-    my ($distri, $version, $arch) = @_;
-}
-
-
 sub __find_key {
-    my ($keys, $needle) = @_;
+    my ($hash, $needle) = @_;
     my @ret;
 
-    for my $k (@$keys){
+    for my $k (keys %$hash){
         if (grep {$_ eq $needle } split(/\|/, $k)){
             push (@ret, $k);
         }
     }
     die "The key $needle does not return unique entry!" if @ret > 1;
-    return @ret ? $ret[0] : 'THIS_DOES_NOT_EXISTS';
+    return @ret ? $hash->{$ret[0]} : undef;
 }
 # Returns a tuple of image urls and their matching released "stable" counterpart.
 # If empty, no images available.
@@ -67,19 +62,19 @@ sub get_suse_container_urls {
     $args{arch}    //= get_required_var('ARCH');
     $args{distri}  //= get_required_var('DISTRI');
 
-    my $distri = $registries->{__find_key([keys %$registries], $args{distri})};
+    my $distri = __find_key($registries, $args{distri});
     unless($distri){
         say 'ERROR: didn\'t found matching entry for '. $args{distri};
         return undef;
     }
 
-    my $version = $distri->{__find_key([keys %$distri], $args{version})};
+    my $version = __find_key($distri, $args{version});
     unless($version){
         say 'ERROR: didn\'t found matching entry for '. join('->', $args{distri}, $args{version});
         return undef;
     }
 
-    my $arch = $version->{__find_key([keys %$version], $args{arch})};
+    my $arch = __find_key($version, $args{arch});
     unless($arch){
         say 'ERROR: didn\'t found matching entry for '. join('->', $args{distri}, $args{version}, $args{arch});
         return undef;
