@@ -12,12 +12,7 @@
 # Maintainer: Anton Smorodskyi <asmorodskyi@suse.com>
 
 use Mojo::Base 'opensusebasetest';
-use utils qw(zypper_call systemctl file_content_replace zypper_ar ensure_ca_certificates_suse_installed);
-use version_utils 'is_sle';
-use network_utils qw(iface setup_static_network);
-use serial_terminal;
-use main_common 'is_updates_tests';
-use repo_tools 'generate_version';
+use testapi;
 use mmapi;
 
 sub run {
