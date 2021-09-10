@@ -21,7 +21,7 @@ sub run {
 
     assert_script_run('echo TEST');
 
-    record_info('ID', mmapi::whoami());
+    record_info('ID', get_current_job_id());
 }
 
 sub test_flags {
