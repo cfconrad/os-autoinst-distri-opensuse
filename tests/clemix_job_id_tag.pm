@@ -18,12 +18,15 @@ use network_utils qw(iface setup_static_network);
 use serial_terminal;
 use main_common 'is_updates_tests';
 use repo_tools 'generate_version';
+use mmapi;
 
 sub run {
     my ($self, $ctx) = @_;
     $self->select_serial_terminal;
 
     assert_script_run('echo TEST');
+
+    record_info('ID', mmapi::whoami());
 }
 
 sub test_flags {
