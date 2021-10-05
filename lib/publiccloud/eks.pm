@@ -24,7 +24,9 @@ sub vault_create_credentials {
     my ($self) = @_;
 
     record_info('INFO', 'Get credentials from VAULT server.');
-    my $data = $self->vault_get_secrets('/aws/sts/openqa-role-eks');
+    my $path = '/aws/sts/openqa-role-eks';
+    my $res = $self->vault_api('/v1/' . get_var('PUBLIC_CLOUD_VAULT_NAMESPACE', '') . $path, method => 'post');
+    my $data = $res->{data};
     $self->key_id($data->{access_key});
     $self->key_secret($data->{secret_key});
     $self->security_token($data->{security_token});
