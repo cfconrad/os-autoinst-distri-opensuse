@@ -18,6 +18,33 @@ use testapi;
 use utils;
 use publiccloud::k8s_utils;
 
+has security_token    => undef;
+
+sub vault_create_credentials {
+    my ($self) = @_;
+
+    record_info('INFO', 'Get credentials from VAULT server.');
+    my $data = $self->vault_get_secrets('/aws/creds/openqa-role-eks');
+    $self->key_id($data->{access_key});
+    $self->key_secret($data->{secret_key});
+    $self->security_token($data->{security_token});
+    die('Failed to retrieve key') unless (defined($self->key_id) && defined($self->key_secret) && defined($self->security_token));
+
+    assert_script_run('export AWS_SESSION_TOKEN="' . $self->security_token . '"');
+}
+
+sub _check_credentials {
+    my ($self) = @_;
+    my $max_tries = 6;
+    for my $i (1 .. $max_tries) {
+        # TODO as the user doesn't have access to ec2
+        # maybe we can use `aws sts get-caller-identity` in general
+        # or we use `aws eks update-kubeconfig --name qe-c-testing`
+        sleep 30;
+    }
+    return;
+}
+
 sub init {
     my ($self) = @_;
     $self->SUPER::init();
