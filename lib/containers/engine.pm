@@ -27,7 +27,7 @@ sub _engine_assert_script_run {
 
 sub _engine_script_run {
     my ($self, $cmd, %args) = @_;
-    $cmd = $self->runtime . " " . $cmd;
+    $cmd = "time " . $self->runtime . " " . $cmd;
     my $ret = script_run($cmd, %args);
     if (!defined($ret) && (!defined($args{timeout}) || $args{timeout} > 0)) {
         croak('Timeout on _engine_script_run(' . join(', ', $cmd, map { $_ . '=>' . $args{$_} } keys %args) . ')');
