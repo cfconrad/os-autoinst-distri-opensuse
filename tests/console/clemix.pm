@@ -32,8 +32,7 @@ sub run {
     $self->select_serial_terminal;
 
     for (1 ..  get_var('MAX_LOOPS', 1000)){
-        my $output = script_output('w', quite=> 1);
-        record_info('I', $output);
+        my $output = script_output('w', quiet => 1);
         die("Missing output") if ($output !~ /load average/m);
     }
 }
