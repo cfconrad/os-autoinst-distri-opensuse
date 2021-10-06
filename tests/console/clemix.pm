@@ -34,7 +34,7 @@ sub run {
     for my $i (1 ..  get_var('MAX_LOOPS', 1000)){
         print("X"x30 . $/);
         print($i . $/);
-        my $output = script_output('w', quiet => 1);
+        my $output = script_output('w');
         print $output . $/;
         die("Missing output") if ($output !~ /load average/m);
         print("X"x30 . $/);
