@@ -33,7 +33,8 @@ sub run {
 
     for (1 ..  get_var('MAX_LOOPS', 1000)){
         my $output = script_output('w', quite=> 1);
-        die("Missing output") if ($output !~ /load average/);
+        record_info('I', $output);
+        die("Missing output") if ($output !~ /load average/m);
     }
 }
 
