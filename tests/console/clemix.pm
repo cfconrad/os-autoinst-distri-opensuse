@@ -1,43 +1,33 @@
-
-# SUSE's openQA tests
-#
-# Copyright (C) 2019-2020 SUSE LLC
-#
-# Copying and distribution of this file, with or without modification,
-# are permitted in any medium without royalty provided the copyright
-# notice and this notice are preserved. This file is offered as-is,
-# without any warranty.
-# Package: gcc glibc-devel gdb sysvinit-tools
-# Summary: Basic GDB test. (Breakpoints/backtraces/attaching)
-# - Add sdk repository if necessary
-# - Install gcc glibc-devel gdb
-# - Download and compile "test1.c" from datadir
-#   - Using gdb, insert a breakpoint at main, run test and check
-# - Download and compile "test2.c" from datadir
-#   - Using gdb, run program, get a backtrace info and check
-# - Download and compile "test3.c" from datadir
-#   - Run test3, attach gdb to its pid, add a breakpoint and check
-# Maintainer: apappas@suse.de
-
-use base 'consoletest';
-use strict;
-use warnings;
+use Mojo::Base 'consoletest';
 use testapi;
-use utils qw(zypper_call);
-use version_utils qw(is_leap is_sle);
+use Time::HiRes qw(time);
 
 sub run {
-    my $self      = shift;
+    my $self = shift;
+
+    my $t_start      = time();
+    my $avg_duration = 0;
 
     $self->select_serial_terminal;
 
-    for my $i (1 ..  get_var('MAX_LOOPS', 1000)){
-        print("X"x30 . $/);
+    for my $i (1 .. get_var('MAX_LOOPS', 10)) {
+        print("X" x 30 . $/);
         print($i . $/);
-        my $output = script_output('w');
+        my $t_start_script_output  = time();
+        my $output                 = script_output('w', type_command => 1);
+        my $t                      = time();
+        my $duration_script_output = $t - $t_start_script_output;
+        $avg_duration = ($avg_duration * ($i-1) + ($t-$t_start_script_output)) / $i;
+        record_info('Measure', 'Loop: ' . $i . $/ . 'Allover: ' . ($t-$t_start) . $/ . "Avg: " . $avg_duration . $/ . "Current:" . $duration_script_output . $/);
         print $output . $/;
-        die("Missing output") if ($output !~ /load average/m);
-        print("X"x30 . $/);
+        if ($output !~ /load average/m) {
+            sleep 5;
+            assert_script_run('cat /tmp/scriptrTijn.sh');
+            assert_script_run('cat /tmp/scriptrTijn.sh | od');
+            assert_script_run('cat /tmp/scriptrTijn.sh | od -c');
+            die("Missing output");
+        }
+        print("X" x 30 . $/);
     }
 }
 
