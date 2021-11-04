@@ -109,8 +109,8 @@ sub retry {
     while ($try_cnt++ < $args{max_tries}) {
         eval { $ret = $code->() };
         return $ret unless ($@);
-
-        eval { $args{cleanup}->($@) } or
+        my $errmsg = $@;
+        eval { $args{cleanup}->($errmsg) } or
           bmwqemu::fctwarn($args{name} . ' -- cleanup failed with: ' . $@);
 
         sleep $args{sleep_duration};
