@@ -87,7 +87,7 @@ sub extract_bss_nr {
 }
 
 sub recover_console {
-    if (is_serial_terminal()) {
+    if (testapi::is_serial_terminal()) {
         type_string(qq(\c\\));          # Send QUIT signal
     }
     else {
