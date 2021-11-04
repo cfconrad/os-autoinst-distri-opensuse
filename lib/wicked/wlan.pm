@@ -321,8 +321,11 @@ sub hostapd_start {
     my ($self, $config, %args) = @_;
     $args{name} //= 'hostapd';
     $config = $self->write_cfg("/tmp/$args{name}.conf", $config);
+    my $cnt = 0;
     $self->retry(
         sub {
+            say("CLEMIX HOSTAPD");
+            die("CLEMIX HOSTAPD") if($cnt++ < 1);
             $self->netns_output("hostapd -P '/tmp/$args{name}.pid' -B '/tmp/$args{name}.conf'");
         },
         cleanup => sub {
