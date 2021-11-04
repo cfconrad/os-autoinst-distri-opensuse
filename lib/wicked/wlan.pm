@@ -321,19 +321,24 @@ sub hostapd_start {
     my ($self, $config, %args) = @_;
     $args{name} //= 'hostapd';
     $config = $self->write_cfg("/tmp/$args{name}.conf", $config);
+    record_info('START', "hopstapd_start()", result => 'fail');
+    say("CLEMIX HOSTAPD START");
     my $cnt = 0;
     $self->retry(
         sub {
             say("CLEMIX HOSTAPD");
-            die("CLEMIX HOSTAPD") if($cnt++ < 1);
+            die("CLEMIX HOSTAPD") if($cnt++ < 2);
             $self->netns_output("hostapd -P '/tmp/$args{name}.pid' -B '/tmp/$args{name}.conf'");
         },
         cleanup => sub {
             my ($err) = @_;
             $self->recover_console();
-            record_info('HOSTAPD', $err, result => 'fail');
+            say("CLEMIX HOSTAPD CLEANUP");
+            record_info('CLEANUP', $err, result => 'fail');
         }
     );
+    say("CLEMIX HOSTAPD DONE");
+    record_info('DONE', "hopstapd_start()", result => 'fail');
 
     ## Check for multi BSS setup
     my @bsss = $config =~ (/^bss=(.*)$/gm);
