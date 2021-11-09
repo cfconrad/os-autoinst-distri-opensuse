@@ -12,7 +12,6 @@ use File::Basename;
 use File::Find;
 use Exporter;
 use testapi qw(check_var get_var get_required_var set_var check_var_array diag);
-use main_containers qw(load_host_tests_podman load_host_tests_docker);
 use containers::urls 'get_suse_container_urls';
 use autotest;
 use utils;
@@ -26,6 +25,7 @@ use lockapi 'barrier_create';
 use Carp 'croak';
 use strict;
 use warnings;
+require main_containers;
 
 our @EXPORT = qw(
   any_desktop_is_applicable
@@ -1707,8 +1707,8 @@ sub load_extra_tests_containers {
     my ($image_names, $stable_names) = get_suse_container_urls();
     return unless @$image_names;
 
-    load_host_tests_podman();
-    load_host_tests_docker();
+    main_containers::load_host_tests_podman();
+    main_containers::load_host_tests_docker();
 }
 
 sub load_extra_tests_prepare {
