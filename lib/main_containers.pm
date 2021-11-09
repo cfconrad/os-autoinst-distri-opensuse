@@ -55,10 +55,10 @@ sub load_image_tests_docker {
 }
 
 sub load_host_tests_podman {
-    unless (is_sle('<15-SP1')) {
+    if (is_leap('15.1+') || is_tumbleweed || is_sle("15-sp1+")) {
         # podman package is only available as of 15-SP1
         loadtest 'containers/podman';
-        loadtest 'containers/podman_image';
+        loadtest 'containers/podman_image' unless is_public_cloud();
         loadtest 'containers/podman_3rd_party_images';
         loadtest 'containers/buildah';
         loadtest 'containers/rootless_podman';
@@ -67,9 +67,9 @@ sub load_host_tests_podman {
 
 sub load_host_tests_docker {
     loadtest 'containers/docker';
-    loadtest 'containers/docker_image';
+    loadtest 'containers/docker_image' unless (is_public_cloud());
     loadtest 'containers/docker_3rd_party_images';
-    unless (is_sle("<=15") && is_aarch64) {
+    if (is_opensuse() || (is_sle(">15") && !is_aarch64())) {
         # these 2 packages are not avaiable for <=15 (aarch64 only)
         # zypper-docker is not available in factory
         loadtest 'containers/zypper_docker' unless is_tumbleweed;
@@ -82,6 +82,7 @@ sub load_host_tests_docker {
         loadtest 'containers/docker_compose';
     }
     loadtest 'containers/validate_btrfs' if is_x86_64;
+    loadtest "containers/container_diff" if (is_opensuse());
 }
 
 
@@ -104,3 +105,4 @@ sub load_container_tests {
     }
     loadtest 'console/coredump_collect';
 }
+
