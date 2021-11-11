@@ -13,6 +13,7 @@ use testapi;
 sub run {
     my ($self, $ctx) = @_;
     $self->select_serial_terminal;
+    set_var(_CHKSEL_RATE_HITS => 20_000);
 
     my $start_time = time;
     my $duration = get_var('CLEMIX_DURATION', 300);
