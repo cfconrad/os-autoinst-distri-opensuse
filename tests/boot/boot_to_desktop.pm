@@ -53,6 +53,7 @@ sub run {
         };
         if ($@) {
             my $err = $@;
+            mkdir "ulogs";
             my $port = get_required_var('WORKER_INSTANCE') + 5990;
             system("vnccapture --port $port -o ulogs/capture.png");
             die($err);
