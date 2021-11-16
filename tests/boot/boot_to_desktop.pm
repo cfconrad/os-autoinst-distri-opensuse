@@ -48,7 +48,15 @@ sub run {
         wait_serial('Welcome to SUSE Linux', $timeout) || die "System did not boot in $timeout seconds.";
     }
     else {
-        $self->wait_boot(bootloader_time => $timeout, nologin => $nologin);
+        eval {
+            $self->wait_boot(bootloader_time => $timeout, nologin => $nologin);
+        };
+        if ($@) {
+            my $err = $@;
+            my $port = get_required_var('WORKER_INSTANCE') + 5990;
+            system("vnccapture --port $port -o ulogs/capture.png");
+            die($err);
+        }
     }
 }
 
