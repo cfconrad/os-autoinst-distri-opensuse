@@ -402,8 +402,10 @@ sub __as_config_array {
 sub skip_by_wicked_version
 {
     my ($self, $v) = @_;
-    $v //= $self->wicked_version;
 
+    return 0 if (get_var(WICKED_SKIP_VERSION_CHECK => 0));
+
+    $v //= $self->wicked_version;
     if ($v && !$self->check_wicked_version($v)) {
         $self->result('skip');
         return 1;
