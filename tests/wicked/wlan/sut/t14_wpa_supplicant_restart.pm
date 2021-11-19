@@ -46,7 +46,7 @@ sub run {
     return if ($self->skip_by_wicked_version());
 
     $self->setup_ref();
-    $self->hostapd_start();
+    $self->hostapd_start($self->hostapd_conf);
 
     # Setup sut
     $self->write_cfg('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $self->ifcfg_wlan);
