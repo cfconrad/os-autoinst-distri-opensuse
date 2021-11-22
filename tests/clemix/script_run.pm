@@ -15,6 +15,8 @@ sub run {
     $self->select_serial_terminal;
     script_run("sleep 1", timeout => 10);
     script_run("sleep 1", timeout => 10, die_on_timeout=> 1);
+    script_run("sleep 5", timeout => 1, die_on_timeout=> 0);
+    sleep 10;
     script_run("sleep 5", timeout => 1, die_on_timeout=> 1);
 }
 
