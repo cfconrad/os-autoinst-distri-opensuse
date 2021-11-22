@@ -12,7 +12,7 @@ use testapi;
 
 sub run {
     my ($self, $ctx) = @_;
-    select_console('root');
+    select_console('sut');
     my $out = script_output('find /');
     record_info('UH', $out);
 }
