@@ -13,7 +13,7 @@ use testapi;
 sub run {
     my ($self, $ctx) = @_;
     select_console('sut');
-    my $out = script_output('find /');
+    my $out = script_output('find /etc');
     record_info('UH', $out);
 }
 
