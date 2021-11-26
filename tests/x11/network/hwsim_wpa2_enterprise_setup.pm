@@ -16,7 +16,8 @@ use utils;
 
 sub run {
     my $self = shift;
-    select_console('root-console');
+    $self->select_serial_terminal;
+    
     assert_script_run "modprobe mac80211_hwsim radios=2 |& tee /dev/$serialdev";
 
     $self->install_packages;
@@ -25,6 +26,7 @@ sub run {
     $self->configure_hostapd;
     $self->adopt_apparmor;
     $self->reload_services;
+    $self->check_hostapd_log;
     select_console 'x11';
 }
 
@@ -83,6 +85,11 @@ sub reload_services {
     systemctl 'restart NetworkManager';
     systemctl 'restart hostapd';
     systemctl 'is-active hostapd';
+}
+
+sub check_hostapd_log {
+    script_retry('journalctl -q -u hostapd | grep -i "Started Hostapd"', delay => 2);
+    assert_script_run('test $(journalctl -q -u hostapd | grep -i error | wc -l) -eq 0');
 }
 
 sub post_fail_hook {
