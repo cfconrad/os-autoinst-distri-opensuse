@@ -51,6 +51,7 @@ sub connect_to_network {
     # select it
     assert_and_click 'gnome_widget-choose_network-click';
     # and click on 'connect'
+    sleep;
     assert_and_click 'gnome_widget-connect-click';
 }
 
