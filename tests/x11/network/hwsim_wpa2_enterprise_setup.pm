@@ -76,6 +76,7 @@ sub adopt_apparmor {
     if (script_output('systemctl is-active apparmor', proceed_on_failure => 1) eq 'active') {
         enter_cmd 'echo "# adopt AppArmor"';
         enter_cmd q(test ! -e /etc/apparmor.d/usr.sbin.hostapd || sed -i -E 's/^}$/  \/etc\/wpa_enterprise_certificates\/** r,\n}/' /etc/apparmor.d/usr.sbin.hostapd);
+        enter_cmd q(test ! -e /etc/apparmor.d/usr.sbin.hostapd || sed -i -E 's/^}$/  \/etc\/ssl\/openssl.cnf r,\n}/' /etc/apparmor.d/usr.sbin.hostapd);
         systemctl 'reload apparmor';
     }
 }
