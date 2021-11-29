@@ -42,6 +42,7 @@ sub run {
 sub connect_to_network {
     # open the wifi widget
     assert_and_click 'gnome_widget';
+    sleep;
     # select 'wifi 1' (The one not beeing ignored by NM)
     assert_and_click 'gnome_widget-network_selection-click';
     # click on 'select network'
@@ -51,7 +52,6 @@ sub connect_to_network {
     # select it
     assert_and_click 'gnome_widget-choose_network-click';
     # and click on 'connect'
-    sleep;
     assert_and_click 'gnome_widget-connect-click';
 }
 
