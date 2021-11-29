@@ -13,20 +13,52 @@ use strict;
 use warnings;
 use testapi;
 use utils;
+use wicked::wlan;
 
 sub run {
     my $self = shift;
     $self->select_serial_terminal;
     
-    assert_script_run "modprobe mac80211_hwsim radios=2 |& tee /dev/$serialdev";
+    my $ww = wicked::wlan->new(ref_ifc => 'wlan1', ref_phy => 'phy1', sut_ifc=>'wlan0', sut_phy => 'phy0');
+    $ww->before_test();
 
-    $self->install_packages;
-    $self->prepare_NM;
-    $self->generate_certs;
-    $self->configure_hostapd;
-    $self->adopt_apparmor;
-    $self->reload_services;
-    $self->check_hostapd_log;
+    $ww->setup_ref();
+    $ww->hostapd_start(<<EOT);
+        ctrl_interface=/var/run/hostapd
+        interface={{ref_ifc}}
+        driver=nl80211
+        country_code=DE
+        ssid=foo
+        channel=1
+        hw_mode=g
+        ieee80211n=1
+        auth_algs=3
+        wpa=2
+        wpa_key_mgmt=WPA-EAP
+        wpa_pairwise=CCMP
+        rsn_pairwise=CCMP
+        group_cipher=CCMP
+
+        # Require IEEE 802.1X authorization
+        ieee8021x=1
+        eapol_version=2
+        eap_message=ping-from-hostapd
+
+        ## RADIUS authentication server
+        nas_identifier=the_ap
+        auth_server_addr=127.0.0.1
+        auth_server_port=1812
+        auth_server_shared_secret=testing123
+EOT
+    #assert_script_run "modprobe mac80211_hwsim radios=2 |& tee /dev/$serialdev";
+
+    #$self->install_packages;
+    #$self->prepare_NM;
+    #$self->generate_certs;
+    #$self->configure_hostapd;
+    #$self->adopt_apparmor;
+    #$self->reload_services;
+    #    $self->check_hostapd_log;
     select_console 'x11';
 }
 
