@@ -75,7 +75,7 @@ sub run {
 
     # Execute each test and upload its results
     assert_script_run "cd $test_repo";
-    foreach my $robot_test (split /\n/, script_output "ls $test_repo") {
+    foreach my $robot_test (split /\n/, script_output "ls -1 $test_repo") {
         record_info("$robot_test", "Starting $robot_test");
         script_run "robot --log $robot_test.html --xunit $robot_test.xml $robot_test";
         # Soft fail section - How to add a new one
