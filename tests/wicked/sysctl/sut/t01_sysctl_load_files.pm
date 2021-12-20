@@ -12,6 +12,7 @@
 
 use Mojo::Base 'wickedbase';
 use testapi;
+use Mojo::File qw(path);
 
 our $wicked_show_config = 'wicked --log-level debug --debug all  show-config all';
 
@@ -43,11 +44,16 @@ sub check_load_order {
               "sysctl: @sysctl\n" .
               "wicked: @wicked\n");
     }
+
+    my $f = path('ulogs/teststeps.txt');
+    $f->spurt($f->slurp . "\n" . join(" ", @wicked));
 }
 
 sub run {
     my ($self, $ctx) = @_;
     $self->select_serial_terminal();
+    mkdir 'ulogs';
+    path('ulogs/teststeps.txt')->spurt("");
 
     return if $self->skip_by_wicked_version('>=0.6.68');
 
