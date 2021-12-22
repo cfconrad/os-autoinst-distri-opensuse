@@ -45,8 +45,8 @@ sub check_load_order {
               "wicked: @wicked\n");
     }
 
-    my $f = path('ulogs/teststeps.txt');
-    $f->spurt($f->slurp . sprintf("\ncheck => [qw(%s)]\n},", join(" ", @wicked)));
+    #    my $f = path('ulogs/teststeps.txt');
+    #    $f->spurt($f->slurp . sprintf("\ncheck => [qw(%s)]\n},", join(" ", @wicked)));
 }
 
 sub check_agains_sysctl {
@@ -132,7 +132,7 @@ sub _assert_script_run {
     assert_script_run($cmd, @args);
 }
 
-sub check_static {
+sub check_static_create {
     my ($self, $ctx) = @_;
 
     mkdir 'ulogs';
@@ -195,12 +195,146 @@ sub check_static {
 
     # Exceptional behavior for /etc/sysctl.conf, it is silently ignored
     my $file = "/etc/sysctl.conf";
-    _assert_script_run("rm $file");
-    _assert_script_run("ln -s /I_do_not_exists $file");
+    _assert_script_run("rm $file && ln -s /I_do_not_exists $file");
     check_load_order();
     die("Wrongly showing broken '$file' in logs") if grep { $_ eq $file } wicked_get_file_order();
     die("Wrongly showing missing '$file' in logs") if grep { $_ eq $file } wicked_get_file_errors();
+}
 
+sub check_static {
+    my ($self, $ctx) = @_;
+
+    my $kver = script_output('uname -r');
+    my $boot_sysctl = '/boot/sysctl.conf-' . $kver;
+    my @steps = (
+        {
+            check => [$boot_sysctl, qw(/usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /run/sysctl.d && touch /run/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /etc/sysctl.d && touch /etc/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /usr/local/lib/sysctl.d && touch /usr/local/lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /usr/lib/sysctl.d && touch /usr/lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /lib/sysctl.d && touch /lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /lib/sysctl.d && touch /lib/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /lib/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /usr/lib/sysctl.d && touch /usr/lib/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/lib/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /usr/local/lib/sysctl.d && touch /usr/local/lib/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/local/lib/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /etc/sysctl.d && touch /etc/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /etc/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /run/sysctl.d && touch /run/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /run/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/etc/sysctl.d/20-test.conf /run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /etc/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/usr/local/lib/sysctl.d/20-test.conf /run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /usr/local/lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/usr/lib/sysctl.d/20-test.conf /run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /usr/lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/lib/sysctl.d/20-test.conf /run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /lib/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /usr/lib/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /usr/local/lib/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /etc/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/21-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /run/sysctl.d/21-test.conf',
+            check => [$boot_sysctl, qw(/usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'touch /etc/sysconfig/network/ifsysctl',
+            check => [$boot_sysctl, qw(/usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf /etc/sysconfig/network/ifsysctl)]
+        },
+        {
+            cmd => 'touch /etc/sysconfig/network/ifsysctl-' . $ctx->iface(),
+            check => [$boot_sysctl, qw(/usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf /etc/sysconfig/network/ifsysctl), '/etc/sysconfig/network/ifsysctl-' . $ctx->iface()]
+        },
+        {
+            cmd => 'rm /etc/sysconfig/network/ifsysctl',
+            check => [$boot_sysctl, qw(/usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf), '/etc/sysconfig/network/ifsysctl-' . $ctx->iface()]
+        },
+        {
+            cmd => 'rm /etc/sysconfig/network/ifsysctl-' . $ctx->iface(),
+            check => [$boot_sysctl, qw(/usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /lib/sysctl.d && ln -s /I_do_not_exists /lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/lib/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /usr/lib/sysctl.d && ln -s /I_do_not_exists /usr/lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/usr/lib/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /usr/local/lib/sysctl.d && ln -s /I_do_not_exists /usr/local/lib/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/usr/local/lib/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /etc/sysctl.d && ln -s /I_do_not_exists /etc/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/etc/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'mkdir -p /run/sysctl.d && ln -s /I_do_not_exists /run/sysctl.d/20-test.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf /etc/sysctl.conf)]
+        },
+        {
+            cmd => 'rm /etc/sysctl.conf && ln -s /I_do_not_exists /etc/sysctl.conf',
+            check => [$boot_sysctl, qw(/run/sysctl.d/20-test.conf /usr/lib/sysctl.d/50-default.conf /usr/lib/sysctl.d/51-network.conf /etc/sysctl.d/70-yast.conf /usr/lib/sysctl.d/99-sysctl.conf)]
+        });
+
+    for my $step (@steps) {
+        assert_script_run($step->{cmd}) if ($step->{cmd});
+        check_load_order($step->{check});
+    }
 }
 
 sub run {
