@@ -14,6 +14,7 @@
 
 use Mojo::Base 'wickedbase';
 use testapi;
+use autotest ();
 use version_utils qw(is_sle check_version);
 
 our $wicked_show_config = 'wicked --log-level debug --debug all  show-config all';
@@ -262,10 +263,20 @@ sub run {
     $self->check_static($ctx);
 
     # Because of this commit https://gitlab.com/procps-ng/procps/-/commit/5da3024e4e4231561d922ad356a22c0d5d7bc69f
-    # we are not compatible to procps-ng >= 3.3.17. But from wicked side,
+    # wicked is not compatible to procps-ng >= 3.3.17. But from wicked side,
     # this is for reason and may change in the future!
+    # Also ensure that we the version of procps-ng is compatible with wicked in SLE!
     my $sysctl_version = script_output(q(/usr/sbin/sysctl --version | grep -oP '[\d\.]+'));
     if (is_sle || check_version('<3.3.17', $sysctl_version)) {
+        
+        # Load lastgood snapshot, so we do not need to take care of cleanup from previous test!
+        autotest::load_snapshot('lastgood');
+        $self->rollback_activated_consoles();
+        $self->select_serial_terminal();
+
+        $self->get_from_data('wicked/ifcfg/ifcfg-eth0-hotplug-static', '/etc/sysconfig/network/ifcfg-' . $ctx->iface());
+        $self->wicked_command('ifreload', 'all');
+
         $self->check_agains_sysctl($ctx);
     }
 }
