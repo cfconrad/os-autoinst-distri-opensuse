@@ -100,7 +100,7 @@ sub reset_wicked {
     my $self = @_;
     # Remove any config file and leave the system clean to start tests
     script_run('find /etc/sysconfig/network/ -name "ifcfg-*" | grep -v "ifcfg-lo" | xargs rm');
-    script_run('rm -f route');
+    script_run('find /etc/sysconfig/network/ -name "routes" -o -name "*ifroute-*" -exec rm {} \;');
 
     # Remove any previous manual ip configuration
     my $iface = iface();
