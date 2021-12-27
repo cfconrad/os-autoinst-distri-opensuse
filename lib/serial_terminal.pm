@@ -17,6 +17,7 @@ use Mojo::Util qw(b64_encode b64_decode sha1_sum trim);
 use Mojo::File 'path';
 use File::Basename;
 use File::Temp 'tempfile';
+use Time::HiRes;
 
 BEGIN {
     our @EXPORT = qw(
@@ -27,6 +28,9 @@ BEGIN {
       prepare_serial_console
       serial_term_prompt
       upload_file
+    );
+    our @EXPORT_OK = qw(
+      reboot
     );
 }
 
@@ -230,6 +234,39 @@ sub upload_file {
     system('mkdir -p ulogs/') == 0 or die('Failed to create ulogs/ directory');
     system(sprintf("cp '%s' '%s'", $tmpfilename, $dst)) == 0
       or die("Failed to finally copy file from '$tmpfilename' to '$dst'");
+}
+
+
+sub reboot {
+    my (%args) = @_;
+    $args{check} //= 1;
+    $args{console} //= testapi::current_console;
+    $args{reboot_cmd} //= 'systemctl reboot';
+    $args{timeout} //= 300;
+    $args{minimum_boot_time} = 3;
+
+    bmwqemu::log_call(%args);
+
+    my $uptime_start;
+    my $time_start = time();
+
+    die('Only root-virtio-terminal is supported') unless $args{console} eq 'root-virtio-terminal';
+    $uptime_start = script_output(q(cat /proc/uptime | awk '{print $1}')) if ($args{check});
+
+    record_info('REBOOT', "uptime: $uptime_start sec\ncmd: " . $args{reboot_cmd});
+    script_run($args{reboot_cmd}, timeout => 0);
+    reset_consoles;
+    wait_serial('[lL]ogin:', timeout => $args{timeout});
+    select_console($args{console});
+
+    my $duration = time() - $time_start;
+    if ($args{check}) {
+        my $uptime_end = script_output(q(cat /proc/uptime | awk '{print $1}'));
+        if ($uptime_start + $duration - $args{minimum_boot_time} < $uptime_end) {
+            die("Reboot did not take place in $duration seconds");
+        }
+    }
+    return $duration;
 }
 
 1;
