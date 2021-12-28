@@ -43,7 +43,7 @@ sub run {
     systemctl('start wickedd.service');
     $self->assert_wicked_state(iface => $ctx->iface());
     record_info('Test 5', 'List the network interfaces with wicked');
-    my @wicked_all_ifaces = split("\n", script_output('wicked show --brief all'));
+    my @wicked_all_ifaces = split("\n", script_output('wicked show --brief all |& grep -v CLEMIX'));
     foreach (@wicked_all_ifaces) {
         $_ = substr($_, 0, index($_, ' '));
     }

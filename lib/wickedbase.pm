@@ -16,6 +16,7 @@ use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal;
 use Carp;
 use Mojo::File 'path';
+use Mojo::Util 'trim';
 use Regexp::Common 'net';
 use File::Basename;
 use version_utils 'check_version';
@@ -737,6 +738,34 @@ sub record_console_test_result {
     $self->write_resultfile($filename, $content);
 }
 
+sub check_logs {
+    my $self = shift;
+    my @units = qw(wickedd-nanny wickedd-dhcp4 wickedd-dhcp6 wicked wickedd);
+    my $default_exclude = 'wickedd=process \d+ has not exited yet; now doing a blocking waitpid';
+    my @excludes = split(/(?<!\\),/, get_var(WICKED_CHECK_LOG_EXCLUDE => $default_exclude));
+
+    for my $unit (@units) {
+        my $cmd = "journalctl -q -p 3 -x -u $unit";
+        for my $exclude (@excludes) {
+            my ($unit_match, $regex) = split(/\s*=\s*/, $exclude, 2);
+            if ($unit_match =~ /^all$/i || $unit_match eq $unit) {
+                $cmd .= "\\\n    | grep -vP '$regex'";
+            }
+        }
+        my $out = trim(script_output($cmd, proceed_on_failure => 1));
+        if (length($out) > 0) {
+            record_info('LOG-ERROR', "$cmd\n\n$out\n\nUse WICKED_CHECK_LOG_EXCLUDE to change filter!", result => 'fail');
+            $self->result('fail');
+        }
+    }
+}
+
+sub reboot {
+    my ($self) = @_;
+    $self->check_logs();
+    serial_terminal::reboot();
+}
+
 sub post_run {
     my ($self) = @_;
     $self->{wicked_post_run} = 1;
@@ -746,6 +775,7 @@ sub post_run {
         script_run('kill ' . get_var('WICKED_TCPDUMP_PID'));
         $self->upload_log_file('/tmp/' . $self->{name} . '_tcpdump.pcap');
     }
+    $self->check_logs();
     $self->upload_wicked_logs('post');
 }
 
