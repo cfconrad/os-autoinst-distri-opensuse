@@ -1679,11 +1679,13 @@ Example:
 
 =cut
 sub validate_script_output_retry {
-    my ($cmd, $check) = splice(@_, 0, 2);
-    my %args = testapi::compat_args({retry => 10, delay => 30, timeout => 90}, [], @_);
+    my ($cmd, $check, %args) = @_;
+    $args{retry} //= 10;
+    $args{delay} //= 30;
+    $args{timeout} //= 90;
+
     my $retry = delete $args{retry};
     my $delay = delete $args{delay};
-
     my $ret;
 
     my $exec = "timeout $args{timeout} $cmd";
