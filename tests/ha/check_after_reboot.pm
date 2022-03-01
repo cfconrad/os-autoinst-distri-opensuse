@@ -107,6 +107,7 @@ sub run {
             record_soft_failure "bsc#1129385";
             upload_logs 'bsc1129385-check-journal.log';
             $iscsi_fails = script_run 'grep -q LIO-ORG /proc/scsi/scsi';
+            sleep;
             systemctl 'restart iscsi' if ($iscsi_fails);
             systemctl 'restart pacemaker';
         }
