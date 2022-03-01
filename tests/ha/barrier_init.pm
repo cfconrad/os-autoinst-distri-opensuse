@@ -41,6 +41,7 @@ sub run {
             barrier_create("BARRIER_HA_NONSS_FILES_SYNCED_$cluster_name", $num_nodes);
         }
         else {
+            barrier_create('SUPPORT_SERVER_READY', $num_nodes + 1);
             barrier_create("BARRIER_HA_$cluster_name", $num_nodes + 1);
         }
 
@@ -193,6 +194,7 @@ sub run {
     my $dev_by_path = '/dev/disk/by-path';
     my $index = get_var('ISCSI_LUN_INDEX', 0);
 
+    barrier_wait('SUPPORT_SERVER_READY');
     foreach (split(/,/, $cluster_infos)) {
         # The CLUSTER_INFOS variable for support_server also contains the number of LUN
         my ($cluster_name, $num_nodes, $num_luns) = split(/:/, $_);

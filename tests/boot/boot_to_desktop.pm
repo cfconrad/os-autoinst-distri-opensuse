@@ -17,9 +17,20 @@ use testapi;
 use Utils::Architectures;
 use Utils::Backends;
 use version_utils qw(is_upgrade is_sles4sap is_sle);
+use mmapi qw(api_call_2 get_job_info);
+use lockapi;
+
+sub wait_for_support_server()
+{
+    barrier_wait('SUPPORT_SERVER_READY');
+}
 
 sub run {
     my ($self) = @_;
+    if (get_var('DELAYED_START')) {
+        wait_for_support_server();
+        resume_vm();
+    }
     $self->{in_boot_desktop} = 1;
     # We have tests that boot from HDD and wait for DVD boot menu's timeout, so
     # the timeout here must cover it. UEFI DVD adds some 60 seconds on top.
