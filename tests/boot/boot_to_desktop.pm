@@ -19,10 +19,18 @@ use Utils::Backends;
 use version_utils qw(is_upgrade is_sles4sap is_sle);
 use mmapi qw(api_call_2 get_job_info);
 use lockapi;
+use bmwqemu;
 
 sub wait_for_support_server()
 {
-    barrier_wait('SUPPORT_SERVER_READY');
+    while (1) {
+        eval {
+            barrier_wait('SUPPORT_SERVER_READY');
+        };
+        last unless ($@);
+        bmwqemu::diag 'Waiting for SUPPORT_SERVER_READY barrier';
+        sleep 5;
+    }
 }
 
 sub run {
