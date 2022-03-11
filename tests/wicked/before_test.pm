@@ -85,6 +85,27 @@ sub run {
             systemctl 'start dhcpd6.service';
         }
     } else {
+
+        if (my $custom_repos = get_var('WICKED_CUSTOM_REPOS')) {
+            my $custom_pkgs = get_var('WICKED_CUSTOM_PKGS');
+            record_info('CUSTOM_REPOS', $custom_repos);
+            record_info('CUSTOM_PKGS', $custom_pkgs);
+            my @repos = split(/\s*(?<!\\),\s*/, $custom_repos);
+            my @pkgs = split(/\s*(?<!\\),\s*/, $custom_pkgs);
+
+            my $cnt = 0;
+            for my $repo (@repos) {
+                my $repo_name = "CUSTOM_$cnt";
+                zypper_ar($repo, priority => 10, params => "-n $repo_name", no_gpg_check => 1);
+                my $resolv_options = is_sle('<15') ? ' --oldpackage' : ' --allow-vendor-change  --allow-downgrade ';
+                zypper_call("in --from $repo_name $resolv_options --force -y --force-resolution " . $pkgs[$cnt], log => "zypper_in_$repo_name.log");
+                for my $pkg (split(/\s+/, $pkgs[$cnt])) {
+                    record_info('CUSTOM PKG', script_output("rpm -qi $pkg"));
+                }
+                $cnt++;
+            }
+        }
+
         # Common SUT Configuration
         if (my $wicked_sources = get_var('WICKED_SOURCES')) {
             record_info('SOURCE', $wicked_sources);
@@ -131,6 +152,7 @@ sub run {
             }
             $need_reboot = 1;
         }
+
         if (check_var('WICKED', 'ipv6')) {
             my $repo_url = 'https://download.opensuse.org/repositories/home:/asmorodskyi/';
             $repo_url = 'http://download.suse.de/ibs/home:/wicked-maintainers:/openQA/' if (is_sle());
