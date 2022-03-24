@@ -35,7 +35,12 @@ sub run {
     die unless (ifc_exists('dummy0') && ifc_exists($ctx->iface()));
     $self->wicked_command('ifdown', 'all');
     $self->wicked_command('ifup', 'all');
-    die if ($self->get_test_result('host') eq 'FAILED');
+    if ($self->get_test_result('host') eq 'FAILED') {
+        assert_script_run('ip a s');
+        assert_script_run('wicked --log-level debug --debug all ifstatus --verbose all');
+        print("WE HIT THE ROAD JACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+        sleep;
+    }
 }
 
 sub test_flags {
