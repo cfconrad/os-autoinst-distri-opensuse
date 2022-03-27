@@ -942,7 +942,7 @@ sub pre_run_hook {
         add_serial_console($serial_terminal);
     }
     if ($self->{name} ne 'before_test' && get_var('WICKED_TCPDUMP')) {
-        script_run('tcpdump -s0 -U -w /tmp/' . $self->{name} . '_tcpdump.pcap >& /dev/null & export CHECK_TCPDUMP_PID=$!');
+        script_run('tcpdump -i any -s0 -U -w /tmp/' . $self->{name} . '_tcpdump.pcap >& /dev/null & export CHECK_TCPDUMP_PID=$!');
         set_var('WICKED_TCPDUMP_PID', script_output('echo $CHECK_TCPDUMP_PID'));
     }
     $self->upload_wicked_logs('pre');
