@@ -22,7 +22,15 @@ sub run {
     $self->get_from_data('wicked/ifcfg/br0', $config);
     $self->get_from_data('wicked/ifcfg/dummy0', $dummy);
     $self->setup_bridge($config, $dummy, 'ifreload');
-    die if ($self->get_test_result('br0') eq 'FAILED');
+    eval {
+        $self->get_test_result('br0');
+    };
+    if ($@) {
+        assert_script_run('ip a s');
+        assert_script_run('wicked --log-level debug --debug all ifstatus --verbose all');
+        print("WE HIT THE ROAD JACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+        sleep;
+    }
 }
 
 sub test_flags {
