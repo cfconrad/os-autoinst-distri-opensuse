@@ -363,6 +363,22 @@ sub create_tunnel_with_commands {
     assert_script_run("ip addr");
 }
 
+sub unique_mac {
+    my $prefix = shift // 'BA:55';
+    $prefix =~ s/:/_/;
+    $prefix = hex($prefix);
+
+    my $w_id = get_required_var('WORKER_ID');
+    my $w_instance = get_required_var('WORKER_INSTANCE');
+    die("WORKER_ID to big!") if ($w_id > 0xffff);
+    die("WORKER_INSTANCE to big!") if ($w_instance > 0xffff);
+
+    return sprintf('%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx',
+        ($prefix >> 8) | 0x02, $prefix,
+        $w_id >> 8, $w_id,
+        $w_instance >> 8, $w_instance);
+}
+
 =head2 setup_bridge
 
   setup_bridge($config, $command => [ifup, ifdown, ifreload] [, $dummy])
@@ -377,6 +393,11 @@ sub setup_bridge {
     my ($self, $config, $dummy, $command) = @_;
     my $local_ip = $self->get_ip(type => 'host');
     my $iface = iface();
+
+    if ($dummy ne '') {
+        file_content_replace($dummy, '42:41:40:3F:3E:3D' => unique_mac());
+    }
+
     file_content_replace($config, ip_address => $local_ip, iface => $iface);
     $self->wicked_command($command, 'all');
     if ($dummy ne '') {
