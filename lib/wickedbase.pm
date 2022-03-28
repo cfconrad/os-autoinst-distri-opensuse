@@ -363,15 +363,21 @@ sub create_tunnel_with_commands {
     assert_script_run("ip addr");
 }
 
-sub unique_mac {
-    my $prefix = shift // 'BA:55';
+sub unique_macaddr {
+    my ($self, %args) = @_;
+
+    my $prefix = $args{prefix} // (check_var('IS_WICKED_REF', '1') ? 'EA:00' : 'BA:00');
     $prefix =~ s/:/_/;
     $prefix = hex($prefix);
+
+    $self->{unique_macaddr_cnt} = $self->{unique_macaddr_cnt} ? 0 : $self->{unique_macaddr_cnt} + 1;
+    $prefix += $self->{unique_macaddr_cnt};
 
     my $w_id = get_required_var('WORKER_ID');
     my $w_instance = get_required_var('WORKER_INSTANCE');
     die("WORKER_ID to big!") if ($w_id > 0xffff);
     die("WORKER_INSTANCE to big!") if ($w_instance > 0xffff);
+    die("No unique mac address left!") if ($self->{unique_macaddr_cnt} > 0xff);
 
     return sprintf('%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx',
         ($prefix >> 8) | 0x02, $prefix,
@@ -394,11 +400,8 @@ sub setup_bridge {
     my $local_ip = $self->get_ip(type => 'host');
     my $iface = iface();
 
-    if ($dummy ne '') {
-        file_content_replace($dummy, '42:41:40:3F:3E:3D' => unique_mac());
-    }
-
-    file_content_replace($config, ip_address => $local_ip, iface => $iface);
+    file_content_replace($dummy, __macaddr__ => $self->unique_macaddr()) if ($dummy ne '');
+    file_content_replace($config, ip_address => $local_ip, iface => $iface, __macaddr__ => $self->unique_macaddr());
     $self->wicked_command($command, 'all');
     if ($dummy ne '') {
         assert_script_run("cat $dummy");
@@ -539,11 +542,11 @@ sub setup_vlan {
 }
 
 sub prepare_check_macvtap {
-    my ($self, $config, $iface, $ip_address) = @_;
+    my ($self, $config, $iface, $ip_address, $macaddr) = @_;
     $self->get_from_data('wicked/check_macvtap.c', 'check_macvtap.c', executable => 1);
     assert_script_run('gcc ./check_macvtap.c -o check_macvtap');
     script_run('chmod +x ./check_macvtap');
-    file_content_replace($config, iface => $iface, ip_address => $ip_address);
+    file_content_replace($config, iface => $iface, ip_address => $ip_address, __macaddr__ => $macaddr);
 }
 
 sub validate_macvtap {
