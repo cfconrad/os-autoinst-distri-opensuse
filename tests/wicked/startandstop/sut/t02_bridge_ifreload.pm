@@ -22,6 +22,8 @@ sub run {
     $self->get_from_data('wicked/ifcfg/br0', $config);
     $self->get_from_data('wicked/ifcfg/dummy0', $dummy);
     $self->setup_bridge($config, $dummy, 'ifreload');
+    print("WE HIT THE ROAD JACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+    sleep;
     eval {
         $self->get_test_result('br0');
     };
