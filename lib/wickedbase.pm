@@ -947,7 +947,7 @@ sub post_run {
         $self->upload_log_file('/tmp/' . $self->{name} . '_tcpdump.pcap');
     }
     $self->check_logs() unless $self->{skip_check_logs_on_post_run};
-    $self->check_coredump();
+    $self->check_coredump() if check_var('IS_WICKED_REF', '1');
     $self->upload_wicked_logs('post');
 }
 
