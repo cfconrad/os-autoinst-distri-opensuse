@@ -869,7 +869,7 @@ sub check_logs {
         $cursor = "-c '$cursor'";
         $code->();
     }
-    my @units = qw(wickedd-nanny wickedd-dhcp4 wickedd-dhcp6 wicked wickedd);
+    my @units = qw(wickedd-nanny wickedd-dhcp4 wickedd-dhcp6 wicked wickedd wpa_supplicant);
     my $default_exclude = 'wickedd=process \d+ has not exited yet; now doing a blocking waitpid';
     $default_exclude .= ',wickedd-dhcp6=Link-local IPv6 address is marked duplicate:';
     $default_exclude .= ',wickedd-nanny=: device has been deleted';
