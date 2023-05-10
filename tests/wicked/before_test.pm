@@ -170,6 +170,7 @@ EOT
                 systemctl('disable --now firewalld');
             }
         }
+
         wicked::wlan::prepare_packages() if (check_var('WICKED', 'wlan'));
 
         if ($self->valgrind_enable()) {
