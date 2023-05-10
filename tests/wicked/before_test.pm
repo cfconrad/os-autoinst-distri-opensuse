@@ -153,6 +153,12 @@ sub run {
                 systemctl('disable --now firewalld');
             }
         }
+
+        zypper_ar("https://download.opensuse.org/repositories/home:cfconrad:branches:hardware/openSUSE_Tumbleweed/home:cfconrad:branches:hardware.repo", priority => 10, params => '-n wpa_supplicant', no_gpg_check => 1);
+        zypper_call("install --from wpa_supplicant --force -y wpa_supplicant");
+        record_info('wpa_supplicant', script_output("rpm -qi wpa_supplicant"));
+
+
         wicked::wlan::prepare_packages() if (check_var('WICKED', 'wlan'));
 
         $package_list .= ' openvswitch iputils';
