@@ -962,6 +962,34 @@ sub check_coredump {
     }
 }
 
+sub prepare_containers {
+    my $self = shift;
+
+    zypper_call("-q in podman", timeout => 400);
+
+    my $containers = $self->get_containers();
+    foreach my $name (keys(%$containers)) {
+        my $url = $containers->{$name};
+        assert_script_run("podman pull '$url'", timeout => 400);
+    }
+}
+
+sub get_containers {
+    my $self = shift;
+    if (!defined($self->{containers})) {
+        my $default_container = 'scapy=registry.opensuse.org/home/cfconrad/branches/opensuse/templates/images/tumbleweed/containers/scapy:latest';
+        my @containers = split(/\s*,\s*/, get_var("WICKED_CONTAINERS", $default_container));
+        @containers = grep { /\w+=.+/ } @containers;
+        $self->{containers} = {map { split(/=/, $_, 2) } @containers};
+    }
+    return $self->{containers};
+}
+
+sub get_container {
+    my ($self, $name) = @_;
+    return $self->get_containers()->{$name} // croak("There is no container with name $name");
+}
+
 sub reboot {
     my ($self) = @_;
     $self->check_logs();
