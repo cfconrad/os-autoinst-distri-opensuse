@@ -8,10 +8,10 @@ sub run {
 
     if (get_var('IS_PARENT')) {
             barrier_wait('test2_setup');
-            barrier_wait('test2_ready');
+            barrier_wait({name => 'test2_ready', timeout => 60});
     } else {
             barrier_wait('test2_setup');
-            barrier_wait('test2_ready');
+            barrier_wait({name => 'test2_ready', timeout => 60});
     }
 }
 
