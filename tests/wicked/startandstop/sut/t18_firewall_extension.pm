@@ -1,12 +1,11 @@
 # SUSE's openQA tests
 #
-# Copyright 2022 SUSE LLC
+# Copyright 2023 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: wicked
 # Summary: Verify firewalld zone settings after ifup/ifdown/ifreload
-# Maintainer:
-#             Clemens Famulla-Conrad <cfamullaconrad@suse.de>
+# Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>
 
 use Mojo::Base 'wickedbase';
 use testapi;
@@ -29,7 +28,7 @@ sub run {
 
     systemctl('enable --now firewalld');
 
-    $self->get_from_data('wicked/test-ext-firewall.sh', '/tmp/test-ext-firewall.sh', executable => 1);
+    $self->get_from_data('wicked/scripts/test-ext-firewall.sh', '/tmp/test-ext-firewall.sh', executable => 1);
     $self->run_test_shell_script("ext-firewall $ifc", "time /tmp/test-ext-firewall.sh '$ifc'");
 
     $self->skip_check_logs_on_post_run();
