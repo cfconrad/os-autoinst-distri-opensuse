@@ -18,6 +18,7 @@ use Utils::Architectures;
 use Utils::Backends;
 use jeos qw(expect_mount_by_uuid);
 use utils qw(assert_screen_with_soft_timeout ensure_serialdev_permissions);
+use serial_terminal 'prepare_serial_console';
 
 
 sub post_fail_hook {
@@ -67,7 +68,7 @@ sub verify_hypervisor {
 
     return 0 if (
         is_qemu && $virt =~ /(qemu|kvm)/ ||
-        is_s390x && $virt =~ /zvm/ ||
+        is_s390x && $virt =~ /(zvm|kvm)/ ||
         is_hyperv && $virt =~ /microsoft/ ||
         is_vmware && $virt =~ /vmware/ ||
         check_var("VIRSH_VMM_FAMILY", "xen") && $virt =~ /xen/);
@@ -234,6 +235,8 @@ sub run {
     }
 
     ensure_serialdev_permissions;
+
+    prepare_serial_console;
 
     my $console = select_console 'user-console';
     verify_user_info;

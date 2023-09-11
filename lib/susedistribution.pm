@@ -441,28 +441,6 @@ sub init_consoles {
         }
     }
 
-    if (get_var('SUT_IP') || get_var('VIRSH_GUEST')) {
-        my $hostname = get_var('SUT_IP', get_var('VIRSH_GUEST'));
-
-        $self->add_console(
-            'root-serial-ssh',
-            'ssh-serial',
-            {
-                hostname => $hostname,
-                password => $testapi::password,
-                username => 'root'
-            });
-
-        $self->add_console(
-            'user-serial-ssh',
-            'ssh-serial',
-            {
-                hostname => $hostname,
-                password => $testapi::password,
-                username => $testapi::username
-            });
-    }
-
     # svirt backend, except s390x ARCH
     if (is_svirt_except_s390x) {
         my $hostname = get_var('VIRSH_GUEST');
@@ -576,14 +554,12 @@ sub init_consoles {
             });
     }
 
-    if (get_var('BACKEND', '') =~ /ipmi|s390x|spvm|pvm_hmc/ || get_var('S390_ZKVM')) {
+    if (get_var('BACKEND', '') =~ /ipmi|s390x|spvm|pvm_hmc/ || get_var('SUT_IP') || get_var('VIRSH_GUEST')) {
         my $hostname;
-
-        $hostname = get_var('VIRSH_GUEST') if get_var('S390_ZKVM');
+        $hostname = get_var('SUT_IP', get_var('VIRSH_GUEST')) if get_var('SUT_IP') || get_var('VIRSH_GUEST');
         $hostname = get_required_var('SUT_IP') if get_var('BACKEND', '') =~ /ipmi|spvm|pvm_hmc/;
 
         if (is_backend_s390x) {
-
             # expand the S390 params
             my $s390_params = get_var("S390_NETWORK_PARAMS");
             my $s390_host = get_required_var('S390_HOST');
@@ -591,22 +567,30 @@ sub init_consoles {
             set_var("S390_NETWORK_PARAMS", $s390_params);
 
             ($hostname) = $s390_params =~ /Hostname=(\S+)/;
-
-            # adds serial console for S390_ZKVM
-            # NOTE: adding consoles just at the top of init_consoles() is not enough, otherwise
-            # using just them would fail with:
-            # ::: basetest::runtest: # Test died: Error connecting to <root@192.168.112.9>: Connection refused at /usr/lib/os-autoinst/testapi.pm line 1700.
-            unless (get_var('SUT_IP')) {
-                $self->add_console(
-                    'root-serial-ssh',
-                    'ssh-serial',
-                    {
-                        hostname => $hostname,
-                        password => $testapi::password,
-                        username => 'root'
-                    });
-            }
         }
+
+        # adds serial console for s390x zVM
+        # NOTE: adding consoles just at the top of init_consoles() is not enough, otherwise
+        # using just them would fail with:
+        # ::: basetest::runtest: # Test died: Error connecting to <root@192.168.112.9>: Connection refused at /usr/lib/os-autoinst/testapi.pm line 1700.
+        $self->add_console(
+            'root-serial-ssh',
+            'ssh-serial',
+            {
+                hostname => $hostname,
+                password => $testapi::password,
+                username => 'root'
+            });
+        $self->add_console(
+            'user-serial-ssh',
+            'ssh-serial',
+            {
+                hostname => $hostname,
+                password => $testapi::password,
+                username => $testapi::username
+            });
+
+        return if get_var('VIRSH_GUEST') && !get_var('SUT_IP');
 
         if (check_var("VIDEOMODE", "text")) {    # adds console for text-based installation on s390x
             $self->add_console(
@@ -761,6 +745,46 @@ sub console_nr {
     return $nr;
 }
 
+=head2 prompt_for_user
+
+  prompt_for_user($username)
+
+Returns the shell prompt that should be set for the given username
+=cut
+
+sub prompt_for_user {
+    my ($self, $username) = @_;
+
+    return $username eq 'root' ? '# ' : '$ ';
+}
+
+=head2 get_console_info
+
+  get_console_info($console)
+
+Returns a triplet describing the console: Session privilege level (root/user),
+username, console type.
+=cut
+
+sub get_console_info {
+    my ($self, $console) = @_;
+
+    $console =~ m/^(\w+)-(console|virtio-terminal|sut-serial|ssh|shell|serial-ssh)/;
+    my ($name, $user, $type) = ($1, $1, $2);
+    $name = $user //= '';
+    $type //= '';
+    if ($name eq 'user') {
+        $user = $testapi::username;
+    }
+    elsif ($name =~ /log|tunnel/) {
+        $user = 'root';
+    }
+
+    # Use ssh for generalhw(ssh/no VNC) for given consoles
+    $type = 'ssh' if (get_var('BACKEND', '') =~ /generalhw/ && !defined(get_var('GENERAL_HW_VNC_IP')) && $console =~ /root-console|install-shell|user-console|log-console/);
+    return ($name, $user, $type);
+}
+
 =head2 activate_console
 
   activate_console($console [, [ensure_tty_selected => 0|1] [, skip_set_standard_prompt => 0|1] [, skip_setterm => 0|1] [, timeout => $timeout]])
@@ -798,19 +822,7 @@ sub activate_console {
         }
     }
 
-    $console =~ m/^(\w+)-(console|virtio-terminal|sut-serial|ssh|shell|serial-ssh)/;
-    my ($name, $user, $type) = ($1, $1, $2);
-    $name = $user //= '';
-    $type //= '';
-    if ($name eq 'user') {
-        $user = $testapi::username;
-    }
-    elsif ($name =~ /log|tunnel/) {
-        $user = 'root';
-    }
-    # Use ssh for generalhw(ssh/no VNC) for given consoles
-    $type = 'ssh' if (get_var('BACKEND', '') =~ /generalhw/ && !defined(get_var('GENERAL_HW_VNC_IP')) && $console =~ /root-console|install-shell|user-console|log-console/);
-
+    my ($name, $user, $type) = $self->get_console_info($console);
     diag "activate_console, console: $console, type: $type";
     if ($type eq 'console') {
         # different handling for ssh consoles on s390x zVM
@@ -857,8 +869,7 @@ sub activate_console {
         }
     }
     elsif ($type =~ /^(virtio-terminal|sut-serial)$/) {
-        $self->{serial_term_prompt} = $user eq 'root' ? '# ' : '> ';
-        serial_terminal::login($user, $self->{serial_term_prompt});
+        serial_terminal::login($user, $self->prompt_for_user($user));
     }
     elsif ($console eq 'novalink-ssh') {
         assert_screen "password-prompt-novalink";
@@ -901,7 +912,7 @@ sub activate_console {
         assert_screen "text-logged-in-$user", 60;
     }
     elsif ($type eq 'serial-ssh') {
-        serial_terminal::set_serial_prompt($user eq 'root' ? '# ' : '$ ');
+        serial_terminal::set_serial_prompt($self->prompt_for_user($user));
     }
     else {
         diag 'activate_console called with generic type, no action';
@@ -951,6 +962,10 @@ sub console_selected {
         die $ret->{error} if $ret->{error};
         $autotest::selected_console = $console;
     }
+
+    my ($name, $user, $type) = $self->get_console_info($console);
+    $self->{serial_term_prompt} = $self->prompt_for_user($user);
+
     $args{await_console} //= 1;
     $args{tags} //= $console;
     $args{ignore} //= qr{sut|user-virtio-terminal|root-virtio-terminal|root-sut-serial|iucvconn|svirt|root-ssh|hyperv-intermediary|serial-ssh};

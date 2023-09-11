@@ -179,11 +179,14 @@ sub load_common_tests {
     # Ansible test needs Packagehub in SLE and it can't be enabled in SLEM
     loadtest 'console/ansible' unless (is_staging || is_sle_micro || is_leap_micro || is_alp);
     loadtest 'console/kubeadm' if (check_var('SYSTEM_ROLE', 'kubeadm'));
-    loadtest 'console/year_2038_detection' unless is_s390x;
+    # SLE Micro is not 2038-proof, so it doesn't apply here, but it does for ALP.
+    # On s390x zvm setups we need more time to wait for system to boot up.
+    loadtest 'console/year_2038_detection' unless (is_s390x || is_sle_micro || is_leap_micro);
 }
 
 
 sub load_transactional_tests {
+    loadtest 'transactional/disable_timers';
     loadtest 'transactional/filesystem_ro';
     loadtest 'transactional/trup_smoke';
     loadtest 'microos/patterns' if is_sle_micro;
@@ -204,8 +207,8 @@ sub load_network_tests {
 sub load_qemu_tests {
     loadtest 'microos/rebuild_initrd' if is_s390x;
     loadtest 'qemu/info';
-    loadtest 'qemu/qemu';
-    loadtest 'qemu/kvm' unless is_aarch64;
+    loadtest 'qemu/qemu' unless is_rt;
+    loadtest 'qemu/kvm' unless (is_aarch64 or is_rt);
     # qemu-linux-user package not available in SLEM
     loadtest 'qemu/user' unless (is_sle_micro || is_leap_micro);
 }
@@ -277,6 +280,24 @@ sub load_slem_on_pc_tests {
     loadtest("publiccloud/ssh_interactive_end", run_args => $args);
 }
 
+sub load_xfstests_tests {
+    if (check_var('XFSTESTS', 'installation')) {
+        load_boot_from_disk_tests;
+        loadtest 'transactional/host_config';
+        loadtest 'xfstests/install';
+        unless (check_var('NO_KDUMP', '1')) {
+            loadtest 'xfstests/enable_kdump';
+        }
+        loadtest 'shutdown/shutdown';
+    }
+    else {
+        boot_hdd_image;
+        loadtest 'xfstests/partition';
+        loadtest 'xfstests/run';
+        loadtest 'xfstests/generate_report';
+    }
+}
+
 sub load_tests {
     # SLEM on PC
     if (is_public_cloud()) {
@@ -286,6 +307,11 @@ sub load_tests {
 
     if (is_kernel_test()) {
         load_kernel_tests;
+        return 1;
+    }
+
+    if (get_var('XFSTESTS')) {
+        load_xfstests_tests;
         return 1;
     }
 

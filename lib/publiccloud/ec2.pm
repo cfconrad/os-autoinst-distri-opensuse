@@ -166,7 +166,12 @@ sub upload_img {
     die("Cannot find image after upload!") unless $ami;
     validate_script_output('aws ec2 describe-images --image-id ' . $ami, sub { /"EnaSupport":\s+true/ });
     record_info('INFO', "AMI: $ami");    # Show the ami-* number, could be useful
-    return $ami;
+}
+
+sub terraform_apply {
+    my ($self, %args) = @_;
+    $args{confidential_compute} = get_var("PUBLIC_CLOUD_CONFIDENTIAL_VM", 0);
+    return $self->SUPER::terraform_apply(%args);
 }
 
 sub img_proof {
