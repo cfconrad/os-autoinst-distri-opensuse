@@ -258,7 +258,6 @@ sub valgrind_postrun {
                 if ($1 > 0) {
                     record_info("valgrind $service", "service:$service\n\n" . script_output("cat $logfile"), result => 'fail');
                     $self->result('fail');
-                    last;
                 }
             }
         }
