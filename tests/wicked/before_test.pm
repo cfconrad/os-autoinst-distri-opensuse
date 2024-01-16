@@ -19,6 +19,7 @@ use serial_terminal;
 use main_common 'is_updates_tests';
 use repo_tools 'generate_version';
 use wicked::wlan;
+use wicked::nm_migrate;
 use mm_network;
 use power_action_utils 'power_action';
 
@@ -83,7 +84,7 @@ EOT
         }
         file_content_replace('/etc/sysconfig/dhcpd', '--sed-modifier' => 'g', '^DHCPD_INTERFACE=.*' => 'DHCPD_INTERFACE="' . $ctx->iface() . '"');
 
-        if (check_var('WICKED', 'basic')) {
+        if (check_var('WICKED', 'basic') || check_var('WICKED', 'nm_migrate_basic')) {
             $self->prepare_containers();
         }
 
@@ -165,6 +166,7 @@ EOT
             }
         }
         wicked::wlan::prepare_packages() if (check_var('WICKED', 'wlan'));
+        wicked::nm_migrate::before_test() if (get_var('WICKED', '') =~ /^nm_migrate_/);
 
         if ($self->valgrind_enable()) {
             $need_reboot = 1;
