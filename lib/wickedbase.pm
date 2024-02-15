@@ -496,7 +496,7 @@ sub setup_tunnel {
     my $local_ip = $self->get_ip(type => 'host');
     my $remote_ip = $self->get_remote_ip(type => 'host');
     my $tunnel_ip = $self->get_ip(type => $type);
-    file_content_replace($config, local_ip => $local_ip, remote_ip => $remote_ip, tunnel_ip => $tunnel_ip, iface => $iface);
+    file_content_replace($config, '--debug' => 1, local_ip => $local_ip, remote_ip => $remote_ip, tunnel_ip => $tunnel_ip, iface => $iface);
     $self->wicked_command('ifup', 'all');
 }
 
@@ -557,8 +557,8 @@ sub setup_bridge {
     my $local_ip = $self->get_ip(type => 'host');
     my $iface = iface();
 
-    file_content_replace($dummy, __macaddr__ => $self->unique_macaddr()) if ($dummy ne '');
-    file_content_replace($config, ip_address => $local_ip, iface => $iface, __macaddr__ => $self->unique_macaddr());
+    file_content_replace($dummy, '--debug' => 1, __macaddr__ => $self->unique_macaddr()) if ($dummy ne '');
+    file_content_replace($config, '--debug' => 1, ip_address => $local_ip, iface => $iface, __macaddr__ => $self->unique_macaddr());
     $self->wicked_command($command, 'all');
     if ($dummy ne '') {
         assert_script_run("cat $dummy");
@@ -579,7 +579,7 @@ sub setup_openvpn_client {
     my $openvpn_client = '/etc/openvpn/client.conf';
     my $remote_ip = $self->get_remote_ip(type => 'host');
     $self->get_from_data('wicked/openvpn/client.conf', $openvpn_client);
-    file_content_replace($openvpn_client, remote_ip => $remote_ip, device => $device);
+    file_content_replace($openvpn_client, '--debug' => 1, remote_ip => $remote_ip, device => $device);
 }
 
 =head2 get_test_result
@@ -767,7 +767,7 @@ sub setup_bond {
     my $ping_ip_1 = $self->get_ip(type => 'host', is_wicked_ref => 1);
     my $ping_ip_2 = $self->get_ip(type => 'second_card', is_wicked_ref => 1);
 
-    file_content_replace($cfg_bond0, ipaddr4 => $ipaddr4, ipaddr6 => $ipaddr6, iface0 => $iface0, iface1 => $iface1, ping_ip_1 => $ping_ip_1, ping_ip_2 => $ping_ip_2, '--sed-modifier' => 'g');
+    file_content_replace($cfg_bond0, '--debug' => 1, ipaddr4 => $ipaddr4, ipaddr6 => $ipaddr6, iface0 => $iface0, iface1 => $iface1, ping_ip_1 => $ping_ip_1, ping_ip_2 => $ping_ip_2, '--sed-modifier' => 'g');
 
     $self->wicked_command('ifup', 'all');
 }
@@ -790,7 +790,7 @@ sub setup_team {
     my $ipaddr6 = $self->get_ip(type => 'host6', netmask => 1);
     my $ping_ip4 = $self->get_ip(type => 'host', is_wicked_ref => 1);
     my $ping_ip6 = $self->get_ip(type => 'host6', is_wicked_ref => 1);
-    file_content_replace($cfg_team0, ipaddr4 => $ipaddr4, ipaddr6 => $ipaddr6, iface0 => $iface0, iface1 => $iface1, ping_ip4 => $ping_ip4, ping_ip6 => $ping_ip6);
+    file_content_replace($cfg_team0, '--debug' => 1, ipaddr4 => $ipaddr4, ipaddr6 => $ipaddr6, iface0 => $iface0, iface1 => $iface1, ping_ip4 => $ping_ip4, ping_ip6 => $ping_ip6);
 
     $self->wicked_command('ifup', 'all');
 }
