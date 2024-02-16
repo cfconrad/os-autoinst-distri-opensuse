@@ -1,4 +1,4 @@
-# Copyright 2015-2022 SUSE LLC
+# Copyright 2015-2024 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 package utils;
@@ -19,6 +19,7 @@ use Mojo::UserAgent;
 use zypper qw(wait_quit_zypper);
 use Storable qw(dclone);
 use Getopt::Long qw(GetOptionsFromString);
+use File::Basename;
 
 our @EXPORT = qw(
   generate_results
@@ -2182,7 +2183,7 @@ sub file_content_replace {
         $key =~ s'/'\/'g;
         assert_script_run(sprintf("sed -E 's/%s/%s/%s' -i %s", $key, $value, $sed_modifier, $filename));
     }
-    script_run("cat $filename") if $debug;
+    record_info(basename($filename), script_output("cat $filename")) if $debug;
 }
 
 sub handle_patch_11sp4_zvm {
