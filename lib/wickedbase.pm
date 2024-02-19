@@ -15,6 +15,7 @@ use network_utils;
 use lockapi;
 use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal 'select_serial_terminal';
+use version_utils 'is_sle';
 use bmwqemu;
 use serial_terminal;
 use Carp;
@@ -24,6 +25,8 @@ use Regexp::Common 'net';
 use File::Basename;
 use version_utils 'check_version';
 use List::MoreUtils qw(uniq);
+use containers::common qw(install_podman_when_needed install_docker_when_needed);
+
 
 use strict;
 use warnings;
@@ -650,11 +653,24 @@ sub upload_wicked_logs {
     # that there is sense to do something at all
     assert_script_run('echo "CHECK CONSOLE"', fail_message => 'Console not usable. Failed to collect logs');
     record_info('Logs', "Collecting logs in $logs_dir");
+
+    assert_script_run("date");
+    assert_script_run("journalctl --sync");
+
     script_run("mkdir -p $logs_dir/etc/sysconfig");
     script_run("cp -r /etc/sysconfig/network $logs_dir/etc/sysconfig/");
     script_run("cp -r /etc/wicked $logs_dir/etc/");
     script_run("date +'%Y-%m-%d %T.%6N' > $logs_dir/date");
-    script_run("journalctl -b -o short-precise|tail -n +2 > $logs_dir/journalctl.log");
+    script_run("uptime > $logs_dir/uptime");
+    script_run("df -h > $logs_dir/df_h");
+    script_run("journalctl -b -o short-precise | tail -n +2 > $logs_dir/journalctl.log");
+    script_run("journalctl -b -o short-precise > $logs_dir/journalctl_wo_tail.log");
+
+    my $cursor = $self->{pre_run_log_cursor};
+    if (defined($cursor)) {
+        script_run("journalctl -b -c '$cursor' -o short-precise > $logs_dir/journalctl_cursor.log");
+    }
+
     script_run("wicked ifstatus --verbose all > $logs_dir/wicked_ifstatus.log 2>&1");
     script_run("wicked show-config > $logs_dir/wicked_config.log 2>&1");
     script_run("wicked show-xml > $logs_dir/wicked_xml.log 2>&1");
@@ -670,6 +686,25 @@ sub upload_wicked_logs {
     $self->upload_log_file("/tmp/$dir_name.tar.gz");
 }
 
+=head2 do_barrier_create
+
+  do_barrier_create(<barrier_postfix> [, <test_name>] )
+
+Create a barier which can be later used to syncronize the wicked tests for SUT and REF.
+This function can be called statically. In this case the C<test_name> parameter is 
+mandatory.
+
+=cut
+
+sub do_barrier_create {
+    my ($self, $type, $test_name) = ref $_[0] ? @_ : (undef, @_);
+    $test_name //= $self ? $self->{name} : die("test_name parameter is mandatory");
+
+    my $barrier_name = 'test_' . $test_name . '_' . $type;
+    record_info('barrier create', $barrier_name . ' num_children: 2');
+    barrier_create($barrier_name, 2);
+}
+
 =head2 do_barrier
 
   do_barrier(<barrier_postfix>)
@@ -681,7 +716,12 @@ Used to syncronize the wicked tests for SUT and REF creating the corresponding m
 sub do_barrier {
     my ($self, $type) = @_;
     my $barrier_name = 'test_' . $self->{name} . '_' . $type;
-    barrier_wait($barrier_name);
+    barrier_wait({name => $barrier_name, check_dead_job => 1});
+
+    # This is to mitigate the problem, that if a parallel job is running in the
+    # barrier_wait() poll loop, while this job finished. This would lead to a
+    # failure on the other side.
+    $self->{last_barrier_wait_call} = time;
 }
 
 =head2 setup_vlan
@@ -1035,7 +1075,7 @@ sub check_logs {
     $default_exclude .= ',wickedd=error retrieving tap attribute from sysfs';
 
     my $exclude_var = get_var(WICKED_CHECK_LOG_EXCLUDE => $default_exclude);
-    my $exclude_test_var = get_var('WICKED_CHECK_LOG_EXCLUDE_' . $self->{name}, '');
+    my $exclude_test_var = get_var('WICKED_CHECK_LOG_EXCLUDE_' . uc($self->{name}), '');
 
     my @excludes = split(/(?<!\\),/, "$exclude_var,$exclude_test_var");
     @excludes = map { my $v = trim($_); length($v) > 0 ? $v : () } @excludes;
@@ -1053,7 +1093,7 @@ sub check_logs {
             my $msg = "wicked check logs failed:\n$cmd\n\n$out\n\n";
             $msg .= "Use WICKED_CHECK_LOG_EXCLUDE to change filter!\n";
             $msg .= "  WICKED_CHECK_LOG_EXCLUDE=$exclude_var\n";
-            $msg .= '  WICKED_CHECK_LOG_EXCLUDE_' . $self->{name} . "=$exclude_test_var\n";
+            $msg .= '  WICKED_CHECK_LOG_EXCLUDE_' . uc($self->{name}) . "=$exclude_test_var\n";
             $msg .= "Control if test fail with WICKED_CHECK_LOG_FAIL default off.\n";
             bmwqemu::fctwarn($msg);
             record_info('LOG-ERROR', $out, result => 'fail');
@@ -1111,6 +1151,43 @@ sub check_coredump {
     }
 }
 
+sub container_runtime {
+    return 'docker' if (is_sle("<=15-SP1"));
+    return 'podman';
+}
+
+sub prepare_containers {
+    my $self = shift;
+
+    if ($self->container_runtime eq 'docker') {
+        install_docker_when_needed(get_var('DISTRI'));
+    } else {
+        install_podman_when_needed(get_var('DISTRI'));
+    }
+
+    my $containers = $self->get_containers();
+    foreach my $name (keys(%$containers)) {
+        my $url = $containers->{$name};
+        assert_script_run($self->container_runtime . " pull '$url'", timeout => 400);
+    }
+}
+
+sub get_containers {
+    my $self = shift;
+    if (!defined($self->{containers})) {
+        my $default_container = 'scapy=registry.opensuse.org/home/cfconrad/openqa/containers/scapy:latest';
+        my @containers = split(/\s*,\s*/, get_var("WICKED_CONTAINERS", $default_container));
+        @containers = grep { /\w+=.+/ } @containers;
+        $self->{containers} = {map { split(/=/, $_, 2) } @containers};
+    }
+    return $self->{containers};
+}
+
+sub get_container {
+    my ($self, $name) = @_;
+    return $self->get_containers()->{$name} // croak("There is no container with name $name");
+}
+
 sub reboot {
     my ($self) = @_;
     $self->check_logs();
@@ -1131,6 +1208,17 @@ sub post_run {
     $self->check_coredump();
     $self->valgrind_postrun();
     $self->upload_wicked_logs('post');
+
+    if (get_var('IS_WICKED_REF')) {
+        my $time_since_barrier_wait = time - ($self->{last_barrier_wait_call} // 0);
+        if ($time_since_barrier_wait < lockapi::POLL_INTERVAL) {
+            my $seconds = lockapi::POLL_INTERVAL - $time_since_barrier_wait;
+            #see https://github.com/os-autoinst/os-autoinst/issues/2340
+            bmwqemu::diag("If the parallel job might wait in barrier_wait() poll loop," .
+                  " we should not finish this parent job to early! sleep $seconds seconds");
+            sleep $seconds;
+        }
+    }
 }
 
 sub pre_run_hook {
@@ -1167,4 +1255,30 @@ sub post_run_hook {
     $self->post_run() unless $self->{wicked_post_run};
 }
 
+sub need_network_tweaks() {
+    my ($self) = @_;
+    # By default we enable this variable to get reliable results
+    return get_var("WICKED_NEED_NETWORK_TWEAKS") // 1;
+}
+
+sub wait_for_background_process {
+    my ($self, $pid, %args) = @_;
+    $args{proceed_on_failure} //= 0;
+
+    my $ret = script_run("wait $pid", die_on_timeout => 0, %args);
+    unless (defined($ret)) {
+        if (is_serial_terminal()) {
+            type_string(qq(\cc));
+        }
+        else {
+            send_key('ctrl-c');
+        }
+        script_run("kill -9 $pid");
+
+        die("wait_for_background_process() failed, process $pid wasn't ready yet");
+    }
+
+    return $ret if ($ret == 0 || $args{proceed_on_failure});
+    die("Background process $pid exit with $ret");
+}
 1;
