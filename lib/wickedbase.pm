@@ -652,9 +652,21 @@ sub upload_wicked_logs {
     # that there is sense to do something at all
     assert_script_run('echo "CHECK CONSOLE"', fail_message => 'Console not usable. Failed to collect logs');
     record_info('Logs', "Collecting logs in $logs_dir");
+
+    assert_script_run("date");
+    assert_script_run("journalctl --sync");
+
     script_run("mkdir -p $logs_dir");
     script_run("date +'%Y-%m-%d %T.%6N' > $logs_dir/date");
-    script_run("journalctl -b -o short-precise|tail -n +2 > $logs_dir/journalctl.log");
+    script_run("uptime > $logs_dir/uptime");
+    script_run("journalctl -b -o short-precise | tail -n +2 > $logs_dir/journalctl.log");
+    script_run("journalctl -b -o short-precise > $logs_dir/journalctl_wo_tail.log");
+
+    my $cursor = $self->{pre_run_log_cursor};
+    if (defined($cursor)) {
+        script_run("journalctl -b -c '$cursor' -o short-precise > $logs_dir/journalctl_cursor.log");
+    }
+
     script_run("wicked ifstatus --verbose all > $logs_dir/wicked_ifstatus.log 2>&1");
     script_run("wicked show-config > $logs_dir/wicked_config.log 2>&1");
     script_run("wicked show-xml > $logs_dir/wicked_xml.log 2>&1");
