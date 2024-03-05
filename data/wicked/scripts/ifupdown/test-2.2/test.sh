@@ -313,4 +313,4 @@ step99()
 	done
 }
 
-. ../lib/common.sh
+. ../../lib/common.sh

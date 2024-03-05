@@ -157,4 +157,4 @@ step99()
 	echo "=== step $step: finished with $err errors"
 }
 
-. ../lib/common.sh
+. ../../lib/common.sh
