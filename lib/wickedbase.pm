@@ -52,7 +52,7 @@ sub wicked_command {
     assert_script_run('echo -e "\n# $(date -Isecond)\n# "' . $cmd . ' >> ' . $serial_log);
     $cmd = $self->valgrind_cmd('wicked') . " $cmd" if (grep { /^wicked$/ } $self->valgrind_get_services());
     record_info('wicked cmd', $cmd);
-    assert_script_run('time '. $cmd . ' 2>&1 | tee -a ' . $serial_log);
+    assert_script_run('time ' . $cmd . ' 2>&1 | tee -a ' . $serial_log);
     assert_script_run(q(echo -e "\n# ip addr" >> ) . $serial_log);
     assert_script_run('ip addr 2>&1 | tee -a ' . $serial_log);
 }
@@ -986,6 +986,7 @@ sub run_test_shell_script
     my ($self, $title, $script_cmd, %args) = @_;
     $args{timeout} //= 300;
 
+    record_info("EXEC", $script_cmd);
     $self->check_logs(sub {
             my $output = script_output($script_cmd . '; echo "==COLLECT_EXIT_CODE==$?=="', proceed_on_failure => 1, timeout => $args{timeout});
             my $result = $output =~ m/==COLLECT_EXIT_CODE==0==/ ? 'ok' : 'fail';
