@@ -1063,12 +1063,13 @@ sub check_logs {
             $self->result('fail') if get_var(WICKED_CHECK_LOG_FAIL => 0) && $self->{name} ne 'before_test';
         }
     }
-    $self->check_logs_contains_passwords($cursor);
+    $self->check_logs_contains_passwords($cursor, \@units);
 }
 
 sub check_logs_contains_passwords {
     my $self = shift;
-    my $cursor = shift // "";
+    my $cursor = shift;
+    my $units = shift;
 
     $cursor = "-c '$cursor'" if (length($cursor) > 0 && $cursor !~ m/-c/);
 
@@ -1080,15 +1081,18 @@ sub check_logs_contains_passwords {
         }
     }
 
-    for my $pw (@passwords) {
-        my $cmd = "journalctl $cursor -q | grep '$pw'";
+    my $pattern = "";
+    $pattern .= " -e '$_'"  for (@passwords);
+    return if length($pattern) == 0;
+
+    for my $unit (@$units) {
+        my $cmd = "journalctl $cursor -q -u $unit | grep $pattern";
         my $out = trim(script_output($cmd, proceed_on_failure => 1));
         if (length($out) > 0) {
             record_info('LOG-PW-ERROR', $cmd . "\n\n" . $out, result => 'fail');
             $self->result('fail') if get_var(WICKED_CHECK_LOG_FAIL => 0) && $self->{name} ne 'before_test';
         }
     }
-
 }
 
 sub coredumpctl_has_debug {
