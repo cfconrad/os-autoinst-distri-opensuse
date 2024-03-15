@@ -77,13 +77,20 @@ EOT
     $self->prepare_coredump();
 
     my $package_list = 'openvpn';
+    if ($self->valgrind_enable()) {
+        $need_reboot = 1;
+        $package_list .= ' valgrind';
+    }
     $package_list .= ' tcpdump' if get_var('WICKED_TCPDUMP');
     if (check_var('IS_WICKED_REF', '1')) {
         $package_list .= ' radvd' if (check_var('WICKED', 'ipv6'));
         # Common REF Configuration
-        record_info('INFO', 'Setup DHCP server');
         $package_list .= ' dhcp-server';
+
         zypper_call("-q in $package_list", timeout => 400);
+        $self->reboot() if $need_reboot;
+
+        record_info('INFO', 'Setup DHCP server');
         $self->get_from_data('wicked/dhcp/dhcpd.conf', '/etc/dhcpd.conf');
         if (is_sle('<12-sp1')) {
             file_content_replace('/etc/dhcpd.conf', '^\s*ddns-update-style' => '# ddns-update-style', '^\s*dhcp-cache-threshold' => '# dhcp-cache-threshold');
@@ -167,10 +174,6 @@ EOT
         }
         wicked::wlan::prepare_packages() if (check_var('WICKED', 'wlan'));
 
-        if ($self->valgrind_enable()) {
-            $need_reboot = 1;
-            $package_list .= ' valgrind';
-        }
         $package_list .= ' openvswitch iputils';
         $package_list .= ' libteam-tools libteamdctl0 ' if check_var('WICKED', 'advanced') || check_var('WICKED', 'aggregate') || check_var('WICKED', 'startandstop');
         $package_list .= ' gcc' if check_var('WICKED', 'advanced');

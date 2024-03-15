@@ -467,7 +467,9 @@ sub run {
         }
 
     }
+}
 
+sub check_logs {
 }
 
 sub test_flags {
