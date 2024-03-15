@@ -78,15 +78,24 @@ EOT
     my $package_list = 'openvpn';
     if ($self->valgrind_enable()) {
         $need_reboot = 1;
-        $package_list .= ' valgrind';
+        zypper_call("-q in valgrind", timeout => 400);
     }
     $package_list .= ' tcpdump' if get_var('WICKED_TCPDUMP');
     if (check_var('IS_WICKED_REF', '1')) {
         $package_list .= ' radvd' if (check_var('WICKED', 'ipv6'));
         # Common REF Configuration
         $package_list .= ' dhcp-server';
+
         zypper_call("-q in $package_list", timeout => 400);
-        $self->reboot() if $need_reboot;
+        if ($need_reboot) {
+            $self->reboot();
+            if (check_var('WICKED', 'ipv6')) {
+                setup_static_network(ip => $self->get_ip(type => 'host', netmask => 1), silent => 1, ipv6 =>
+                      $self->get_ip(type => 'dhcp6', netmask => 1));
+            } else {
+                setup_static_network(ip => $self->get_ip(type => 'host', netmask => 1), silent => 1);
+            }
+        }
 
         record_info('INFO', 'Setup DHCP server');
         $self->get_from_data('wicked/dhcp/dhcpd.conf', '/etc/dhcpd.conf');
