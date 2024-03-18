@@ -177,6 +177,7 @@ sub valgrind_cmd {
     my $valgrind_cmd = get_var('WICKED_VALGRIND_CMD', '/usr/bin/valgrind --tool=memcheck --leak-check=yes');
     if ($service) {
         my $logfile = "/var/log/valgrind_${service}_$cnt.log";
+        $self->add_post_log_file($logfile);
         $valgrind_cmd = "$valgrind_cmd --log-file=$logfile";
     }
     return $valgrind_cmd;
