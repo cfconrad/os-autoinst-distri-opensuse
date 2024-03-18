@@ -177,7 +177,7 @@ sub valgrind_cmd {
     my ($self, $service) = @_;
     my $cnt = $self->{valgrind_log_file_counter}->{$service} += 1;
 
-    my $valgrind_cmd = get_var('WICKED_VALGRIND_CMD', '/usr/bin/valgrind --tool=memcheck --leak-check=yes');
+    my $valgrind_cmd = get_var('WICKED_VALGRIND_CMD', '/usr/bin/valgrind --verbose --enable-debuginfod=no --tool=memcheck --leak-check=yes');
     if ($service) {
         my $logfile = "/var/log/valgrind_${service}_$cnt.log";
         $self->add_post_log_file($logfile);
