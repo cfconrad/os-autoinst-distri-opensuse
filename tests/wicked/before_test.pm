@@ -151,7 +151,7 @@ EOT
             ($repo_id) = ($wicked_repo =~ m!(^.*/)!s) if (is_sle('<=12-sp1'));
             zypper_call("in --from $repo_id $resolv_options --force -y --force-resolution  wicked wicked-service", log => 'zypper_in_wicked.log');
             my ($zypper_in_output) = script_output('cat /tmp/zypper_in_wicked.log');
-            my $reg = 'The following (?:\d+|NEW )?packages? (?:are|is) going to be (?:installed|reinstalled|upgraded|downgraded):';
+            my $reg = 'The following (?:\d+ |NEW )?packages? (?:are|is) going to be (?:installed|reinstalled|upgraded|downgraded):';
             my @installed_packages = map { split(/\s+/, trim($_)) } $zypper_in_output =~ m/(?s)(?:$reg(?<packages>.*?))(?:\r*\n){2}/g;
             record_info('INSTALLED', join("\n", @installed_packages));
             for my $pkg ('wicked', 'wicked-service') {
