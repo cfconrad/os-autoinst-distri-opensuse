@@ -199,12 +199,11 @@ specified via WICKED_VALGRIND.
 
 sub valgrind_enable {
     my $self = shift;
-    my $valgrind_cmd = get_var('WICKED_VALGRIND_CMD', '/usr/bin/valgrind --tool=memcheck --leak-check=yes');
 
     my @services = $self->valgrind_get_services();
     return 0 if (!@services);
 
-    record_info("valgrind enable", "services: @services\ncommand: $valgrind_cmd");
+    record_info("valgrind enable", "services: @services\ncommand: " . $seld->valgrind_cmd);
 
     foreach my $service (@services) {
         my $service_file = "/etc/systemd/system/$service.service";
