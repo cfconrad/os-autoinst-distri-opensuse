@@ -203,7 +203,7 @@ sub valgrind_enable {
     my @services = $self->valgrind_get_services();
     return 0 if (!@services);
 
-    record_info("valgrind enable", "services: @services\ncommand: " . $seld->valgrind_cmd);
+    record_info("valgrind enable", "services: @services\ncommand: " . $self->valgrind_cmd);
 
     foreach my $service (@services) {
         my $service_file = "/etc/systemd/system/$service.service";
