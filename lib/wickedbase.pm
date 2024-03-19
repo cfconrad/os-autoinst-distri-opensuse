@@ -55,7 +55,7 @@ sub wicked_command {
     assert_script_run('echo -e "\n# $(date -Isecond)\n# "' . $cmd . ' >> ' . $serial_log);
     $cmd = $self->valgrind_cmd('wicked') . " $cmd" if (grep { /^wicked$/ } $self->valgrind_get_services());
     record_info('wicked cmd', $cmd);
-    assert_script_run('time '. $cmd . ' 2>&1 | tee -a ' . $serial_log);
+    assert_script_run('time ' . $cmd . ' 2>&1 | tee -a ' . $serial_log);
     assert_script_run(q(echo -e "\n# ip addr" >> ) . $serial_log);
     assert_script_run('ip addr 2>&1 | tee -a ' . $serial_log);
 }
@@ -177,7 +177,12 @@ sub valgrind_cmd {
     my ($self, $service) = @_;
     my $cnt = $self->{valgrind_log_file_counter}->{$service} += 1;
 
-    my $valgrind_cmd = get_var('WICKED_VALGRIND_CMD', '/usr/bin/valgrind --verbose --enable-debuginfod=no --tool=memcheck --leak-check=yes');
+    my $valgrind_cmd = '/usr/bin/valgrind --verbose --tool=memcheck --leak-check=yes';
+    unless (is_sle("<15")) {
+        $valgrind_cmd .= ' --enable-debuginfod=no';
+    }
+
+    $valgrind_cmd = get_var('WICKED_VALGRIND_CMD', $valgrind_cmd);
     if ($service) {
         my $logfile = "/var/log/valgrind_${service}_$cnt.log";
         $self->add_post_log_file($logfile);
