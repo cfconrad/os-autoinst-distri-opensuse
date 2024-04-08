@@ -73,6 +73,8 @@ EOT
     systemctl('is-active network');
     systemctl('is-active wicked');
 
+    script_run(q(zypper lr -u | grep 'cd:' | awk '{print $1}' | xargs -I ID zypper rr ID));
+
     $self->download_data_dir();
     $self->prepare_coredump();
 
