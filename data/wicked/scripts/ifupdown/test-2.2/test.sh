@@ -12,6 +12,8 @@
 #           <-l-  eth1.12  <-l-  macvlan2
 #
 
+. ../../lib/common_pre.sh
+
 eth0="${eth0:-eth0}"
 eth0_ip4=${eth0_ip4:-198.18.0.1/24}
 
@@ -313,4 +315,4 @@ step99()
 	done
 }
 
-. ../lib/common.sh
+. ../../lib/common.sh

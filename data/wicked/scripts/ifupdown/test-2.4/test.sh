@@ -10,6 +10,8 @@
 #
 #
 
+. ../../lib/common_pre.sh
+
 eth0="${eth0:-eth0}"
 
 vlan0_id=10
@@ -338,4 +340,4 @@ step99()
 	done
 }
 
-. ../lib/common.sh
+. ../../lib/common.sh

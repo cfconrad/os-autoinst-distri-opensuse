@@ -10,6 +10,8 @@
 #     eth1   -m->    ovsbr0   <-l-    ovsbr1
 #
 
+. ../../lib/common_pre.sh
+
 eth0="${eth0:-eth0}"
 
 ovsbr0="${ovsbr0:-ovsbr0}"
@@ -227,4 +229,4 @@ step99()
 	done
 }
 
-. ../lib/common.sh
+. ../../lib/common.sh

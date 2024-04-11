@@ -23,8 +23,8 @@ sub run {
     $test =~ s/_/-/;
     $test =~ s/_/./;
 
-    $self->get_from_data('wicked/scripts/ifupdown', '/tmp/');
-    assert_script_run('cd /tmp/ifupdown/' . $test);
+    $self->get_from_data('wicked/scripts', '/tmp/');
+    assert_script_run('cd /tmp/scripts/ifupdown/' . $test);
     $self->run_test_shell_script($test, "time eth0=$ifc1 eth1=$ifc2 bash ./test.sh -d");
     $self->skip_check_logs_on_post_run();
 }

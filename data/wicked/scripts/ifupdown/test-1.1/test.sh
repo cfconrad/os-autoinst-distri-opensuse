@@ -9,6 +9,8 @@
 #    eth1    <-l-    eth1.11
 #
 
+. ../../lib/common_pre.sh
+
 eth0="${eth0:-eth0}"
 eth0_ip4="${eth0_ip4:-198.18.0.1/24}"
 
@@ -157,4 +159,4 @@ step99()
 	echo "=== step $step: finished with $err errors"
 }
 
-. ../lib/common.sh
+. ../../lib/common.sh

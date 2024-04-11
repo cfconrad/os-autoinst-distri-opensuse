@@ -8,6 +8,8 @@
 #                                <-l-    bond0.12
 #
 
+. ../../lib/common_pre.sh
+
 eth0="${eth0:-eth0}"
 eth1="${eth1:-eth1}"
 
@@ -346,4 +348,4 @@ step99()
 	done
 }
 
-. ../lib/common.sh
+. ../../lib/common.sh

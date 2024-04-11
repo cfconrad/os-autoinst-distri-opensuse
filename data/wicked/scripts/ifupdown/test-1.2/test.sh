@@ -8,6 +8,8 @@
 #
 # TODO: change vlan0 default name to dummy0.10
 
+. ../../lib/common_pre.sh
+
 dummy0="${dummy0:-dummy0}"
 dummy0_ip4="${dummy0_ip4:-198.18.4.1/24}"
 
@@ -156,4 +158,4 @@ step99()
 	echo "=== step $step: finished with $err errors"
 }
 
-. ../lib/common.sh
+. ../../lib/common.sh
