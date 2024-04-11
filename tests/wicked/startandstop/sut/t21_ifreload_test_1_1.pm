@@ -23,6 +23,7 @@ sub run {
     $test =~ s/_/-/;
     $test =~ s/_/./;
 
+    assert_script_run('systemctl start openvswitch');
     $self->get_from_data('wicked/scripts', '/tmp/');
     assert_script_run('cd /tmp/scripts/ifreload/' . $test);
     $self->run_test_shell_script($test, "time eth0=$ifc1 eth1=$ifc2 bash ./test.sh -d");
