@@ -364,6 +364,7 @@ sub get_ip {
         ipv6 => ['fd00:dead:beef:', 'fd00:dead:beef:'],
         dhcp6 => ['fd00:dead:beef:6021:d::11', 'fd00:dead:beef:6021:d::10'],
         dns_advice => ['fd00:dead:beef:6021::42', 'fd00:dead:beef:6021::42'],
+        vxlan => ['10.100.0.11/24', '10.100.0.10/24'],
       };
     my $ip = $ips_hash->{$args{type}}->[$args{is_wicked_ref}];
     die "$args{type} not exists" unless $ip;
