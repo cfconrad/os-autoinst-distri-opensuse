@@ -32,6 +32,15 @@ sub preserve_privacy_of_non_human_openqa_workers {
     assert_and_click 'chrome-do_not_send_data' if match_has_tag 'chrome-default-browser-query-send-data';
 }
 
+sub click_ad_privacy_feature {
+    assert_and_click 'google-chrome-ad-privacy-feature-more';
+    assert_and_click 'google-chrome-ad-privacy-feature-no';
+    if (check_screen 'google-chrome-ad-privacy-feature-more', 5) {
+        assert_and_click 'google-chrome-ad-privacy-feature-more';
+    }
+    assert_and_click 'google-chrome-ad-privacy-feature-ok';
+}
+
 sub run {
     my $arch = is_i586 ? 'i386' : 'x86_64';
     my $chrome_url = "https://dl.google.com/linux/direct/google-chrome-stable_current_$arch.rpm";
@@ -46,7 +55,9 @@ sub run {
     avoid_async_keyring_popups;
     preserve_privacy_of_non_human_openqa_workers;
     assert_and_click 'chrome-default-browser-query';
-    assert_screen 'google-chrome-main-window', 50;
+    assert_screen [qw(google-chrome-main-window google-chrome-dont-sign-in)];
+    click_lastmatch if match_has_tag('google-chrome-dont-sign-in');
+    click_ad_privacy_feature;
     wait_screen_change { send_key 'ctrl-l' };
     enter_cmd 'about:';
     assert_screen 'google-chrome-about';

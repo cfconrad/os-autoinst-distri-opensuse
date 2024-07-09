@@ -8,6 +8,8 @@ schedule:
   - console/consoletest_setup
   - console/check_os_release
   - console/ping
+  - console/arping
+  - console/man_pages
   - console/openvswitch
   - console/pam
   - console/sshd
@@ -40,15 +42,20 @@ schedule:
 conditional_schedule:
   version_specific:
     VERSION:
-      15-SP5:
+      15-SP6:
+        - console/openssl_nodejs
         - console/golang
         - console/redis
-        - console/python3_new_version_check
+        - '{{arch_specific}}'
+      15-SP5:
+        - console/openssl_nodejs
+        - console/golang
+        - console/redis
         - '{{arch_specific}}'
       15-SP4:
+        - console/openssl_nodejs
         - console/golang
         - console/redis
-        - console/python3_new_version_check
         - '{{arch_specific}}'
       15-SP3:
         - console/openssl_nodejs
@@ -78,9 +85,14 @@ conditional_schedule:
         - '{{sle15}}'
   sle15:
     VERSION:
+      15-SP6:
+        - console/firewalld
+        - console/lshw
+        - console/dpdk
       15-SP5:
         - console/firewalld
         - console/lshw
+        - console/dpdk
       15-SP4:
         - console/firewalld
         - console/lshw

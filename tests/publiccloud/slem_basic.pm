@@ -25,30 +25,50 @@ sub has_wicked {
     return 0;
 }
 
-sub run {
+sub check_avc {
     my ($self) = @_;
 
+    my $instance = $self->{my_instance};
+    # Read the Access Vector Cache to check for SELinux denials
+    my $avc = $instance->ssh_script_output(cmd => 'sudo ausearch -ts boot -m avc --format raw | ( grep type=AVC || true )');
+    record_info("AVC at boot", $avc);
+    return if ($avc =~ "no matches");
+
+    ## Gain better formatted logs and upload them for further investigation
+    $instance->ssh_assert_script_run(cmd => 'sudo ausearch -ts boot -m avc > ausearch.txt || true');    # ausearch fails if there are no matches
+    assert_script_run("scp " . $instance->username() . "@" . $instance->public_ip . ":ausearch.txt ausearch.txt");
+    upload_logs("ausearch.txt");
+
+    # TODO: Uncomment once all ongoing issues are resolved. For now there will be only a record_info
+    #die "SELinux access denials on first boot";
+    my @avc = split(/\n/, $avc);
+    for my $row (@avc) {
+        $row =~ s/^\s+|\s+$//g;
+        record_info("AVC denial", $row, result => 'fail') unless ($row eq '');
+    }
+}
+
+sub run {
+    my ($self, $args) = @_;
+    my $provider;
+    my $instance;
     select_serial_terminal();
-    my $provider = $self->provider_factory();
-    $provider->{username} = 'suse';
-    my $instance = $self->{my_instance} = $provider->create_instance(check_guestregister => 0);
+
+    $instance = $self->{my_instance} = $args->{my_instance};
+    $provider = $self->{provider} = $args->{my_provider};
+
+    # On SLEM 5.2+ check that we don't have any SELinux denials. This needs to happen before anything else is ongoing
+    $self->check_avc() unless (is_sle_micro('=5.1'));
+
     my $test_package = get_var('TEST_PACKAGE', 'jq');
-    registercloudguest($instance);
     $instance->run_ssh_command(cmd => 'zypper lr -d', timeout => 600);
     $instance->run_ssh_command(cmd => 'systemctl is-enabled issue-generator');
     $instance->run_ssh_command(cmd => 'systemctl is-enabled transactional-update.timer');
     $instance->run_ssh_command(cmd => 'systemctl is-enabled issue-add-ssh-keys');
 
     # Ensure NetworkManager is used on SLEM 5.3+
-    unless (has_wicked()) {
-        # Remove this softfailure after bsc#1211084 is resolved.
-        # Currently the images still contain NetworkManager.
-        if ($instance->ssh_script_run('systemctl is-active NetworkManager') != 0) {
-            record_soft_failure("bsc#1211084 - Image uses wicked instead of NetworkManager");
-        }
-    } else {
-        $instance->ssh_assert_script_run('systemctl is-active wicked', fail_message => "wicked is not active");
-    }
+    my $expected_network_service = has_wicked() ? 'wicked' : 'NetworkManager';
+    $instance->ssh_assert_script_run("systemctl is-active $expected_network_service", fail_message => "$expected_network_service is not active");
 
     # package installation test
     my $ret = $instance->run_ssh_command(cmd => 'rpm -q ' . $test_package, rc_only => 1);
@@ -76,12 +96,7 @@ sub run {
     if (is_sle_micro('=5.1')) {
         die "SELinux should be disabled" unless ($getenforce =~ /Disabled/i);
     } elsif (is_sle_micro('=5.2')) {
-        # Check for bsc#1214438 (SELinux Disabled)
-        if ($getenforce =~ /Disabled/i) {
-            record_soft_failure("bsc#1214438 SELinux disabled");
-        } else {
-            die "SELinux should be permissive" unless ($getenforce =~ /Permissive/i);
-        }
+        die "SELinux should be permissive" unless ($getenforce =~ /Permissive/i);
     } elsif (is_sle_micro('<5.4')) {
         die "SELinux should be permissive" unless ($getenforce =~ /Permissive/i);
     } else {
@@ -90,10 +105,20 @@ sub run {
     $instance->run_ssh_command(cmd => 'sudo transactional-update -n setup-selinux');
     $instance->softreboot();
 
+    record_info('timers', $instance->ssh_script_output(cmd => 'sudo systemctl list-timers --all'));
+    $instance->ssh_assert_script_run(cmd => 'sudo systemctl is-active snapper-timeline.timer');
+    $instance->ssh_assert_script_run(cmd => 'sudo systemctl is-enabled snapper-timeline.timer');
+    $instance->ssh_assert_script_run(cmd => 'sudo systemctl is-active snapper-cleanup.timer');
+    $instance->ssh_assert_script_run(cmd => 'sudo systemctl is-enabled snapper-cleanup.timer');
+
     # SElinux and logging tests
     $instance->run_ssh_command(cmd => 'sudo sestatus | grep enabled');
     $instance->run_ssh_command(cmd => 'sudo dmesg');
     $instance->run_ssh_command(cmd => 'sudo journalctl -p err');
+}
+
+sub test_flags {
+    return {fatal => 1, publiccloud_multi_module => 0};
 }
 
 1;

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021 SUSE LLC
+# Copyright 2021-2023 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: bci-tests runner
@@ -12,7 +12,7 @@
 #   This module is used to test BCI repository and BCI container images.
 #   It makes the call to tox to run the different test environments defined
 #   in the variable BCI_TEST_ENVS.
-# Maintainer: qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base qw(consoletest);
 use XML::LibXML;
@@ -21,9 +21,19 @@ use serial_terminal 'select_serial_terminal';
 use containers::utils qw(reset_container_network_if_needed);
 use File::Basename;
 use utils qw(systemctl);
-use version_utils qw(get_os_release);
+use version_utils qw(get_os_release check_version);
 
 my $error_count;
+
+sub skip_testrun {
+    # Check if the current test run should be skipped.
+    # This check is needed here to allow for fine-grained control over BCI test runs, otherwise not possible via the job groups
+
+    # Skip Spack on SLES12-SP5 (https://bugzilla.suse.com/show_bug.cgi?id=1224345)
+    return 1 if (check_var('BCI_IMAGE_NAME', 'spack') && check_version('<15', get_required_var('HOST_VERSION')));
+
+    return 0;
+}
 
 sub run_tox_cmd {
     my ($self, $env) = @_;
@@ -36,15 +46,16 @@ sub run_tox_cmd {
     $cmd .= " -k \"$bci_marker\"" if $bci_marker;
     $cmd .= " --reruns $bci_reruns --reruns-delay $bci_reruns_delay";
     $cmd .= "| tee $tox_out";
-    record_info("tox", "Running command: $cmd");
+    my $env_info = (split(/[ _:-]/, $env))[0];    # first word on many separators,to shorten long $env
+    record_info("tox " . $env_info, "Running command: $cmd");
     script_run("set -o pipefail");    # required because we don't want to rely on consoletest_setup for BCI tests.
     my $ret = script_run("timeout $bci_timeout $cmd", timeout => ($bci_timeout + 3));
     if ($ret == 124) {
         # man timeout: If  the command times out, and --preserve-status is not set, then exit with status 124.
-        record_info('Softfail', "The command <tox -e $env> timed out.", result => 'softfail');
+        record_info('TIMEOUT', "The command <tox -e $env> timed out.", result => 'fail');
         $error_count += 1;
     } elsif ($ret != 0) {
-        record_info('Softfail', "The command <tox -e $env> failed.", result => 'softfail');
+        record_info('FAILED', "The command <tox -e $env> failed.", result => 'fail');
         $error_count += 1;
     } else {
         record_info('PASSED');
@@ -59,7 +70,7 @@ sub run_tox_cmd {
     # e.g. junit_python.xml -> junit_python_podman.xml
     # We use script_run because the file might not exist if tox timed out or other
     # unexpected error.
-    script_run('mv junit_' . $env . '.xml junit_' . $env . '_${CONTAINER_RUNTIME}.xml');
+    script_run('mv junit_' . $env . '.xml junit_' . $env . '_${CONTAINER_RUNTIMES}.xml');
 }
 
 sub run {
@@ -70,14 +81,7 @@ sub run {
         record_info('BCI skipped', 'BCI test skipped due to BCI_SKIP=1 setting');
         return;
     }
-
-    # Skip the postgresql test runs on RHEL7 due to poo#129301
-    my ($os_version, $sp, $host_distri) = get_os_release;
-    my $is_rhel7 = ($host_distri eq 'rhel' && $os_version == 7);
-    if (get_var('BCI_TEST_ENVS') eq 'postgres' && $is_rhel7) {
-        record_soft_failure("poo#129301 unsupported authentication for postgresql on RHEL7");
-        return;
-    }
+    return if skip_testrun();
 
     $error_count = 0;
 
@@ -90,12 +94,15 @@ sub run {
     my $bci_target = get_var('BCI_TARGET', 'ibs-cr');
     my $version = get_required_var('VERSION');
     my $test_envs = get_required_var('BCI_TEST_ENVS');
+    my $bci_virtualenv = get_var('BCI_VIRTUALENV', 0);
     return if ($test_envs eq '-');
 
     reset_container_network_if_needed($engine);
 
+    assert_script_run('source bci/bin/activate') if ($bci_virtualenv);
+
     record_info('Run', "Starting the tests for the following environments:\n$test_envs");
-    assert_script_run("cd /root/BCI-tests");
+    assert_script_run("cd /root/BCI-tests && git fetch && git reset --hard");
     assert_script_run("export TOX_PARALLEL_NO_SPINNER=1");
     assert_script_run("export CONTAINER_RUNTIME=$engine");
     $version =~ s/-SP/./g;
@@ -104,17 +111,12 @@ sub run {
     assert_script_run("export TARGET=$bci_target");
     assert_script_run("export BCI_DEVEL_REPO=$bci_devel_repo") if $bci_devel_repo;
 
-    # Run common tests from test_all.py
-    $self->run_tox_cmd('all');
-
-    # Run metadata tests when needed
-    $self->run_tox_cmd('metadata') if get_var('BCI_TEST_METADATA');
-
     # Run environment specific tests
     for my $env (split(/,/, $test_envs)) {
         $self->run_tox_cmd($env);
     }
 
+    assert_script_run('deactivate') if ($bci_virtualenv);
 
     # Mark the job as failed if any of the tests failed
     die("$error_count tests failed.") if ($error_count > 0);

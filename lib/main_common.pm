@@ -16,7 +16,7 @@ use autotest;
 use utils;
 use wicked::TestContext;
 use Utils::Architectures;
-use version_utils qw(:VERSION :BACKEND :SCENARIO);
+use version_utils qw(:VERSION :BACKEND :SCENARIO is_community_jeos is_public_cloud);
 use Utils::Backends;
 use data_integrity_utils 'verify_checksum';
 use bmwqemu ();
@@ -72,7 +72,6 @@ our @EXPORT = qw(
   load_iso_in_external_tests
   load_jeos_tests
   load_kernel_baremetal_tests
-  load_kernel_tests
   load_nfs_tests
   load_nfv_master_tests
   load_nfv_trafficgen_tests
@@ -247,6 +246,14 @@ sub is_kde_live {
     return get_var('FLAVOR', '') =~ /KDE-Live/;
 }
 
+sub gnomestep_is_applicable {
+    return check_var("DESKTOP", "gnome");
+}
+
+sub kdestep_is_applicable {
+    return check_var("DESKTOP", "kde");
+}
+
 sub packagekit_available {
     return !check_var('FLAVOR', 'Rescue-CD');
 }
@@ -258,7 +265,7 @@ sub is_ltp_test {
 }
 
 sub is_publiccloud_ltp_test {
-    return (get_var('LTP_COMMAND_FILE') && get_var('PUBLIC_CLOUD'));
+    return (get_var('LTP_COMMAND_FILE') && is_public_cloud());
 }
 
 sub is_kernel_test {
@@ -277,27 +284,6 @@ sub is_kernel_test {
 
 sub is_systemd_test {
     return get_var('SYSTEMD_TESTSUITE');
-}
-
-# Isolate the loading of LTP tests because they often rely on newer features
-# not present on all workers. If they are isolated then only the LTP tests
-# will fail to load when there is a version mismatch instead of all tests.
-{
-    local $@;
-
-    eval "use main_ltp 'load_kernel_tests'";
-    if ($@) {
-        bmwqemu::fctwarn("Failed to load main_ltp.pm:\n$@", 'main_common.pm');
-        eval q%{
-            sub load_kernel_tests {
-                if (is_kernel_test())
-                {
-                    die "Can not run kernel tests because evaluating main_ltp.pm failed";
-                }
-                return 0;
-            }
-        %;
-    }
 }
 
 sub replace_opensuse_repos_tests {
@@ -499,7 +485,12 @@ sub load_zdup_tests {
     loadtest 'installation/post_zdup';
     # Restrict version switch to sle until opensuse adopts it
     loadtest "migration/version_switch_upgrade_target" if is_sle and get_var("UPGRADE_TARGET_VERSION");
-    loadtest 'boot/boot_to_desktop';
+    if (get_var('ZDUP_IN_X')) {
+        loadtest 'x11/reboot_plasma5' if kdestep_is_applicable;
+        loadtest 'x11/reboot_gnome' if gnomestep_is_applicable;
+    } else {
+        loadtest 'boot/boot_to_desktop';
+    }
     loadtest "installation/opensuse_welcome" if opensuse_welcome_applicable();
     loadtest 'console/check_upgraded_service' if !is_desktop;
 }
@@ -616,7 +607,7 @@ sub load_jeos_openstack_tests {
     unless (get_var('CI_VERIFICATION')) {
         loadtest "console/suseconnect_scc";
     }
-    unless (get_var('CONTAINER_RUNTIME')) {
+    unless (get_var('CONTAINER_RUNTIMES')) {
         loadtest "console/journal_check";
         loadtest "microos/libzypp_config";
     }
@@ -628,27 +619,38 @@ sub load_jeos_openstack_tests {
 }
 
 sub load_jeos_tests {
-    if ((is_arm || is_aarch64) && is_opensuse()) {
+    if (is_community_jeos()) {
         # Enable jeos-firstboot, due to boo#1020019
         load_boot_tests();
         loadtest "jeos/prepare_firstboot";
     }
 
-    load_boot_tests();
-    loadtest "jeos/firstrun";
-    if (get_var('POSTGRES_IP')) {
-        loadtest "jeos/image_info";
+    load_boot_tests() unless get_var('NO_CLOUD');
+    if (check_var('FIRST_BOOT_CONFIG', 'combustion')) {
+        loadtest 'microos/verify_setup';
+        loadtest 'microos/image_checks';
+    } elsif (check_var('FIRST_BOOT_CONFIG', 'cloud-init')) {
+        loadtest "installation/first_boot";
+        loadtest 'jeos/verify_cloudinit';
+    } else {
+        loadtest "jeos/firstrun";
+        if (get_var('POSTGRES_IP')) {
+            loadtest "jeos/image_info";
+        }
+
     }
+
     loadtest "jeos/record_machine_id";
     loadtest "console/force_scheduled_tasks";
     # this test case also disables grub timeout
     loadtest "jeos/grub2_gfxmode";
     unless (get_var('INSTALL_LTP') || get_var('SYSTEMD_TESTSUITE')) {
-        loadtest "jeos/diskusage" unless is_openstack;
+        # jeos/diskusage as of now works only with BTRFS
+        loadtest "jeos/diskusage" unless get_var('FILESYSTEM', 'btrfs') =~ /btrfs/;
         loadtest "jeos/build_key";
         loadtest "console/prjconf_excluded_rpms";
     }
-    unless (get_var('CONTAINER_RUNTIME')) {
+    unless (get_var('CONTAINER_RUNTIMES')) {
         loadtest "console/journal_check";
         loadtest "microos/libzypp_config";
     }
@@ -661,7 +663,7 @@ sub load_jeos_tests {
     replace_opensuse_repos_tests if is_repo_replacement_required;
     loadtest 'console/verify_efi_mok' if get_var 'CHECK_MOK_IMPORT';
     # zypper_ref needs to run on jeos-containers. the is_sle is required otherwise is scheduled twice on o3
-    loadtest "console/zypper_ref" if (get_var('CONTAINER_RUNTIME') && is_sle);
+    loadtest "console/zypper_ref" if (get_var('CONTAINER_RUNTIMES') && is_sle);
 }
 
 sub installzdupstep_is_applicable {
@@ -686,16 +688,8 @@ sub chromiumstep_is_applicable {
     return chromestep_is_applicable() || (is_opensuse && is_aarch64);
 }
 
-sub gnomestep_is_applicable {
-    return check_var("DESKTOP", "gnome");
-}
-
 sub installyaststep_is_applicable {
     return !get_var("NOINSTALL") && !get_var("RESCUECD") && !get_var("ZDUP");
-}
-
-sub kdestep_is_applicable {
-    return check_var("DESKTOP", "kde");
 }
 
 # kdump is not supported on aarch64 (bsc#990418), and Xen PV (feature not implemented)
@@ -1100,7 +1094,7 @@ sub load_inst_tests {
         loadtest "installation/secure_boot";
     }
     if (installyaststep_is_applicable()) {
-        loadtest "installation/resolve_dependency_issues" unless get_var("DEPENDENCY_RESOLVER_FLAG");
+        loadtest "installation/resolve_dependency_issues" unless (get_var("DEPENDENCY_RESOLVER_FLAG") || get_var('KERNEL_64KB_PAGE_SIZE'));
         loadtest "installation/installation_overview";
         # On Xen PV we don't have GRUB on VNC
         # SELinux relabel reboots, so grub needs to timeout
@@ -1206,7 +1200,7 @@ sub load_consoletests {
         # zypper and sle12 doesn't do upgrade or installation snapshots
         # SLES4SAP default installation flow does not configure snapshots
         elsif (!get_var("ZDUP") and !check_var('VERSION', '12') and !is_sles4sap()) {
-            loadtest "console/installation_snapshots";
+            loadtest "console/installation_snapshots" unless get_var('FLAVOR') =~ /OpenStack-Cloud/;
         }
     }
     loadtest "console/zypper_lr";
@@ -1270,11 +1264,10 @@ sub load_consoletests {
     }
     loadtest "console/vim" if is_opensuse || is_sle('<15') || !get_var('PATTERNS') || check_var_array('PATTERNS', 'enhanced_base');
 # textmode install comes without firewall by default atm on openSUSE. For virtualization server xen and kvm is disabled by default: https://fate.suse.com/324207
-    if ((is_sle || !check_var("DESKTOP", "textmode")) && !is_krypton_argon && !is_virtualization_server) {
+    if ((is_sle || !check_var("DESKTOP", "textmode")) && !is_krypton_argon && !is_virtualization_server && get_var('FLAVOR', '') !~ /JeOS-for-OpenStack-Cloud.*/) {
         loadtest "console/firewall_enabled";
     }
     if (is_jeos) {
-        loadtest "console/gpt_ptable";
         loadtest "console/kdump_disabled";
         loadtest "console/sshd_running";
     }
@@ -1349,7 +1342,7 @@ sub load_x11tests {
         loadtest "x11/gedit";
     }
     # Need remove firefox tests in our migration tests from old Leap releases, keep them only in 15.2 and newer.
-    loadtest "x11/firefox" unless (is_leap && check_version('<15.2', get_var('ORIGINAL_VERSION'), qr/\d{2,}\.\d/) && is_upgrade());
+    loadtest "x11/firefox" unless (is_leap && is_upgrade() && check_version('<15.2', get_var('ORIGINAL_VERSION'), qr/\d{2,}\.\d/));
     if (is_opensuse && !get_var("OFW") && is_qemu && !check_var('FLAVOR', 'Rescue-CD') && !is_kde_live) {
         loadtest "x11/firefox_audio";
     }
@@ -1357,8 +1350,8 @@ sub load_x11tests {
         loadtest "x11/chromium";
     }
     if (xfcestep_is_applicable()) {
-        # Midori got dropped from TW
-        loadtest "x11/midori" unless (is_staging || is_livesystem || !is_leap("<16.0"));
+        # Midori got dropped from TW and Leap 15.6
+        loadtest "x11/midori" unless (is_staging || is_livesystem || !is_leap("<15.6"));
         # Tumbleweed and Leap 15.4+ no longer have ristretto on the Rescue CD
         loadtest "x11/ristretto" unless (check_var("FLAVOR", "Rescue-CD") && !is_leap("<=15.3"));
     }
@@ -1395,14 +1388,9 @@ sub load_x11tests {
         if (!get_var('LIVECD')) {
             # Extension got (temporarily) pulled by Mozilla
             # loadtest "x11/plasma_browser_integration";
-            loadtest "x11/khelpcenter";
+            loadtest "x11/khelpcenter" unless !(is_x86_64 || is_aarch64 || is_riscv);
         }
-        if (get_var("PLASMA5")) {
-            loadtest "x11/systemsettings5";
-        }
-        else {
-            loadtest "x11/systemsettings";
-        }
+        loadtest "x11/systemsettings";
         loadtest "x11/dolphin";
         loadtest "x11/konsole";
     }
@@ -1441,7 +1429,7 @@ sub load_x11tests {
         if (!is_krypton_argon && !is_kde_live) {
             loadtest "x11/amarok";
         }
-        loadtest "x11/kontact" unless is_kde_live;
+        loadtest "x11/kontact" unless is_kde_live || !(is_x86_64 || is_aarch64 || is_riscv);
         if (!get_var("USBBOOT") && !is_livesystem) {
             if (get_var("PLASMA5")) {
                 loadtest "x11/reboot_plasma5";
@@ -1553,7 +1541,7 @@ sub load_extra_tests_y2uitest_cmd {
     loadtest "console/yast2_ftp";
     loadtest "console/yast2_tftp";
     # We cannot change network device settings as rely on ssh/vnc connection to the machine
-    loadtest "console/yast2_lan_device_settings" unless (is_s390x() || get_var('PUBLIC_CLOUD'));
+    loadtest "console/yast2_lan_device_settings" unless (is_s390x() || is_public_cloud());
 }
 
 sub load_extra_tests_texlive {
@@ -1689,6 +1677,7 @@ sub load_extra_tests_geo_desktop {
 
 sub load_extra_tests_console {
     loadtest "console/ping";
+    loadtest "console/arping";
     loadtest "console/check_os_release";
     loadtest "console/orphaned_packages_check";
     loadtest "console/cleanup_qam_testrepos" if has_test_issues;
@@ -1703,7 +1692,7 @@ sub load_extra_tests_console {
     loadtest 'console/slp';
     loadtest 'console/pkcon';
     # Audio device is not supported on ppc64le, s390x, JeOS, Public Cloud and Xen PV
-    if (!get_var('PUBLIC_CLOUD') && !get_var("OFW") && !is_jeos && !check_var('VIRSH_VMM_FAMILY', 'xen') && !is_s390x) {
+    if (!is_public_cloud() && !get_var("OFW") && !is_jeos && !check_var('VIRSH_VMM_FAMILY', 'xen') && !is_s390x) {
         loadtest "console/aplay";
         loadtest "console/soundtouch" if is_opensuse || (is_sle('12-sp4+') && is_sle('<15'));
         # wavpack is available only sle12sp4 onwards
@@ -1734,7 +1723,7 @@ sub load_extra_tests_console {
     loadtest "console/perf" unless is_sle;
     loadtest "console/sysctl";
     loadtest "console/sysstat";
-    loadtest "console/curl_ipv6" unless get_var('PUBLIC_CLOUD');
+    loadtest "console/curl_ipv6" unless is_public_cloud();
     loadtest "console/wget_ipv6";
     loadtest "console/ca_certificates_mozilla";
     loadtest "console/unzip";
@@ -1757,13 +1746,13 @@ sub load_extra_tests_console {
         loadtest 'console/mutt';
     }
     loadtest 'console/supportutils' if (is_sle && !is_jeos);
-    loadtest 'console/mdadm' unless (is_jeos || get_var('PUBLIC_CLOUD'));
+    loadtest 'console/mdadm' unless (is_jeos || is_public_cloud());
     loadtest 'console/journalctl';
     loadtest 'console/quota' unless (is_jeos);
-    loadtest 'console/vhostmd' unless get_var('PUBLIC_CLOUD');
+    loadtest 'console/vhostmd' unless is_public_cloud();
     loadtest 'console/rpcbind' unless is_jeos;
     # sysauth test scenarios run in the console
-    loadtest "sysauth/sssd" if (get_var('SYSAUTHTEST') || is_sle('12-SP5+'));
+    loadtest "sysauth/sssd" if (get_var('SYSAUTHTEST') || (is_sle('12-SP5+') && is_sle('<=15-SP3')));
     loadtest 'console/timezone';
     loadtest 'console/ntp' if is_sle('<15');
     loadtest 'console/procps';
@@ -1783,6 +1772,7 @@ sub load_extra_tests_console {
     loadtest 'console/wpa_supplicant' unless (!is_x86_64 || is_sle('<15') || is_leap('<15.1') || is_jeos || is_public_cloud);
     loadtest 'console/python_scientific' unless (is_sle("<15"));
     loadtest "console/parsec" if is_tumbleweed;
+    loadtest "console/perl_bootloader" unless (is_public_cloud() || is_bootloader_sdboot);
 }
 
 sub load_extra_tests_sdk {
@@ -1842,6 +1832,7 @@ sub load_extra_tests_filesystem {
     loadtest "console/autofs";
     loadtest 'console/lvm';
     if (get_var("FILESYSTEM", "btrfs") eq "btrfs") {
+        loadtest 'console/btrfs_check' if (is_jeos || is_sle_micro);
         loadtest 'console/snapper_undochange';
         loadtest 'console/snapper_create';
         # Needs zsh, not available in staging
@@ -1864,7 +1855,7 @@ sub load_extra_tests_filesystem {
         loadtest 'console/snapper_thin_lvm' unless is_jeos;
     }
     loadtest 'console/snapper_used_space' if (is_sle('15-SP1+') || (is_opensuse && !is_leap('<15.1')));
-    loadtest "console/udisks2" unless (is_sle('<=15-SP2') || get_var('VIRSH_VMM_FAMILY') =~ /xen/);
+    loadtest "console/udisks2" unless (is_sle('<=15-SP2') || get_var('VIRSH_VMM_FAMILY', 'none') =~ /xen/);
     loadtest "network/cifs" if (is_sle('>=15-sp3') || is_opensuse);
     loadtest "network/samba/server" if (is_sle('>=15-sp3') || is_opensuse);
     # Note: Until the snapshot restoration has been fixed (poo#109929), zfs should be the last test run
@@ -2048,7 +2039,7 @@ sub load_x11_other {
             loadtest "x11/seahorse";
             loadtest "x11/gnome_music";
         }
-        loadtest 'x11/flatpak' if (is_opensuse);
+        loadtest 'x11/flatpak' if (is_opensuse || is_sle('15+'));
     }
     # shotwell was replaced by gnome-photos in SLE15 & yast_virtualization isn't in SLE15
     if (is_sle('>=12-sp2') && is_sle('<15')) {
@@ -2078,7 +2069,6 @@ sub load_x11_other {
 sub load_x11_webbrowser {
     loadtest "x11/firefox/firefox_smoke";
     loadtest "x11/firefox/firefox_urlsprotocols";
-    loadtest "x11/firefox/firefox_downloading";
     loadtest "x11/firefox/firefox_changesaving";
     loadtest "x11/firefox/firefox_fullscreen";
     loadtest "x11/firefox/firefox_localfiles";
@@ -2233,7 +2223,8 @@ sub load_security_tests_crypt_core {
     }
     loadtest "fips/openssl/openssl_tlsv1_3";
     loadtest "fips/openssl/openssl_pubkey_rsa";
-    loadtest "fips/openssl/openssl_pubkey_dsa";
+    # https://bugzilla.suse.com/show_bug.cgi?id=1223200#c2
+    loadtest "fips/openssl/openssl_pubkey_dsa" if (is_sle('<15-SP6') || is_leap('<15.6'));
     loadtest "fips/openssh/openssh_fips" if get_var("FIPS_ENABLED");
     loadtest "console/sshd";
     loadtest "console/ssh_cleanup";
@@ -2268,6 +2259,9 @@ sub load_mitigation_tests {
         if (get_var('PREPARE_REPO')) {
             loadtest "cpu_bugs/add_repos_qemu";
         }
+    }
+    if (get_var('KVM_GUEST')) {
+        loadtest "cpu_bugs/kvm_guest_mitigations";
     }
     if (get_var('IPMI_TO_QEMU')) {
         loadtest "cpu_bugs/ipmi_to_qemu";
@@ -2336,6 +2330,7 @@ sub load_security_tests {
     my @security_tests = qw(
       fips_setup
       crypt_core
+      apparmor
     );
 
     # Check SECURITY_TEST and call the load functions iteratively.
@@ -2364,6 +2359,7 @@ sub load_system_prepare_tests {
     }
     loadtest 'console/integration_services' if is_hyperv || is_vmware;
     loadtest 'console/hostname' unless is_bridged_networking;
+    loadtest 'kernel/install_kernel_flavor' if get_var('KERNEL_FLAVOR');
     loadtest 'console/install_rt_kernel' if check_var('SLE_PRODUCT', 'SLERT');
     loadtest 'console/force_scheduled_tasks' unless is_jeos;
     loadtest 'console/check_selinux_fails' if get_var('SELINUX');
@@ -2542,14 +2538,9 @@ sub load_extra_tests_syscontainer {
 }
 
 sub load_extra_tests_kernel {
-    if (is_tumbleweed || is_sle('>=15-sp5')) {
-        loadtest "kernel/bpftrace";
-        loadtest "kernel/bcc";
-        loadtest "kernel/io_uring";
-    }
-
     loadtest "kernel/tuned";
     loadtest "kernel/fwupd" if is_sle('15+');
+    loadtest "hpc/rasdaemon" if ((is_sle('15+') && (!is_ppc64le)) || is_tumbleweed);
 
     # keep it on the latest place as it taints kernel
     loadtest "kernel/module_build";
@@ -2591,7 +2582,7 @@ sub load_transactional_role_tests {
 sub load_common_opensuse_sle_tests {
     load_autoyast_clone_tests if get_var("CLONE_SYSTEM");
     loadtest "terraform/create_image" if get_var('TERRAFORM');
-    load_create_hdd_tests if (get_var("STORE_HDD_1") || get_var("PUBLISH_HDD_1")) && !get_var('PUBLIC_CLOUD');
+    load_create_hdd_tests if (get_var("STORE_HDD_1") || get_var("PUBLISH_HDD_1")) && !is_public_cloud();
     loadtest 'console/network_hostname' if get_var('NETWORK_CONFIGURATION');
     load_installation_validation_tests if get_var('INSTALLATION_VALIDATION');
     load_transactional_role_tests if is_transactional && (get_var('ARCH') !~ /ppc64|s390/) && !get_var('INSTALLONLY');
@@ -2940,6 +2931,23 @@ sub load_nfs_tests {
 
 sub load_upstream_systemd_tests {
     loadtest 'systemd_testsuite/prepare_systemd_and_testsuite';
+}
+
+sub load_security_tests_apparmor {
+    load_security_console_prepare;
+
+    if (check_var('TEST', 'mau-apparmor') || is_jeos) {
+        loadtest "security/apparmor/aa_prepare";
+    }
+    loadtest "security/apparmor/aa_status";
+    loadtest "security/apparmor/aa_enforce";
+    loadtest "security/apparmor/aa_complain";
+    loadtest "security/apparmor/aa_genprof";
+    loadtest "security/apparmor/aa_autodep";
+    loadtest "security/apparmor/aa_logprof";
+    loadtest "security/apparmor/aa_easyprof";
+    loadtest "security/apparmor/aa_notify";
+    loadtest "security/apparmor/aa_disable";
 }
 
 1;

@@ -12,74 +12,57 @@ use qesapdeployment;
 
 sub run {
     my ($self) = @_;
-    my @ret = qesap_execute(cmd => 'terraform', verbose => 1, timeout => 1800);
-    die "'qesap.py terraform' return: $ret[0]" if ($ret[0]);
-    my $inventory = qesap_get_inventory(provider => get_required_var('PUBLIC_CLOUD_PROVIDER'));
+    my $provider = get_required_var('PUBLIC_CLOUD_PROVIDER');
+    my @ret = qesap_execute_conditional_retry(
+        cmd => 'terraform',
+        logname => 'qesap_exec_terraform.log.txt',
+        verbose => 1,
+        timeout => 1800,
+        retries => 1,
+        error_string => 'An internal execution error occurred. Please retry later');
+
+    my $inventory = qesap_get_inventory(provider => $provider);
     upload_logs($inventory, failok => 1);
+
+    # Set up azure native fencing
+    if (get_var('QESAPDEPLOY_FENCING') eq 'native' && $provider eq 'AZURE') {
+        my @nodes = qesap_get_nodes_names(provider => $provider);
+        foreach my $host_name (@nodes) {
+            if ($host_name =~ /hana/) {
+                qesap_az_setup_native_fencing_permissions(
+                    vm_name => $host_name,
+                    resource_group => qesap_az_get_resource_group());
+            }
+        }
+    }
+
     my @remote_ips = qesap_remote_hana_public_ips;
     record_info 'Remote IPs', join(' - ', @remote_ips);
     foreach my $host (@remote_ips) {
         die 'Timed out while waiting for ssh to be available in the CSP instances' if qesap_wait_for_ssh(host => $host) == -1;
     }
-    @ret = qesap_execute(cmd => 'ansible', cmd_options => '--profile', verbose => 1, timeout => 3600);
-    if ($ret[0])
-    {
-        if (qesap_ansible_log_find_missing_sudo_password($ret[1])) {
-            record_info('DETECTED ANSIBLE MISSING SUDO PASSWORD ERROR');
-            @ret = qesap_execute(cmd => 'ansible', cmd_options => '--profile', verbose => 1, timeout => 3600);
-            if ($ret[0])
-            {
-                qesap_cluster_logs();
-                die "'qesap.py ansible' return: $ret[0]";
-            }
-            record_info('ANSIBLE RETRY PASS');
-        }
-        elsif (qesap_ansible_log_find_timeout($ret[1])) {
-            record_info('DETECTED ANSIBLE TIMEOUT ERROR');
-            $self->clean_up();
-            @ret = qesap_execute(cmd => 'terraform', verbose => 1, timeout => 1800);
-            die "'qesap.py terraform' return: $ret[0]" if ($ret[0]);
-            @ret = qesap_execute(cmd => 'ansible', cmd_options => '--profile', verbose => 1, timeout => 3600);
-            if ($ret[0])
-            {
-                qesap_cluster_logs();
-                die "'qesap.py ansible' return: $ret[0]";
-            }
-            record_info('ANSIBLE RETRY PASS');
-        }
-        else
-        {
-            qesap_cluster_logs();
-            die "'qesap.py ansible' return: $ret[0]";
+    @ret = qesap_execute(
+        cmd => 'ansible',
+        cmd_options => join(' ', '--profile', '--junit', '/tmp/results/'),
+        logname => 'qesap_exec_ansible.log.txt',
+        verbose => 1,
+        timeout => 3600);
+    my $find_cmd = join(' ',
+        'find',
+        '/tmp/results/',
+        '-type', 'f',
+        '-iname', "*.xml");
+    for my $log (split(/\n/, script_output($find_cmd))) {
+        parse_extra_log("XUnit", $log);
+        #enter_cmd("rm $log");
+    }
+    if ($ret[0]) {
+        # Retry to deploy terraform + ansible
+        if (qesap_terrafom_ansible_deploy_retry(error_log => $ret[1], provider => $provider)) {
+            die "Retry failed, original ansible return: $ret[0]";
         }
     }
 }
-sub clean_up {
-    my ($self) = @_;
-    my @cmds_list;
-    # Only run the Ansible deregister if the inventory is present
-    push(@cmds_list, 'ansible') if (!script_run 'test -f ' . qesap_get_inventory(get_required_var('PUBLIC_CLOUD_PROVIDER')));
-
-    # Terraform destroy can be executed in any case
-    push(@cmds_list, 'terraform');
-
-    for my $command (@cmds_list) {
-        record_info('Cleanup', "Executing $command cleanup");
-        my @clean_up_cmd_rc = qesap_execute(verbose => '--verbose', cmd => $command, cmd_options => '-d', timeout => 1200);
-        if ($clean_up_cmd_rc[0] == 0) {
-            diag(ucfirst($command) . " cleanup attempt #  PASSED.");
-            record_info("Clean $command", ucfirst($command) . ' cleanup PASSED.');
-            last;
-        }
-        else {
-            diag(ucfirst($command) . " cleanup attempt #  FAILED.");
-            sleep 10;
-            record_info('Cleanup FAILED', "Cleanup $command FAILED", result => 'fail');
-            $self->{result} = "fail";
-        }
-    }
-}
-
 
 sub test_flags {
     return {fatal => 1};
@@ -87,11 +70,28 @@ sub test_flags {
 
 sub post_fail_hook {
     my ($self) = shift;
+    qesap_cluster_logs();
     qesap_upload_logs();
     my $inventory = qesap_get_inventory(provider => get_required_var('PUBLIC_CLOUD_PROVIDER'));
-    qesap_execute(cmd => 'ansible', cmd_options => '-d', verbose => 1, timeout => 300) unless (script_run("test -e $inventory"));
-    qesap_execute(cmd => 'terraform', cmd_options => '-d', verbose => 1, timeout => 1200);
+    qesap_execute(
+        cmd => 'ansible',
+        cmd_options => '-d',
+        logname => 'qesap_exec_ansible_destroy.log.txt',
+        verbose => 1,
+        timeout => 300) unless (script_run("test -e $inventory"));
+    qesap_execute(
+        cmd => 'terraform',
+        cmd_options => '-d',
+        logname => 'qesap_exec_terraform_destroy.log.txt',
+        verbose => 1,
+        timeout => 1200);
     $self->SUPER::post_fail_hook;
+}
+
+sub post_run_hook {
+    my ($self) = shift;
+    qesap_cluster_logs();
+    $self->SUPER::post_run_hook;
 }
 
 1;

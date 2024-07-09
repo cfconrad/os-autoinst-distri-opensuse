@@ -39,14 +39,10 @@ sub provider_factory {
         $args{service} //= 'EC2';
 
         if ($args{service} eq 'ECR') {
-            $provider = publiccloud::ecr->new(
-                region => get_var('PUBLIC_CLOUD_REGION', 'eu-central-1')
-            );
+            $provider = publiccloud::ecr->new();
         }
         elsif ($args{service} eq 'EKS') {
-            $provider = publiccloud::eks->new(
-                region => get_var('PUBLIC_CLOUD_REGION', 'eu-central-1')
-            );
+            $provider = publiccloud::eks->new();
         }
         elsif ($args{service} eq 'EC2') {
             $provider = publiccloud::ec2->new();
@@ -60,7 +56,6 @@ sub provider_factory {
         $args{service} //= 'AVM';
         if ($args{service} eq 'ACR') {
             $provider = publiccloud::acr->new(
-                region => get_var('PUBLIC_CLOUD_REGION', 'westeurope'),
                 subscription => get_var('PUBLIC_CLOUD_AZURE_SUBSCRIPTION_ID'),
                 username => get_var('PUBLIC_CLOUD_USER', 'azureuser')
             );
@@ -123,7 +118,11 @@ sub _cleanup {
 
     # currently we have two cases when cleanup of image will be skipped:
     # 1. Job should have 'PUBLIC_CLOUD_NO_CLEANUP' variable and result == 'fail'
-    return if ($self->{result} && $self->{result} eq 'fail' && get_var('PUBLIC_CLOUD_NO_CLEANUP_ON_FAILURE'));
+    if ($self->{result} && $self->{result} eq 'fail' && get_var('PUBLIC_CLOUD_NO_CLEANUP_ON_FAILURE')) {
+        upload_logs('/var/tmp/ssh_sut.log', failok => 1, log_name => 'ssh_sut_log.txt');
+        upload_asset(script_output('ls ~/.ssh/id* | grep -v pub | head -n1'));
+        return;
+    }
     diag('Public Cloud _cleanup: 1st check passed.');
 
     # 2. Test module needs to have 'publiccloud_multi_module' and should not have 'fatal' flags and 'fail' result
@@ -148,10 +147,23 @@ sub _cleanup {
     } else {
         diag('Public Cloud _cleanup: Not ready for provider cleanup.');
     }
+
+    upload_logs('/var/tmp/ssh_sut.log', failok => 1, log_name => 'ssh_sut_log.txt');
 }
 
 sub post_fail_hook {
     my ($self) = @_;
+    if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
+        # This is called explicitly to avoid cyclical imports
+        sles4sap_publiccloud::sles4sap_cleanup(
+            $self,
+            cleanup_called => $self->{cleanup_called} // undef,
+            network_peering_present => 1,
+            ansible_present => 0
+        );
+        return;
+    }
+
     $self->_cleanup() unless $self->{cleanup_called};
 }
 

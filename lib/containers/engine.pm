@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2020-2021 SUSE LLC
+# Copyright 2020-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Abstraction layer to operate docker and podman containers through same interfaces
@@ -11,7 +11,6 @@ use Mojo::Base -base;
 use testapi;
 use Carp 'croak';
 use Test::Assert 'assert_equals';
-use containers::utils qw(registry_url);
 use utils qw(systemctl file_content_replace script_retry);
 use version_utils qw(package_version_cmp);
 use containers::utils qw(get_podman_version);
@@ -181,17 +180,6 @@ sub pull {
     return $self->_engine_script_retry("pull $image_name", timeout => $args{timeout} // 300, retry => 3, delay => 30, die => $die);
 }
 
-=head2 commit
-
-Save a existing container as a new image in the local registry
-
-=cut
-
-sub commit {
-    my ($self, $mycontainer, $new_image_name, %args) = @_;
-    $self->_engine_assert_script_run("commit $mycontainer $new_image_name", timeout => $args{timeout});
-}
-
 =head2 enum_images
 
 Return an array ref of the images
@@ -220,19 +208,6 @@ sub enum_containers {
     return \@containers;
 }
 
-=head2 get_images_by_repo_name
-
-Returns an array ref with the names of the images.
-
-=cut
-
-sub get_images_by_repo_name {
-    my ($self) = @_;
-    my $repo_images = $self->_engine_script_output("images --format '{{.Repository}}'", timeout => 120);
-    my @images = split /[\n\t ]/, $repo_images;
-    return \@images;
-}
-
 =head2 info
 
 Assert a C<property> against given expected C<value> if C<value> is given.
@@ -246,6 +221,12 @@ sub info {
 
     if (exists $args{json} && $args{json}) {
         my $raw = $self->_engine_script_output("info -f '{{json .}}' 2> ./error", proceed_on_failure => 1);
+        # issue related to podman v2.0 (sle15sp2, s390x) -> bsc#1200623
+        # extract only the json part as there might be other error messages from info output
+        # e.g. 2023-09-11T08:01:40.788854+02:00 susetest systemd[31629]: Failed to start podman-31709.scope
+        if ($raw =~ m/(?s)(\{(?:[^{}"]++|"(?:\\.|[^"])*+"|(?1))*\})/gm) {
+            $raw = $1;
+        }
         $stdout = decode_json($raw);
     } else {
         $stdout = $self->_engine_script_output("info 2> ./error", proceed_on_failure => 1);
@@ -273,17 +254,6 @@ C<filename> file the logs are written to.
 sub get_container_logs {
     my ($self, $container, $filename) = @_;
     $self->_engine_assert_script_run("container logs $container | tee $filename");
-}
-
-=head2 remove_image($image_name)
-
-Remove a image from the pool.
-
-=cut
-
-sub remove_image {
-    my ($self, $image_name) = @_;
-    $self->_engine_assert_script_run("rmi -f $image_name");
 }
 
 =head2 remove_container($container_name, [assert])
@@ -347,6 +317,9 @@ sub cleanup_system_host {
             $self->_engine_script_run("pod rm --force --all", 120);
         }
         $self->_engine_assert_script_run("rm --force --all", 120);
+        # podman system prune -f --external was added to podman 4.0.0
+        # and it allows to prune external containers created by buildah
+        $self->_engine_script_run("system prune -f --external", 300);
     }
     $self->_engine_assert_script_run("volume prune -f", 300);
     $self->_engine_assert_script_run("system prune -a -f", 300);

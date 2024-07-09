@@ -55,8 +55,10 @@ sub enter_user_details {
 }
 
 sub license {
-    # license agreement
-    assert_screen 'wsl-license';
+    # License agreement
+    # If we are enabling SLED, this screen will be checked
+    # a second time after installing modules. That's the reason of the timeout
+    assert_screen 'wsl-license', timeout => 240;
     send_key 'alt-n';
 
     if (is_sle) {
@@ -71,7 +73,13 @@ sub license {
             send_key 'alt-n';
         }
         # Accept license
-        assert_screen 'wsl-license';
+        # assert_screen 'wsl-license' or wsl-liscense-beta;
+        if (check_var("BETA", "1")) {
+            assert_screen 'wsl-license-beta', timeout => 240;
+        }
+        else {
+            assert_screen 'wsl-license', timeout => 240;
+        }
         send_key 'alt-a';
         assert_screen 'license-accepted';
         send_key 'alt-n';
@@ -119,7 +127,12 @@ sub run {
     assert_screen [qw(yast2-wsl-firstboot-welcome wsl-installing-prompt)], 480;
 
     if (match_has_tag 'yast2-wsl-firstboot-welcome') {
-        assert_and_click 'window-max';
+        # The new process of installing, appears in an already maximized window,
+        # but sometimes it loses focus. So I created another needle to check if
+        # the window is already maximized and click somewhere else to bring it to focus.
+        assert_screen(['window-max', 'window-minimize']);
+        assert_and_click 'window-max' if match_has_tag 'window-max';
+        assert_and_click 'window-minimize' if match_has_tag 'window-minimize';
         wait_still_screen stilltime => 3, timeout => 10;
         is_fake_scc_url_needed && set_fake_scc_url();
         send_key 'alt-n';
@@ -136,10 +149,17 @@ sub run {
         # SLED Workstation license agreement
         license if (check_var('SLE_PRODUCT', 'sled'));
         # And done!
+
+        # This is an ongoing discussion and it seems that the screen only appears
+        # during the "development period". Also, it looks like that code was
+        # duplicated in L98 of this file. Didn't want to remove it completely
+        # just in case it returns...
         assert_screen ['trust_nvidia_gpg_keys', 'wsl-installation-completed'], timeout => 240;
         send_key 'alt-t' if (match_has_tag 'trust_nvidia_gpg_keys');
-        assert_screen 'wsl-installation-completed', 240;
+
+        assert_screen('wsl-installation-completed', 240);
         send_key 'alt-f';
+        click_lastmatch if (check_screen('wsl-onedrive-popup'));
         # Back to CLI
         assert_screen 'wsl-linux-prompt';
     } else {

@@ -10,6 +10,7 @@
 use base "consoletest";
 use strict;
 use warnings;
+use Utils::Architectures;
 use testapi;
 use utils;
 use power_action_utils 'power_action';
@@ -17,6 +18,7 @@ use version_utils qw(is_desktop_installed is_sles4sap);
 use migration;
 use qam;
 use Utils::Backends 'is_pvm';
+use bootloader_setup qw(change_grub_config);
 
 sub run {
     my ($self) = @_;
@@ -30,14 +32,29 @@ sub run {
     # update patches we'd better to select_console to make test robust.
     select_console 'root-console';
     install_patterns() if (get_var('PATTERNS'));
+    # Install openldap package as required
+    if ((get_var('FLAVOR') =~ /Regression/) && check_var('HDDVERSION', '15-SP3') && is_x86_64) {
+        zypper_call("in sssd sssd-tools sssd-ldap openldap2 openldap2-client");
+    }
     deregister_dropped_modules;
     # disable multiversion for kernel-default based on bsc#1097111, for migration continuous cases only
     if (get_var('FLAVOR', '') =~ /Continuous-Migration/) {
-        record_soft_failure 'bsc#1097111 - File conflict of SLE12 SP3 and SLE15 kernel';
-        disable_kernel_multiversion;
+        modify_kernel_multiversion("disable");
     }
-
+    workaround_bsc_1220091;
+    # Workaround of bsc#1224249, remove python3-argcomplete-1.9.2-150000.3.8.1 before migration
+    # because the higher python3-argcomplete version is not synced to SLES15SP6 update channel yet
+    # It will be only few weeks after the GM, will remove this workaround then
+    my $pkg = 'python3-argcomplete-1.9.2-150000.3.8.1';
+    if ((check_var("MIGRATION_METHOD", "zypper")) && (script_run("rpm -q $pkg")) == 0) {
+        record_soft_failure "Workaround for bsc#1224249: remove $pkg before migration";
+        zypper_call("rm $pkg");
+    }
     cleanup_disk_space if get_var('REMOVE_SNAPSHOTS');
+    # Sometimes we can't wait the grub screen before it booting into system,
+    # we can change the GRUB_TIMEOUT in /etc/default/grub to fix this.
+    my $timeout = get_var('GRUB_TIMEOUT');
+    change_grub_config('=.*', "=$timeout", 'GRUB_TIMEOUT', '', 1) if (length $timeout);
     power_action('reboot', keepconsole => 1, textmode => 1);
     reconnect_mgmt_console if is_pvm;
 

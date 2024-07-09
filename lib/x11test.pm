@@ -578,43 +578,10 @@ sub start_clean_firefox {
     assert_screen 'firefox-url-loaded', 90;
     # to avoid stuck trackinfo pop-up, refresh the browser
     $self->firefox_open_url('opensuse.org');
-    my $count = 10;
-    while ($count--) {
-        # workaround for bsc#1046005
-        assert_and_click 'firefox_titlebar' if check_screen('firefox_titlebar', 2);
-        if (check_screen 'firefox_trackinfo', 3) {
-            record_info 'Tracking protection', 'Track info did show up';
-            assert_and_click 'firefox_trackinfo';
-            last;
-        }
-        # the needle match area has to be where trackinfo does pop-up
-        elsif (check_screen 'firefox-developertool-opensuse') {
-            record_info 'Tracking protection', 'Track info pop-up did NOT show up';
-            last;
-        }
-        elsif ($count eq 1) {
-            die 'trackinfo pop-up did not match';
-        }
-        else {
-            send_key 'f5';
-        }
-    }
-
-    # get rid of "Firefox Privacy Notice" page
-    wait_still_screen(3);
-    if (check_screen 'firefox_privacy_notice') {
-        assert_and_click 'firefox_privacy_notice';
-    }
 
     # get rid of the reader & tracking pop-up once, first test should have milestone flag
     $self->firefox_open_url('eu.httpbin.org/html', assert_loaded_url => 'firefox-urls_protocols-http');
     wait_still_screen(3);
-    if (check_screen 'firefox_readerview_window') {
-        wait_still_screen(3);
-        assert_and_click 'firefox_readerview_window';
-    }
-    # workaround for bsc#1046005
-    assert_and_click 'firefox_titlebar' if check_screen('firefox_titlebar', 2);
 
     # Help
     send_key "alt-h";
@@ -649,8 +616,7 @@ sub start_firefox {
     # Using match_typed parameter on KDE as typing in desktop runner may fail
     x11_start_program('firefox https://html5test.opensuse.org', valid => 0, match_typed => ((check_var('DESKTOP', 'kde')) ? "firefox_url_typed" : ''));
     $self->firefox_check_default;
-    $self->firefox_check_popups;
-    assert_screen 'firefox-html-test';
+    assert_screen 'firefox-html-test', 200;
 }
 
 sub restart_firefox {
@@ -660,7 +626,7 @@ sub restart_firefox {
     wait_still_screen 2;
     $self->exit_firefox_common;
     assert_script_run('time wait $(pidof firefox)');
-    enter_cmd "$cmd";
+    enter_cmd "$cmd" if defined $cmd;
     enter_cmd "firefox $url >>firefox.log 2>&1 &";
     $self->firefox_check_default;
     assert_screen 'firefox-url-loaded';
@@ -679,42 +645,10 @@ sub firefox_check_default {
     }
 }
 
-# Check whether there are any pop up windows and handle them one by one
-sub firefox_check_popups {
-    # assert loaded webpage
-    assert_screen 'firefox-url-loaded', 300;
-    for (1 .. 3) {
-        # slow down loop and give firefox time to show pop-up
-        sleep 5;
-        # check pop-ups
-        assert_screen [qw(firefox_trackinfo firefox_readerview_window firefox-launch)];
-        # handle the tracking protection pop up
-        if (match_has_tag('firefox_trackinfo')) {
-            wait_screen_change { assert_and_click 'firefox_trackinfo'; };
-        }
-        # handle the reader view pop up
-        elsif (match_has_tag('firefox_readerview_window')) {
-            wait_screen_change { assert_and_click 'firefox_readerview_window'; };
-        }
-
-        if (match_has_tag('firefox_trackinfo') or match_has_tag('firefox_readerview_window')) {
-            # bsc#1046005 does not seem to affect KDE and as the workaround sometimes results in
-            # accidentially moving the firefox window around, skip it.
-            if (!check_var("DESKTOP", "kde")) {
-                # workaround for bsc#1046005
-                assert_and_click 'firefox_titlebar' if check_screen('firefox_titlebar', 2);
-            }
-        }
-    }
-}
-
 sub firefox_open_url {
     my ($self, $url, %args) = @_;
     my $counter = 1;
     while (1) {
-        # make sure firefox window is focused
-        assert_and_click 'firefox_titlebar' if check_screen('firefox_titlebar', 2);
-        wait_still_screen 1, 2;
         send_key 'alt-d';
         send_key 'delete';
         send_key 'alt-d';
@@ -964,6 +898,15 @@ sub gnote_search_and_close {
     my ($self, $string, $needle) = @_;
 
     send_key "ctrl-f";
+    if (is_tumbleweed) {
+        if (check_screen('focus_search_box', 5)) {
+            assert_and_click "focus_search_box";
+        } else {
+            assert_and_click "display_search_bar";
+            assert_and_click "focus_search_box";
+            record_soft_failure("bsc#1216592 The shortcut Ctrl-F doesn't work as expected in gnote 45.0");
+        }
+    }
     # The gnote interface is slow. So we can't start immediately searching. We need to wait
     wait_still_screen(2);
     type_string $string;
@@ -976,8 +919,10 @@ sub gnote_search_and_close {
 sub cleanup_gnote {
     my ($self, $needle) = @_;
     send_key 'esc';    #back to all notes interface
-    assert_and_click($needle, button => 'right');
-    assert_and_click "delete-new-note";
+    assert_and_click($needle);
+    wait_still_screen(2);
+    send_key "delete";
+    wait_still_screen(2);
     assert_and_click "really-delete-note";
     send_key 'alt-f4';
 }
@@ -985,6 +930,7 @@ sub cleanup_gnote {
 sub gnote_start_with_new_note {
     x11_start_program('gnote');
     send_key "ctrl-n";
+    send_key "shift-ctrl-n" if is_tumbleweed;
     assert_screen 'gnote-new-note', 5;
 }
 
@@ -1132,6 +1078,8 @@ sub firefox_print {
     # Specify the path and name of output file
     send_key "ctrl-a";
     type_string("/home/$username/ffprint/$file-output.pdf");
+    wait_still_screen 2;
+    save_screenshot;
 
     # Click save button on the save to destination page
     assert_and_click("firefox-print-output-save");

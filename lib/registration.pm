@@ -9,11 +9,13 @@ use strict;
 use warnings;
 use testapi;
 use Utils::Architectures;
+use Utils::Backends qw(is_qemu);
 use utils qw(addon_decline_license assert_screen_with_soft_timeout zypper_call systemctl handle_untrusted_gpg_key quit_packagekit script_retry wait_for_purge_kernels);
-use version_utils qw(is_sle is_sles4sap is_upgrade is_leap_migration is_sle_micro);
+use version_utils qw(is_sle is_sles4sap is_upgrade is_leap_migration is_sle_micro is_hpc);
 use constant ADDONS_COUNT => 50;
 use y2_module_consoletest;
 use YaST::workarounds;
+use y2_logs_helper qw(accept_license);
 
 our @EXPORT = qw(
   add_suseconnect_product
@@ -99,6 +101,9 @@ our @SLE12_MODULES = qw(
   sle-module-public-cloud
 );
 
+# Set SCC_DEBUG_SUSECONNECT=1 to enable debug output of SUSEConnect globally
+my $debug_flag = get_var('SCC_DEBUG_SUSECONNECT') ? '--debug' : '';
+
 # Method to determine if a short name references a module based on what's defined
 # on %SLE15_MODULES
 sub is_module {
@@ -138,6 +143,8 @@ sub accept_addons_license {
     push @addons_with_license, @SLE15_ADDONS_WITH_LICENSE_NOINSTALL if (is_sle('15+') and get_var('IN_PATCH_SLE'));
     # HA does not show EULA when doing migration to 12-SP5
     @addons_with_license = grep { $_ ne 'ha' } @addons_with_license if (is_sle('12-sp5+') && get_var('UPGRADE') && !get_var('IN_PATCH_SLE'));
+    # HA does not show EULA when doing migration from 15-SP5 to 15-SP6
+    @addons_with_license = grep { $_ ne 'ha' } @addons_with_license if (is_sle('15-sp5+') && get_var('UPGRADE'));
 
     for my $addon (@scc_addons) {
         # most modules don't have license, skip them
@@ -190,7 +197,7 @@ sub add_suseconnect_product {
 
     my $try_cnt = 0;
     while ($try_cnt++ <= $retry) {
-        eval { assert_script_run("SUSEConnect -p $name/$version/$arch $params", timeout => $timeout); };
+        eval { assert_script_run("SUSEConnect $debug_flag -p $name/$version/$arch $params", timeout => $timeout); };
         if ($@) {
             record_info('retry', "SUSEConnect failed to activate the module $name. Retrying...");
             sleep 60 * $try_cnt;    # we wait a bit longer for each retry
@@ -223,7 +230,7 @@ sub ssh_add_suseconnect_product {
     $retries //= 3;
     $delay //= 10;
 
-    script_retry("ssh $remote sudo SUSEConnect -p $name/$version/$arch $params", delay => $delay, retry => $retries, timeout => $timeout);
+    script_retry("ssh $remote sudo SUSEConnect $debug_flag -p $name/$version/$arch $params", delay => $delay, retry => $retries, timeout => $timeout);
 }
 
 =head2 remove_suseconnect_product
@@ -238,7 +245,7 @@ sub remove_suseconnect_product {
     $version //= scc_version();
     $arch //= get_required_var('ARCH');
     $params //= '';
-    script_retry("SUSEConnect -d -p $name/$version/$arch $params", retry => 5, delay => 60, timeout => 180);
+    script_retry("SUSEConnect $debug_flag -d -p $name/$version/$arch $params", retry => 5, delay => 60, timeout => 180);
 }
 
 =head2 ssh_remove_suseconnect_product
@@ -255,7 +262,7 @@ sub ssh_remove_suseconnect_product {
     $version //= scc_version();
     $arch //= get_required_var('arch');
     $params //= '';
-    script_retry("ssh $remote sudo SUSEConnect -d -p $name/$version/$arch $params", retry => 5, delay => 60, timeout => 180);
+    script_retry("ssh $remote sudo SUSEConnect $debug_flag -d -p $name/$version/$arch $params", retry => 5, delay => 60, timeout => 180);
 }
 
 =head2 cleanup_registration
@@ -268,7 +275,7 @@ variable set.
 
 sub cleanup_registration {
     # Remove registration from the system
-    assert_script_run 'SUSEConnect --cleanup';
+    assert_script_run "SUSEConnect $debug_flag --cleanup";
     # Define proxy SCC if provided
     my $proxyscc = get_var('SCC_URL');
     assert_script_run "echo \"url: $proxyscc\" > /etc/SUSEConnect" if $proxyscc;
@@ -284,10 +291,10 @@ SUSEConnect --url with SMT/RMT server.
 
 sub register_product {
     if (get_var('SMT_URL')) {
-        assert_script_run('SUSEConnect --url ' . get_var('SMT_URL') . ' ' . uc(get_var('SLE_PRODUCT')) . '/' . scc_version(get_var('HDDVERSION')) . '/' . get_var('ARCH'), 200);
+        assert_script_run("SUSEConnect  $debug_flag --url " . get_var('SMT_URL') . ' ' . uc(get_var('SLE_PRODUCT')) . '/' . scc_version(get_var('HDDVERSION')) . '/' . get_var('ARCH'), 200);
     } else {
         my $scc_reg_code = is_sles4sap ? get_required_var('SCC_REGCODE_SLES4SAP') : get_required_var('SCC_REGCODE');
-        assert_script_run('SUSEConnect -r ' . $scc_reg_code, 200);
+        assert_script_run("SUSEConnect  $debug_flag -r " . $scc_reg_code, 200);
     }
 }
 
@@ -310,7 +317,11 @@ sub register_addons_cmd {
                 add_suseconnect_product($name, $ver[0], undef, undef, 300, $retry);
             }
             elsif (grep(/$name/, keys %ADDONS_REGCODE)) {
-                add_suseconnect_product($name, undef, undef, "-r " . $ADDONS_REGCODE{$name}, 300, $retry);
+                my $opt = "";
+                if (is_sle("=15-SP4")) {
+                    $opt = " --auto-agree-with-licenses";
+                }
+                add_suseconnect_product($name, undef, undef, "-r " . $ADDONS_REGCODE{$name} . $opt, 300, $retry);
                 if ($name =~ /we/) {
                     zypper_call("--gpg-auto-import-keys ref");
                     add_suseconnect_product($name, undef, undef, "-r " . $ADDONS_REGCODE{$name}, 300, $retry);
@@ -337,6 +348,10 @@ sub register_addons {
         push @addons_with_code, 'we' unless (check_var('SLE_PRODUCT', 'sled'));
         # HA doesn't need code on SLES4SAP or in migrations to 12-SP5
         push @addons_with_code, 'ha' unless (check_var('SLE_PRODUCT', 'sles4sap') || (is_sle('12-sp5+') && get_var('UPGRADE') && !get_var('IN_PATCH_SLE')));
+        if ($addon eq 'we' && get_var('BETA_WE')) {
+            accept_license;
+            send_key $cmd{next};
+        }
         if ((my $regcode = get_var("SCC_REGCODE_$uc_addon")) or ($addon eq "ltss")) {
             # skip addons which doesn't need to input scc code
             next unless grep { $addon eq $_ } @addons_with_code;
@@ -449,7 +464,7 @@ sub process_scc_register_addons {
     # nvidia- NVIDIA Compute Module
     if (get_var('SCC_ADDONS')) {
         if (check_screen('scc-beta-filter-checkbox', 5)) {
-            if (is_sle('12-SP3+')) {
+            if (is_sle('12-SP3+') || is_sle_micro) {
                 # Uncheck 'Hide Beta Versions'
                 # The workaround with send_key_until_needlematch is added,
                 # because on ppc64le the shortcut key does not reach VM sporadically.
@@ -501,7 +516,8 @@ sub process_scc_register_addons {
                 send_key_until_needlematch "scc-module-$addon-selected", "down", ADDONS_COUNT;
             }
         }
-        wait_screen_change { send_key $cmd{next} };    # all addons selected
+        if (is_ppc64le && is_qemu) { wait_still_screen 5; }
+        wait_screen_change(sub { send_key $cmd{next} }, 30, similarity_level => 35);    # all addons selected
         wait_still_screen 2;
         # Process addons licenses
         accept_addons_license @scc_addons;
@@ -589,6 +605,7 @@ sub process_scc_register_addons {
         }
     }
     else {
+        wait_still_screen(2, 4);
         send_key $cmd{next};
         if (check_var('HDDVERSION', '12')) {
             assert_screen 'yast-scc-emptypkg';
@@ -779,7 +796,7 @@ sub yast_scc_registration {
     # For Aarch64 if the worker run with heavy loads, it will
     # timeout in nearly 120 seconds. So we set it to 150. Same
     # for s390 since timeout happen.
-    assert_screen('scc-registration', timeout => (is_aarch64 || is_s390x) ? 150 : 90,);
+    assert_screen('scc-registration', timeout => (is_aarch64 || is_s390x) ? 150 : 120,);
     fill_in_registration_data;
     wait_serial("$module_name-0", 150) || die "yast scc failed";
     # To check repos validity after registration, call 'validate_repos' as needed
@@ -819,14 +836,14 @@ sub get_addon_fullname {
         hpcm => 'sle-module-hpc',
         legacy => 'sle-module-legacy',
         lgm => 'sle-module-legacy',
-        ltss => 'SLES-LTSS',
+        ltss => is_hpc('15+') ? 'SLE_HPC-LTSS' : 'SLES-LTSS',
         pcm => 'sle-module-public-cloud',
         rt => 'SUSE-Linux-Enterprise-RT',
         sapapp => 'sle-module-sap-applications',
         script => 'sle-module-web-scripting',
+        wsm => 'sle-module-web-scripting',
         serverapp => 'sle-module-server-applications',
         tcm => is_sle('15+') ? 'sle-module-development-tools' : 'sle-module-toolchain',
-        wsm => 'sle-module-web-scripting',
         python2 => 'sle-module-python2',
         python3 => 'sle-module-python3',
         phub => 'PackageHub',
@@ -898,25 +915,21 @@ sub scc_deregistration {
         quit_packagekit;
         wait_for_purge_kernels;
         assert_script_run('SUSEConnect --version');
-        if ((check_var('UPGRADE_TARGET_VERSION', '15-SP3')) && (is_sle('15-SP1+'))) {
-            # Workaround for bsc#1189543, need register python2 before de-register system
-            record_soft_failure 'bsc#1189543 - Stale python2 module blocks de-registration after system migration';
-            add_suseconnect_product('sle-module-python2');
-        }
-        my $deregister_ret = script_run('SUSEConnect --de-register --debug > /tmp/SUSEConnect.debug 2>&1', 300);
+        # We don't need to pass $debug_flag to SUSEConnect, because it's already set
+        my $deregister_ret = script_run("SUSEConnect --de-register --debug > /tmp/SUSEConnect.debug 2>&1", 300);
         if ($deregister_ret) {
             # See git blame for previous workarounds.
             upload_logs "/tmp/SUSEConnect.debug";
             die "SUSEConnect --de-register returned error code $deregister_ret";
         }
-        my $output = script_output 'SUSEConnect -s';
+        my $output = script_output "SUSEConnect $debug_flag -s";
         die "System is still registered" unless $output =~ /Not Registered/;
         save_screenshot;
     }
     else {
         assert_script_run("zypper removeservice `zypper services --show-enabled-only --sort-by-name | awk {'print\$5'} | sed -n '1,2!p'`");
         assert_script_run('rm /etc/zypp/credentials.d/* /etc/SUSEConnect');
-        my $output = script_output 'SUSEConnect -s';
+        my $output = script_output "SUSEConnect $debug_flag -s";
         die "System is still registered" unless $output =~ /Not Registered/;
         save_screenshot;
     }

@@ -14,11 +14,16 @@ use Utils::Backends;
 use autotest;
 use LTP::WhiteList;
 use LTP::TestInfo 'testinfo';
-use version_utils qw(is_jeos is_openstack is_rt);
+use version_utils qw(is_jeos is_released is_sle is_leap is_tumbleweed is_rt is_transactional);
 use File::Basename 'basename';
 use Utils::Architectures;
+use repo_tools 'add_qa_head_repo';
+use utils;
+use kernel 'get_kernel_flavor';
 
 our @EXPORT = qw(
+  check_kernel_taint
+  export_ltp_env
   get_ltproot
   get_ltp_openposix_test_list_file
   get_ltp_version_file
@@ -29,6 +34,10 @@ our @EXPORT = qw(
   schedule_tests
   shutdown_ltp
   want_ltp_32bit
+  add_ltp_repo
+  get_default_pkg
+  install_from_repo
+  prepare_whitelist_environment
 );
 
 sub loadtest_kernel {
@@ -55,7 +64,7 @@ sub shutdown_ltp {
 }
 
 sub want_ltp_32bit {
-    my $pkg = shift // get_var('LTP_PKG');
+    my $pkg = shift // get_var('LTP_PKG', '');
 
     # TEST is for running 32bit tests (e.g. ltp_syscalls_m32), checking
     # LTP_PKG is for install_ltp.pm which also uses prepare_ltp_env()
@@ -85,7 +94,7 @@ sub get_ltp_version_file {
 sub log_versions {
     my $report_missing_config = shift;
     my $kernel_pkg = is_jeos || get_var('KERNEL_BASE') ? 'kernel-default-base' :
-      (is_rt ? 'kernel-rt' : 'kernel-default');
+      (is_rt ? 'kernel-rt' : get_kernel_flavor);
     my $kernel_pkg_log = '/tmp/kernel-pkg.txt';
     my $ver_linux_log = '/tmp/ver_linux_before.txt';
     my $kernel_config = script_output('for f in "/boot/config-$(uname -r)" "/usr/lib/modules/$(uname -r)/config" /proc/config.gz; do if [ -f "$f" ]; then echo "$f"; break; fi; done');
@@ -132,11 +141,17 @@ sub log_versions {
     script_run('aa-enabled; aa-status');
 }
 
+sub export_ltp_env {
+    my $ltp_env = get_var('LTP_ENV');
+
+    if ($ltp_env) {
+        $ltp_env =~ s/,/ /g;
+        script_run("export $ltp_env");
+    }
+}
 
 # Set up basic shell environment for running LTP tests
 sub prepare_ltp_env {
-    my $ltp_env = get_var('LTP_ENV');
-
     assert_script_run('export LTPROOT=' . get_ltproot() . '; export LTP_COLORIZE_OUTPUT=n TMPDIR=/tmp PATH=$LTPROOT/testcases/bin:$PATH');
 
     # setup for LTP networking tests
@@ -147,12 +162,59 @@ sub prepare_ltp_env {
         assert_script_run("lsblk -la; export LTP_BIG_DEV=$block_dev");
     }
 
-    if ($ltp_env) {
-        $ltp_env =~ s/,/ /g;
-        script_run("export $ltp_env");
+    export_ltp_env;
+    assert_script_run('cd $LTPROOT/testcases/bin');
+}
+
+sub check_kernel_taint {
+    my ($testmod, $softfail) = @_;
+
+    my @flag_desc = (
+        undef,    # proprietary module, ignore
+        'Module was force loaded',
+        'Kernel running on out of specification system',
+        'Module was force unloaded',
+        'Processor reported Machine Check Exception (MCE)',
+        'Bad page referenced or unexpected page flags',
+        'Taint requested by userspace application',
+        'Kernel died recently (OOPS or BUG)',
+        'ACPI table overridden by user',
+        'Kernel issued warning',
+        'Staging driver was loaded',
+        undef,    # platform firmware bug workaround, ignore
+        undef,    # out-of-tree module, ignore
+        'Unsigned module was loaded',
+        'Soft lockup occurred',
+        undef,    # livepatch, ignore
+        'Auxiliary taint',
+        undef,    # kernel built with struct randomization, ignore
+        'In-kernel test has been run'
+    );
+    my $flag = 1;
+    my @taint;
+
+    my $taint_val = script_output('cat /proc/sys/kernel/tainted');
+
+    for my $desc (@flag_desc) {
+        push @taint, "- $desc" if defined($desc) && $flag & $taint_val;
+        $flag <<= 1;
     }
 
-    assert_script_run('cd $LTPROOT/testcases/bin');
+    push @taint, '- Unknown tainted state' if $taint_val >= $flag;
+    my $message = sprintf("Kernel taint: 0x%x", $taint_val);
+
+    unless (@taint) {
+        $testmod->record_resultfile('Kernel taint OK', "$message (OK)",
+            result => 'ok');
+    }
+    elsif ($softfail) {
+        $testmod->record_soft_failure_result("$message:\n" . join("\n", @taint));
+    }
+    else {
+        $testmod->record_resultfile('Kernel tainted',
+            "$message\n" . join("\n", @taint), result => 'fail');
+        $testmod->{result} = 'fail';
+    }
 }
 
 sub init_ltp_tests {
@@ -238,18 +300,7 @@ sub schedule_tests {
         format => 'result_array:v2',
         environment => {},
         results => []};
-    my $environment = {
-        product => get_var('DISTRI') . ':' . get_var('VERSION'),
-        revision => get_var('BUILD'),
-        flavor => get_var('FLAVOR'),
-        arch => get_var('ARCH'),
-        backend => get_var('BACKEND'),
-        kernel => '',
-        libc => '',
-        gcc => '',
-        harness => 'SUSE OpenQA',
-        ltp_version => ''
-    };
+    my $environment = prepare_whitelist_environment();
 
     my $ver_linux_out = script_output("cat /tmp/ver_linux_before.txt");
     if ($ver_linux_out =~ qr'^Linux C Library\s*>?\s*(.*?)\s*$'m) {
@@ -277,7 +328,11 @@ sub schedule_tests {
 
     parse_runfiles($cmd_file, $test_result_export, $suffix);
 
-    if (check_var('KGRAFT', 1) && check_var('UNINSTALL_INCIDENT', 1)) {
+    if (check_var('KGRAFT', 1) && check_var('KGRAFT_DOWNGRADE', 1)) {
+        loadtest_kernel 'klp_downgrade';
+        parse_runfiles($cmd_file, $test_result_export, $suffix . '_postun');
+    }
+    elsif (check_var('KGRAFT', 1) && check_var('UNINSTALL_INCIDENT', 1)) {
         loadtest_kernel 'uninstall_incident';
         parse_runfiles($cmd_file, $test_result_export, $suffix . '_postun');
     }
@@ -350,6 +405,91 @@ sub parse_runfiles {
                 $cmd_pattern, $cmd_exclude, $test_result_export, $suffix);
         }
     }
+}
+
+sub add_ltp_repo {
+    my $repo = get_var('LTP_REPOSITORY');
+
+    if (!$repo) {
+        if (is_sle || is_transactional) {
+            add_qa_head_repo;
+            return;
+        }
+
+        # ltp for leap15.2 is available only x86_64
+        if (is_leap('15.4+')) {
+            $repo = get_var('VERSION');
+        } elsif ((is_leap('=15.2') && is_x86_64) || is_leap('15.3+')) {
+            $repo = sprintf("openSUSE_Leap_%s", get_var('VERSION'));
+        } elsif (is_tumbleweed) {
+            $repo = "openSUSE_Factory";
+            $repo = "openSUSE_Factory_ARM" if (is_aarch64() || is_arm());
+            $repo = "openSUSE_Factory_PowerPC" if is_ppc64le();
+            $repo = "openSUSE_Factory_RISCV" if is_riscv();
+            $repo = "openSUSE_Factory_zSystems" if is_s390x();
+        } else {
+            die sprintf("Unexpected combination of version (%s) and architecture (%s) used", get_var('VERSION'), get_var('ARCH'));
+        }
+        $repo = "https://download.opensuse.org/repositories/benchmark:/ltp:/devel/$repo/";
+    }
+
+    zypper_ar($repo, name => 'ltp_repo');
+}
+
+sub get_default_pkg {
+    my @packages;
+
+    if (is_sle && is_released) {
+        push @packages, 'ltp-stable';
+        push @packages, 'ltp-stable-32bit' if is_x86_64;
+    } else {
+        push @packages, 'ltp';
+        push @packages, 'ltp-32bit' if is_x86_64 && !is_jeos;
+    }
+
+    return join(' ', @packages);
+}
+
+sub install_from_repo {
+    # Workaround for kernel-64kb, until we add multibuild support to LTP package
+    # Lock kernel-default to don't pull it as LTP dependency
+    zypper_call 'al kernel-default' if get_kernel_flavor eq 'kernel-64kb';
+
+    my @pkgs = split(/\s* \s*/, get_var('LTP_PKG', get_default_pkg));
+
+    if (is_transactional) {
+        assert_script_run("transactional-update -n -c pkg install --recommends " . join(' ', @pkgs), 180);
+    } else {
+        zypper_call("in --recommends " . join(' ', @pkgs));
+    }
+
+    my $run_cmd = is_transactional ? 'transactional-update -c -d --quiet run' : '';
+    for my $pkg (@pkgs) {
+        my $want_32bit = want_ltp_32bit($pkg);
+
+        record_info("LTP pkg: $pkg", script_output("$run_cmd rpm -qi $pkg | tee "
+                  . get_ltp_version_file($want_32bit)));
+        assert_script_run "find " . get_ltproot($want_32bit) .
+          q(/testcases/bin/openposix/conformance/interfaces/ -name '*.run-test' > )
+          . get_ltp_openposix_test_list_file($want_32bit);
+    }
+}
+
+sub prepare_whitelist_environment {
+    my $environment = {
+        product => get_var('DISTRI') . ':' . get_var('VERSION'),
+        revision => get_var('BUILD'),
+        flavor => get_var('FLAVOR'),
+        arch => get_var('ARCH'),
+        backend => get_var('BACKEND'),
+        kernel => '',
+        libc => '',
+        gcc => '',
+        harness => 'SUSE OpenQA',
+        ltp_version => ''
+    };
+
+    return $environment;
 }
 
 1;

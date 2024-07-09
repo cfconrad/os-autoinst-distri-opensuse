@@ -37,6 +37,7 @@ our @EXPORT = qw(
   expand_version
   adjust_network_conf
   expand_variables
+  adjust_user_password
   upload_profile
   inject_registration
   init_autoyast_profile
@@ -69,7 +70,7 @@ sub expand_patterns {
             my @sle12;
             push @sle12, qw(Minimal apparmor base documentation) if check_var('DESKTOP', 'textmode');
             push @sle12, qw(Minimal apparmor base x11 documentation gnome-basic) if check_var('DESKTOP', 'gnome');
-            push @sle12, qw(desktop-base desktop-gnome) if get_var('SCC_ADDONS') =~ m/we/;
+            push @sle12, qw(desktop-base desktop-gnome) if get_var('SCC_ADDONS', '') =~ m/we/;
             push @sle12, qw(yast2) if is_sle('>=12-sp3');
             push @sle12, qw(32bit) if !is_aarch64 && get_var('DESKTOP') =~ /gnome|textmode/;
             return [@sle12];
@@ -170,6 +171,28 @@ sub expand_addons {
     return \%addons;
 }
 
+=head2 expand_extra_repos
+
+ expand_extra_repo();
+
+Returns array of hashes of all C<EXTRA_CUSTOMER_REPOS> with repo name and url.
+
+  e.g. from EXTRA_CUSTOMER_REPOS
+  15-SP4-TERADATA-Updates;http://dist.suse.de/ibs/SUSE/Updates/SLE-Product-SLES/15-SP4-TERADATA/x86_64/update/
+
+=cut
+
+sub expand_extra_repos {
+    my @extra_repos;
+    my @name_repo = split(/,/, get_var('EXTRA_CUSTOMER_REPOS', ''));
+
+    for my $name_repo (@name_repo) {
+        my @part = split(/;/, $name_repo);
+        push @extra_repos, {name => $part[0], url => $part[1]};
+    }
+    return [@extra_repos];
+}
+
 =head2 expand_template
 
  expand_template($profile);
@@ -183,13 +206,19 @@ $profile is the autoyast profile 'autoinst.xml'.
 sub expand_template {
     my ($profile) = @_;
     my $template = Mojo::Template->new(vars => 1);
-    set_var('MAINT_TEST_REPO', get_var('INCIDENT_REPO')) if get_var('INCIDENT_REPO');
+    # kernel incidents use special test module to install the update, install
+    # only the last released version
+    set_var('MAINT_TEST_REPO', get_var('INCIDENT_REPO'))
+      if get_var('INCIDENT_REPO') && get_var('FLAVOR', '') !~ m/Incidents-Kernel/;
     my $vars = {
         addons => expand_addons,
         repos => [split(/,/, get_var('MAINT_TEST_REPO', ''))],
+        extra_repos => expand_extra_repos,
         patterns => expand_patterns,
         # pass reference to get_required_var function to be able to fetch other variables
-        get_var => \&get_required_var,
+        get_required_var => \&get_required_var,
+        # pass reference to get_var function to be able to fetch other variables
+        get_var => \&get_var,
         # pass reference to check_var
         check_var => \&check_var,
         is_ltss => get_var('SCC_REGCODE_LTSS') ? '1' : '0'
@@ -676,7 +705,7 @@ sub expand_variables {
     # Expand other variables
     my @vars = qw(SCC_REGCODE SCC_REGCODE_HA SCC_REGCODE_GEO SCC_REGCODE_HPC
       SCC_REGCODE_LTSS SCC_REGCODE_WE SCC_URL ARCH LOADER_TYPE NTP_SERVER_ADDRESS
-      REPO_SLE_MODULE_DEVELOPMENT_TOOLS);
+      REPO_SLE_MODULE_DEVELOPMENT_TOOLS SCC_REGCODE_LIVE);
     # Push more variables to expand from the job setting
     my @extra_vars = push @vars, split(/,/, get_var('AY_EXPAND_VARS', ''));
     if (get_var 'SALT_FORMULAS_PATH') {
@@ -691,6 +720,26 @@ sub expand_variables {
         next unless my ($value) = get_var($var);
         $profile =~ s/\{\{$var\}\}/$value/g;
     }
+    return $profile;
+}
+
+=head2 adjust_user_password
+
+ adjust_user_password($profile);
+
+ Password is defined at first, see lib/main_common.pm like below:
+ ---
+ $testapi::password = "xxxxxx";
+ $testapi::password = get_var("PASSWORD") if defined get_var("PASSWORD");
+ ---
+
+ $profile is the autoyast profile 'autoinst.xml'.
+
+=cut
+
+sub adjust_user_password {
+    my ($profile) = @_;
+    $profile =~ s/\{\{PASSWORD\}\}/$testapi::password/g;
     return $profile;
 }
 
@@ -819,6 +868,7 @@ Get profile from autoyast template
 Map version names
 Get IP address from system variables
 Get values from SCC_REGCODE SCC_REGCODE_HA SCC_REGCODE_GEO SCC_REGCODE_HPC SCC_URL ARCH LOADER_TYPE
+Adjust user password
 Modify profile with obtained values
 Return new path in case of using AutoYaST templates
 
@@ -840,6 +890,7 @@ sub prepare_ay_file {
     $profile = expand_version($profile);
     $profile = adjust_network_conf($profile);
     $profile = expand_variables($profile);
+    $profile = adjust_user_password($profile);
 
     if (check_var('IPXE', '1')) {
         $path = get_required_var('SUT_IP') . $path;

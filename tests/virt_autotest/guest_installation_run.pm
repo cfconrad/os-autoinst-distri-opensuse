@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2012-2016 SUSE LLC
+# Copyright 2012-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: guest_installation_run: This test is used to verify if different products can be installed successfully as guest on specify host.
@@ -11,12 +11,17 @@ use strict;
 use warnings;
 use testapi;
 use Utils::Architectures;
+use Utils::Backends 'use_ssh_serial_console';
+use ipmi_backend_utils;
 use virt_utils;
+use virt_autotest::utils;
 
 sub get_script_run {
     my $pre_test_cmd = "";
     if (is_s390x) {
-        $pre_test_cmd = "/usr/share/qa/tools/test_virtualization-virt_install_withopt-run";
+        #Use pipefail to keep the correct returns from test_virtualization-virt_install_withopt-run
+        $pre_test_cmd = "set -o pipefail;";
+        $pre_test_cmd .= "/usr/share/qa/tools/test_virtualization-virt_install_withopt-run";
     }
     else {
         my $prd_version = script_output("cat /etc/issue");
@@ -31,8 +36,9 @@ sub get_script_run {
     handle_sp_in_settings_with_fcs("GUEST_PATTERN");
     my $guest_pattern = get_var('GUEST_PATTERN', 'sles-12-sp2-64-[p|f]v-def-net');
     my $parallel_num = get_var("PARALLEL_NUM", "2");
-
-    $pre_test_cmd = $pre_test_cmd . " -f " . $guest_pattern . " -n " . $parallel_num . " -r ";
+    my ($regcode, $regcode_ltss) = get_guest_regcode(separator => '|');
+    $pre_test_cmd .= " -f \"" . $guest_pattern . "\" -n " . $parallel_num . " -r " . " -e \"" . $regcode . "\" -E \"" . $regcode_ltss . "\"";
+    $pre_test_cmd .= " 2>&1 | tee /tmp/s390x_guest_install_test.log" if (is_s390x);
 
     return $pre_test_cmd;
 }
@@ -64,6 +70,12 @@ sub post_execute_script_assertion {
 sub run {
     my $self = shift;
 
+    # Only for x86_64
+    if (is_x86_64) {
+        select_console 'sol', await_console => 0;
+        use_ssh_serial_console;
+    }
+
     # Add option to keep guest after successful installation
     # Only for x86_64 now
     if (is_x86_64) {
@@ -87,6 +99,12 @@ sub run {
     }
 
     $self->run_test(7600, "", "yes", "yes", "/var/log/qa/", "guest-installation-logs", $upload_guest_assets_flag);
+    #upload testing logs for s390x guest installation test
+    if (is_s390x) {
+        #upload s390x_guest_install_test.log
+        upload_asset("/tmp/s390x_guest_install_test.log", 1, 1);
+        lpar_cmd("rm -r /tmp/s390x_guest_install_test.log");
+    }
 }
 
 1;

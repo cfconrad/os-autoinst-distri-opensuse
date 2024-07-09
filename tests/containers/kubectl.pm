@@ -1,11 +1,11 @@
 # SUSE's openQA tests
 #
-# Copyright 2022 SUSE LLC
+# Copyright 2022-2023 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: Test the kubectl utility
 #
-# Maintainer: qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use base 'consoletest';
 use strict;
@@ -81,8 +81,8 @@ sub run {
     ## Test jobs
     record_info('Testing: jobs and pods', 'job and pod test runs');
     # The testing.registry must be registered in k8s as private registry and point to REGISTRY variable.
-    assert_script_run("kubectl create job sayhello --image=testing.registry/library/alpine -- echo 'Hello World'");
-    assert_script_run("kubectl create job gimme-date --image=testing.registry/library/busybox -- date");
+    assert_script_run("kubectl create job sayhello --image=registry.opensuse.org/opensuse/busybox -- echo 'Hello World'");
+    assert_script_run("kubectl create job gimme-date --image=registry.opensuse.org/opensuse/busybox -- date");
     validate_script_output("kubectl get jobs --no-headers", qr/sayhello/);
     validate_script_output("kubectl get jobs --no-headers", qr/gimme-date/);
     assert_script_run('kubectl wait jobs/sayhello --for=condition=complete --timeout=300s', timeout => 330);

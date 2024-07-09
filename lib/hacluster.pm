@@ -11,14 +11,14 @@ use base Exporter;
 use Exporter;
 use strict;
 use warnings;
-use version_utils 'is_sle';
-use Scalar::Util 'looks_like_number';
+use version_utils qw(is_sle);
+use Scalar::Util qw(looks_like_number);
 use utils;
 use testapi;
 use lockapi;
 use isotovideo;
-use x11utils 'ensure_unlocked_desktop';
-use Utils::Logging 'export_logs';
+use x11utils qw(ensure_unlocked_desktop);
+use Utils::Logging qw(export_logs);
 use Carp qw(croak);
 use Data::Dumper;
 
@@ -34,6 +34,7 @@ our @EXPORT = qw(
   $pcmk_delay_max
   exec_csync
   add_file_in_csync
+  get_cluster_info
   get_cluster_name
   get_hostname
   get_ip
@@ -73,9 +74,14 @@ our @EXPORT = qw(
   activate_ntp
   script_output_retry_check
   calculate_sbd_start_delay
+  setup_sbd_delay
+  set_sbd_service_timeout
   collect_sbd_delay_parameters
   check_iscsi_failure
   cluster_status_matches_regex
+  crm_wait_for_maintenance
+  crm_check_resource_location
+  generate_lun_list
 );
 
 =head1 SYNOPSIS
@@ -96,6 +102,16 @@ Extension (HA or HAE) tests.
 =item * B<$softdog_timeout>: default scaled timeout for the B<softdog> watchdog
 
 =item * B<$crm_mon_cmd>: crm_mon (crm monitoring) command
+
+=item * B<$corosync_token>: command to filter the value of C<runtime.config.totem.token> from the output of C<corosync-cmapctl>
+
+=item * B<$corosync_consensus>: command to filter the value of C<runtime.config.totem.consensus> from the output of C<corosync-cmapctl>
+
+=item * B<$sbd_watchdog_timeout>: command to extract the value of C<SBD_WATCHDOG_TIMEOUT> from C</etc/sysconfig/sbd>
+
+=item * B<$sbd_delay_start>: command to extract the value of C<SBD_DELAY_START> from C</etc/sysconfig/sbd>
+
+=item * B<$pcmk_delay_max>: command to get the value of the C<pcmd_delay_max> parameter from the STONITH resource in the cluster configuration.
 
 =back
 
@@ -169,6 +185,21 @@ sub add_file_in_csync {
     }
 
     return 1;
+}
+
+=head2 get_cluster_info
+
+get_cluster_info();
+
+Returns a hashref containing the info parsed from the CLUSTER_INFOS variable.
+This does not reflect the current state of the cluster but the intended steady
+state once the LUNs are configured and the nodes have joined.
+
+=cut
+
+sub get_cluster_info {
+    my ($cluster_name, $num_nodes, $num_luns) = split(/:/, get_required_var('CLUSTER_INFOS'));
+    return {cluster_name => $cluster_name, num_nodes => $num_nodes, num_luns => $num_luns};
 }
 
 =head2 get_cluster_name
@@ -600,8 +631,7 @@ sub ha_export_logs {
     upload_logs('/tmp/crm.txt');
 
     # Extract YaST logs and upload them
-    script_run 'save_y2logs /tmp/y2logs.tar.bz2', 120;
-    upload_logs('/tmp/y2logs.tar.bz2', failok => 1);
+    upload_y2logs(failok => 1);
 
     # Generate the packages list
     script_run "rpm -qa > $packages_list";
@@ -616,7 +646,14 @@ sub ha_export_logs {
     upload_logs($mdadm_conf, failok => 1);
 
     # supportconfig
-    script_run "supportconfig -g -B $clustername", 300;
+    my $ret = script_run "supportconfig -g -B $clustername", 300, die_on_timeout => 0;
+    # Make it softfail for not blocking qem bot auto approvals on 12-SP5
+    # Command 'supportconfig' hangs on 12-SP5, script_run timed out and returned 'undef'
+    if (!defined($ret) && is_sle("=12-SP5")) {
+        record_soft_failure 'poo#151612';
+        # Send 'ctrl-c' to kill 'supportconfig' as it hangs
+        send_key('ctrl-c');
+    }
     upload_logs("/var/log/scc_$clustername.tgz", failok => 1);
 
     # pacemaker cts log
@@ -637,12 +674,24 @@ sub ha_export_logs {
 
  check_cluster_state( [ proceed_on_failure => 1 ] );
 
-Check state of the cluster. This will call B<$crm_mon_cmd> to check the current
-status of the cluster, check for inactive resources and for S<partition with quorum>
-in the output of B<$crm_mon_cmd>, check the reported number of nodes in the output
-of C<crm node list> and B<$crm_mon_cmd> is the same and run C<crm_verify -LV>.
+Checks the state of the cluster. Calls B<$crm_mon_cmd> and inspects its output checking:
 
-With the named argument B<proceed_on_failure> set to 1, the method will use
+=over 3
+
+=item The current state of the cluster.
+
+=item Inactive resources.
+
+=item S<partition with quorum>
+
+=back
+
+Checks that the reported number of nodes in the output of C<crm node list> and B<$crm_mon_cmd>
+is the same.
+
+And runs C<crm_verify -LV>.
+
+With the named argument B<proceed_on_failure> set to 1, the function will use
 B<script_run()> and attempt to run all commands in SUT without checking for errors.
 Without it, the method uses B<assert_script_run()> and will croak on failure.
 
@@ -655,7 +704,11 @@ sub check_cluster_state {
     my $cmd = (defined $args{proceed_on_failure} && $args{proceed_on_failure} == 1) ? \&script_run : \&assert_script_run;
 
     $cmd->("$crm_mon_cmd");
-    $cmd->("$crm_mon_cmd | grep -i 'no inactive resources'") if is_sle '12-sp3+';
+    if (is_sle '12-sp3+') {
+        # Add sleep as command 'crm_mon' outputs 'Inactive resources:' instead of 'no inactive resources' on 12-sp5
+        sleep 5;
+        $cmd->("$crm_mon_cmd | grep -i 'no inactive resources'");
+    }
     $cmd->('crm_mon -1 | grep \'partition with quorum\'');
     # In older versions, node names in crm node list output are followed by ": normal". In newer ones by ": member"
     $cmd->(q/crm_mon -s | grep "$(crm node list | grep -E -c ': member|: normal') nodes online"/);
@@ -754,7 +807,7 @@ sub wait_until_resources_started {
 
  wait_for_idle_cluster( [ timeout => $timeout ] );
 
-Use `cs_wait_for_idle` to wait until the cluster is idle before continuing the tests.
+Use C<cs_wait_for_idle> to wait until the cluster is idle before continuing the tests.
 Supply a timeout with the named argument B<timeout> (defaults to 120 seconds). This
 timeout is scaled by the factor specified in the B<TIMEOUT_SCALE> setting. Croaks on
 timeout.
@@ -986,14 +1039,18 @@ sub activate_ntp {
 
   script_output_retry_check(cmd=>$cmd, regex_string=>$regex_sring, [retry=>$retry, sleep=>$sleep, ignore_failure=>$ignore_failure]);
 
-Executes command via 'script_output' subroutine and makes a sanity check against a regular expression. Command output is returned
-after success, otherwise the command is retried defined number of times. Test dies after last unsuccessfull retry.
+Executes command via C<script_output> subroutine and makes a sanity check against a regular expression. Command output is returned
+after success, otherwise the command is retried a defined number of times. Test dies after last unsuccessfull retry.
 
-C<$cmd> command being executed.
-C<$regex_string> regular expression to check output against.
-C<$retry> number of retries. Defaults to C<5>.
-C<$sleep> sleep time between retries. Defaults to C<10s>.
-C<$ignore_failure> do not kill the test upon failure.
+B<$cmd> command being executed.
+
+B<$regex_string> regular expression to check output against.
+
+B<$retry> number of retries. Defaults to C<5>.
+
+B<$sleep> sleep time between retries. Defaults to C<10s>.
+
+B<$ignore_failure> do not kill the test upon failure.
 
   Example: script_output_retry_check(cmd=>'hostname', regex_string=>'^node01$', retry=>'100', sleep=>'60', ignore_failure=>'1');
 
@@ -1007,6 +1064,11 @@ sub script_output_retry_check {
     my $sleep = $args{sleep} // 10;
     my $ignore_failure = $args{ignore_failure} // "0";
     my $result;
+
+    # Get rid of args irrelevant to script_output
+    foreach my $key (keys %args) {
+        delete $args{$key} unless grep { $_ eq $key } qw(timeout wait type_command proceed_on_failure quiet);
+    }
 
     foreach (1 .. $retry) {
         $result = script_output($cmd, %args);
@@ -1022,9 +1084,12 @@ sub script_output_retry_check {
 
 =head2 collect_sbd_delay_parameters
 
-  script_output_retry_check();
+  collect_sbd_delay_parameters();
 
-Collects parameters required from SUT and returns them in HASH format.
+Collects a series of SBD parameters from the SUT and returns them in a HASH format. Commands are
+collected from C</etc/sysconfig/sbd> or by filtering the output of C<corosync-cmapctl>. Due to
+possible race conditions, all these parameters are collected using the helper function
+C<script_output_retry_check> also defined in this library.
 
 =cut
 
@@ -1052,23 +1117,27 @@ sub collect_sbd_delay_parameters {
   calculate_sbd_start_delay(\%sbd_parameters);
 
 Calculates start time delay after node is fenced.
-Prevents cluster failure if fenced node restarts too quickly.
-Delay time is used either if specified in sbd config variable "SBD_DELAY_START"
-or calculated:
-"corosync token timeout + consensus timeout + pcmk_delay_max + msgwait"
-Variables 'corosync_token' and 'corosync_consensus' are converted to seconds.
+This delay time is used as a wait time after a node fence to prevent
+cluster failures in cases where the fenced node restarts too quickly.
+Delay time is used either if specified in sbd config variable B<SBD_DELAY_START>
+or calculated by the formula:
+
+corosync token timeout + consensus timeout + pcmk_delay_max + msgwait
+
+Variables B<corosync_token> and B<corosync_consensus> are converted to seconds.
 For diskless SBD pcmk_delay_max is set to static 30s.
 
-%sbd_parameters = {
-    'corosync_token' => <runtime.config.totem.token>,
-    'corosync_consensus' => <runtime.config.totem.consensus>,
-    'sbd_watchdog_timeout' => <SBD_WATCHDOG_TIMEOUT>,
-    'sbd_delay_start' => <SBD_DELAY_START>,
-    'pcmk_delay_max' => <pcmk_delay_max>
-}
+  %sbd_parameters = {
+      'corosync_token' => <runtime.config.totem.token>,
+      'corosync_consensus' => <runtime.config.totem.consensus>,
+      'sbd_watchdog_timeout' => <SBD_WATCHDOG_TIMEOUT>,
+      'sbd_delay_start' => <SBD_DELAY_START>,
+      'pcmk_delay_max' => <pcmk_delay_max>
+  }
 
 If C<%sbd_parameters> argument is omitted, then function will
-try to obtain the values from the configuration files.
+try to obtain the values from the configuration files. See
+C<collect_sbd_delay_parameters>
 
 =cut
 
@@ -1110,6 +1179,81 @@ sub calculate_sbd_start_delay {
     return $default_wait;
 }
 
+=head2 setup_sbd_delay
+
+  setup_sbd_delay()
+
+This function configures in the SUT the B<SBD_DELAY_START> parameter in
+C</etc/sysconfig/sbd> to whatever value is supplied in the setting
+B<HA_SBD_START_DELAY>, and then call C<calculate_sbd_start_delay> and
+C<set_sbd_service_timeout> to set the service timeout for the SBD service
+in the SUT. It returns the calculated delay. Will croak if any of the
+commands sent to the SUT fail.
+
+=cut
+
+sub setup_sbd_delay() {
+    my $delay = get_var('HA_SBD_START_DELAY', '');
+
+    if ($delay eq '') {
+        record_info('SBD delay', "Skipping, variable 'HA_SBD_START_DELAY' not defined");
+    }
+    else {
+        $delay =~ s/(?<![ye])s//g;
+        croak("<\$set_delay> value must be either 'yes', 'no' or an integer. Got value: $delay")
+          unless looks_like_number($delay) or grep /^$delay$/, qw(yes no);
+        file_content_replace('/etc/sysconfig/sbd', '^SBD_DELAY_START=.*', "SBD_DELAY_START=$delay");
+        record_info('SBD delay', "SBD delay set to: $delay");
+    }
+    # Calculate currently set delay
+    $delay = calculate_sbd_start_delay();
+
+    # set SBD service timeout to be higher (+30s) that calculated/set delay
+    my $sbd_service_timeout = set_sbd_service_timeout($delay + 30);
+    record_info('sbd.service', "Service start timeout for sbd.service set to: $sbd_service_timeout");
+
+    return ($delay);
+}
+
+=head2 set_sbd_service_timeout
+
+  set_sbd_service_timeout($service_timeout)
+
+Set the service timeout for the SBD service in the SUT to the number of
+seconds passed as argument.
+
+This is accomplished by configuring a systemd override file for the
+SBD service.
+
+If the override file exists, the function will edit it and replace the
+timeout there, otherwise it creates the file from scratch.
+
+=cut
+
+sub set_sbd_service_timeout {
+    my ($service_timeout) = @_;
+    croak "Argument 'service_timeout' not defined" unless defined($service_timeout);
+    croak "Argument 'service_timeout' is not a number" unless looks_like_number($service_timeout);
+    my $service_override_dir = "/etc/systemd/system/sbd.service.d/";
+    my $service_override_filename = "sbd_delay_start.conf";
+    my $service_override_path = $service_override_dir . $service_override_filename;
+
+    # CMD RC is converted to true/false
+    my $file_exists = script_run(join(" ", "test", "-e", $service_override_path, ";echo", "\$?"), quiet => 1) ? 1 : 0;
+
+    if ($file_exists) {
+        file_content_replace($service_override_path, '^TimeoutSec=.*', "TimeoutSec=$service_timeout");
+    }
+    else {
+        my @content = ('[Service]', "TimeoutSec=$service_timeout");
+        assert_script_run(join(" ", "mkdir", "-p", $service_override_dir));
+        assert_script_run(join(" ", "bash", "-c", "\"echo", "'$_'", ">>", $service_override_path, "\"")) foreach @content;
+    }
+    record_info("Systemd SBD", "Systemd unit timeout for 'sbd.service' set to '$service_timeout'");
+
+    return ($service_timeout);
+}
+
 =head2 check_iscsi_failure
 
  check_iscsi_failure();
@@ -1138,14 +1282,16 @@ sub check_iscsi_failure {
     }
 }
 
-=head3 cluster_status_matches_regex
+=head2 cluster_status_matches_regex
 
 Check crm status output against a hardcode regular expression in order to check the cluster health 
+
 =over 1
 
 =item B<SHOW_CLUSTER_STATUS> - Output from 'crm status' command
 
 =back
+
 =cut
 
 sub cluster_status_matches_regex {
@@ -1155,7 +1301,7 @@ sub cluster_status_matches_regex {
     my $previous_line = '';
 
     for my $line (split("\n", $show_cluster_status)) {
-        if ($line =~ /(Stopped:| Stopped|Failed:| Failed|Pending:| Pending|Blocked:| Blocked)/) {
+        if ($line =~ /\s?(stopped|failed|pending|blocked|starting|promoting):?/i) {
             push @resource_list, $previous_line;
             push @resource_list, $line;
         }
@@ -1172,4 +1318,126 @@ sub cluster_status_matches_regex {
     }
 }
 
+=head2 crm_maintenance_status
+
+    crm_maintenance_status();
+
+Check maintenance mode status. Returns true (maintenance active) or false (maintenance inactive).
+Croaks if unknown status is received.
+
+=cut
+
+sub crm_maintenance_status {
+    my $cmd_output = script_output('crm configure show cib-bootstrap-options | grep maintenance-mode');
+    $cmd_output =~ s/\s//g;
+    my $status = (split('=', $cmd_output))[-1];
+    croak "CRM returned unrecognized status: '$status'" unless grep(/^$status$/, ('false', 'true'));
+    return $status;
+}
+
+=head2 crm_wait_for_maintenance
+
+    crm_wait_for_maintenance(target_state=>$target_state, [loop_sleep=>$loop_sleep, timeout=>$timeout]);
+
+Wait for maintenance to be turned on or off. Croaks on timeout.
+
+=over 3
+
+B<target_state> Target state of the maintenance mode (true/false)
+
+B<loop_sleep> Override default sleep value between checks
+
+B<timeout> Override default timeout value
+
+=back
+
+=cut
+
+sub crm_wait_for_maintenance {
+    my (%args) = @_;
+    my $timeout = $args{timeout} // bmwqemu::scale_timeout(30);
+    my $loop_sleep = $args{loop_sleep} // 5;
+
+    croak "Invalid argument value: \$target_state = '$args{'target_state'}'" unless grep(/^$args{'target_state'}$/, ('false', 'true'));
+
+    my $current_status = crm_maintenance_status();
+    my $start_time = time;
+    while ($current_status ne $args{'target_state'}) {
+        $current_status = crm_maintenance_status();
+        croak "Timeout while waiting for maintenance mode: '$args{'target_state'}'" if (time - $start_time > $timeout);
+        sleep $loop_sleep;
+    }
+    record_info("Maintenance", "Maintenance status: $current_status");
+    return $current_status;
+}
+
+=head2 crm_check_resource_location
+
+    crm_check_resource_location(resource=>$resource, [wait_for_target=>$wait_for_target, timeout=>$timeout]);
+
+Checks current resource location, returns hostname of the node. Can be used to wait for desired state Eg: after failover.
+Croaks upon timeout.
+
+=over 3
+
+B<wait_for_target> Target location of the resource specified - physical hostname
+
+B<resource> Resource to check
+
+B<timeout> Override default timeout value
+
+=back
+
+=cut
+
+sub crm_check_resource_location {
+    my (%args) = @_;
+    my $wait_for_target = $args{wait_for_target} // 0;
+    my $timeout = $args{timeout} // bmwqemu::scale_timeout(120);
+    my $cmd = join(' ', "crm resource status", $args{resource}, "| grep 'resource $args{resource} is'"); # Grep to avoid random kernel message appearing in script_output
+    my $out;
+    my $current_location;
+
+    my $start_time = time;
+    while (time < ($start_time + $timeout)) {
+        $out = script_output($cmd);
+        $current_location = (split(': ', $out))[-1];
+        return ($current_location) unless ($wait_for_target);
+        return ($current_location) if $wait_for_target eq $current_location;
+        sleep 5;
+    }
+
+    croak "Test timed out while waiting for resource '$args{resource}' to move to '$wait_for_target'";
+}
+
+=head2 generate_lun_list
+
+    generate_lun_list()
+
+This generates the information that nodes need to use iSCSI. This is stored in
+/tmp/$cluster_name-lun.list where nodes can get it using scp.
+
+
+=cut
+
+sub generate_lun_list {
+    my $target_iqn = script_output('lio_node --listtargetnames 2>/dev/null');
+    my $target_ip_port = script_output("ls /sys/kernel/config/target/iscsi/${target_iqn}/tpgt_1/np 2>/dev/null");
+    my $dev_by_path = '/dev/disk/by-path';
+    my $index = get_var('ISCSI_LUN_INDEX', 0);
+
+    my $cluster_infos = get_cluster_info();
+    my $cluster_name = $cluster_infos->{cluster_name};
+    my $num_luns = $cluster_infos->{num_luns};
+    # Export LUN name if needed
+    if (defined $num_luns) {
+        # Create a file that contains the list of LUN for each cluster
+        my $lun_list_file = "/tmp/$cluster_name-lun.list";
+        foreach (0 .. ($num_luns - 1)) {
+            my $lun_id = $_ + $index;
+            script_run("echo '${dev_by_path}/ip-${target_ip_port}-iscsi-${target_iqn}-lun-${lun_id}' >> $lun_list_file");
+        }
+        $index += $num_luns;
+    }
+}
 1;

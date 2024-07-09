@@ -3,6 +3,16 @@ description:    >
     Kdump kernel testing for various architectures with possibility to change crash
     memory using CRASH_MEMORY variable.
 schedule:
+    - '{{boot}}'
     - boot/boot_to_desktop
     - kernel/kdump
     - shutdown/shutdown
+
+conditional_schedule:
+    boot:
+        BACKEND:
+            spvm:
+                - installation/bootloader
+        ARCH:
+            s390x:
+                - installation/bootloader_zkvm

@@ -167,7 +167,8 @@ sub y2snapper_show_changes_and_delete {
     # Press Show Changes
     send_key "alt-s";
     wait_still_screen(2, 4);
-    assert_screen 'yast2_snapper-unselected_testdata';
+    is_sle('>=15-SP4') ? apply_workaround_poo124652('yast2_snapper-unselected_testdata') : assert_screen('yast2_snapper-unselected_testdata');
+
     if ($ncurses) {
         # Select 1. subvolume (root) in the tree and expand it
         wait_screen_change { send_key "ret" };
@@ -190,7 +191,7 @@ sub y2snapper_show_changes_and_delete {
     }
     assert_screen 'yast2_snapper-confirm_delete';
     send_key "alt-y";
-    assert_screen 'yast2_snapper-empty-list';
+    is_sle('>=15-SP4') ? apply_workaround_poo124652('yast2_snapper-empty-list') : assert_screen('yast2_snapper-empty-list');
 }
 
 =head2 y2snapper_clean_and_quit
@@ -252,8 +253,7 @@ sub y2snapper_failure_analysis {
     export_logs;
 
     # Upload y2log for analysis if yast2 snapper fails
-    assert_script_run "save_y2logs /tmp/y2logs.tar.bz2";
-    upload_logs "/tmp/y2logs.tar.bz2";
+    upload_y2logs;
     save_screenshot;
     diag('check if at least snapper low-level commands still work');
     script_run('snapper ls');

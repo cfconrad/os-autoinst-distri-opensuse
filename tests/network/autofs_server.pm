@@ -33,7 +33,7 @@ use base 'consoletest';
 use testapi;
 use lockapi;
 use utils qw(systemctl zypper_call);
-use version_utils 'is_opensuse';
+use version_utils qw(is_leap is_sle);
 use strict;
 use warnings;
 
@@ -46,7 +46,7 @@ sub run {
     select_console "root-console";
     my $test_share_dir = "/tmp/nfs/server";
     my $nfsidmap_share_dir = "/home/tux";
-    if (is_opensuse) {
+    if (!is_sle) {
         zypper_call('modifyrepo -e 1');
         zypper_call('ref');
     }
@@ -61,7 +61,7 @@ sub run {
 
     # nfsidmap
     assert_script_run "echo N > /sys/module/nfsd/parameters/nfs4_disable_idmapping";
-    is_opensuse ? zypper_call('in libnfsidmap1') : zypper_call('in nfsidmap');
+    (is_leap('<15.6') || is_sle('<15-SP6')) ? zypper_call('in nfsidmap') : zypper_call('in libnfsidmap1');
     systemctl 'restart nfs-idmapd';
     assert_script_run "nfsidmap -c || true";
     assert_script_run "useradd -m tux";
@@ -73,6 +73,13 @@ sub run {
     # common
     assert_script_run "cat /etc/exports";
     systemctl 'restart nfs-server';
+    # check for bsc#1215649
+    # https://progress.opensuse.org/issues/136004
+    if (script_output("systemctl --no-pager status nfs-server") =~ m/status=1\/FAILURE/) {
+        record_soft_failure 'bsc#1215649';
+        systemctl 'stop nfs-server';
+        systemctl 'start nfs-server';
+    }
     barrier_wait 'AUTOFS_SUITE_READY';
     barrier_wait 'AUTOFS_FINISHED';
 }

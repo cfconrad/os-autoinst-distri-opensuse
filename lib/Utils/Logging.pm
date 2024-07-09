@@ -16,7 +16,7 @@ use Exporter;
 use strict;
 use warnings;
 use testapi;
-use utils qw(clear_console show_oom_info remount_tmp_if_ro detect_bsc_1063638);
+use utils qw(clear_console show_oom_info remount_tmp_if_ro detect_bsc_1063638 download_script);
 use Utils::Systemd 'get_started_systemd_services';
 use Mojo::File 'path';
 use serial_terminal 'select_serial_terminal';
@@ -68,7 +68,8 @@ Afterwards a screenshot will be created if C<$screenshot> is set.
 
 sub tar_and_upload_log {
     my ($sources, $dest, $args) = @_;
-    script_run("tar -jcv -f $dest $sources", $args->{timeout});
+    my $cmp = defined($args->{gzip}) ? '-zcv' : '-jcv';
+    script_run("tar $cmp -f $dest $sources", $args->{timeout});
     upload_logs($dest, failok => 1) unless $args->{noupload};
     save_screenshot() if $args->{screenshot};
 }
@@ -103,7 +104,7 @@ $filename = "my-test.log";
 sub save_ulog {
     my ($out, $filename) = @_;
     mkdir('ulogs') if (!-d 'ulogs');
-    path("ulogs/$filename")->spurt($out);    # save the logs to the ulogs directory on the worker directly
+    path("ulogs/$filename")->spew($out);    # save the logs to the ulogs directory on the worker directly
 }
 
 =head2 export_healthcheck_basic
@@ -204,6 +205,9 @@ sub export_logs {
     if ($utils::IN_ZYPPER_CALL) {
         upload_solvertestcase_logs();
     }
+
+    my $audit_log = "/var/log/audit/audit.log";
+    upload_logs("$audit_log", failok => 1);
 }
 
 =head2 problem_detection
@@ -249,12 +253,14 @@ sub problem_detection {
     clear_console;
 
     # Segmentation faults
-    save_and_upload_log("coredumpctl list", "segmentation-faults-list.txt", {screenshot => 1, noupload => 1});
-    save_and_upload_log("coredumpctl info", "segmentation-faults-info.txt", {screenshot => 1, noupload => 1});
-    # Save core dumps
-    enter_cmd "mkdir -p coredumps";
-    enter_cmd 'awk \'/Storage|Coredump/{printf("cp %s ./coredumps/\n",$2)}\' segmentation-faults-info.txt | sh';
-    clear_console;
+    if (script_run('which coredumpctl') == 0) {
+        record_info('COREDUMP detection: ', script_output('coredumpctl list', proceed_on_failure => 1));
+        save_and_upload_log("coredumpctl info", "segmentation-faults-info.txt", {screenshot => 1, noupload => 1});
+        # Save core dumps
+        enter_cmd "mkdir -p coredumps";
+        enter_cmd 'awk \'/Storage|Coredump/{printf("cp %s ./coredumps/\n",$2)}\' segmentation-faults-info.txt | sh';
+        clear_console;
+    }
 
     # Broken links
     save_and_upload_log(
@@ -264,13 +270,9 @@ sub problem_detection {
     clear_console;
 
     # Binaries with missing libraries
-    save_and_upload_log("
-IFS=:
-for path in \$PATH; do
-    for bin in \$path/*; do
-        ldd \$bin 2> /dev/null | grep 'not found' && echo -n Affected binary: \$bin 'from ' && rpmquery -f \$bin
-    done
-done", "binaries-with-missing-libraries.txt", {timeout => 60, noupload => 1});
+    download_script('lib/missing_libraries.sh', '/tmp/missing_libraries.sh');
+    save_and_upload_log("/tmp/missing_libraries.sh",
+        "binaries-with-missing-libraries.txt", {timeout => 60, noupload => 1});
     clear_console;
 
     # rpmverify problems
@@ -319,7 +321,7 @@ sub export_logs_basic {
     save_and_upload_log('ps axf', '/tmp/psaxf.log', {screenshot => 1});
     save_and_upload_log('journalctl -b -o short-precise', '/tmp/journal.log', {screenshot => 1});
     save_and_upload_log('dmesg', '/tmp/dmesg.log', {screenshot => 1});
-    tar_and_upload_log('/etc/sysconfig', '/tmp/sysconfig.tar.bz2');
+    tar_and_upload_log('/etc/sysconfig', '/tmp/sysconfig.tar.gz', {gzip => 1});
 
     for my $service (get_started_systemd_services()) {
         save_and_upload_log("journalctl -b -u $service", "/tmp/journal_$service.log", {screenshot => 1});

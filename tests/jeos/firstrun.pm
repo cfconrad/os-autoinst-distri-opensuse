@@ -13,7 +13,7 @@ use base "opensusebasetest";
 use strict;
 use warnings;
 use testapi;
-use version_utils qw(is_jeos is_sle is_tumbleweed is_leap is_opensuse is_microos is_sle_micro is_vmware);
+use version_utils qw(is_jeos is_sle is_tumbleweed is_leap is_opensuse is_microos is_sle_micro is_vmware is_bootloader_sdboot);
 use Utils::Architectures;
 use Utils::Backends;
 use jeos qw(expect_mount_by_uuid);
@@ -64,7 +64,7 @@ sub verify_mounts {
 }
 
 sub verify_hypervisor {
-    my $virt = script_output('systemd-detect-virt');
+    my $virt = script_output('systemd-detect-virt', proceed_on_failure => 1);
 
     return 0 if (
         is_qemu && $virt =~ /(qemu|kvm)/ ||
@@ -72,6 +72,11 @@ sub verify_hypervisor {
         is_hyperv && $virt =~ /microsoft/ ||
         is_vmware && $virt =~ /vmware/ ||
         check_var("VIRSH_VMM_FAMILY", "xen") && $virt =~ /xen/);
+
+    if (is_qemu && is_riscv && $virt =~ /none/) {
+        record_soft_failure('boo#1218309');
+        return 0;
+    }
 
     die("Unknown hypervisor: $virt");
 }
@@ -97,6 +102,12 @@ sub verify_bsc {
         my $output = script_output "chronyc sources";
         die("bsc#1156884 - chronyd is missing sources") if ($output =~ /Number of sources = 0/);
     }
+}
+
+sub verify_partition_label {
+    my $label = is_s390x ? 'dos' : 'gpt';
+
+    script_output('sfdisk -l') =~ m/Disklabel type:\s+$label/ or die "Wrong partion label found, expected '$label'";
 }
 
 sub run {
@@ -162,7 +173,7 @@ sub run {
     send_key 'ret';
 
     # Accept EULA if required
-    unless (is_tumbleweed || is_microos || is_leap('>=15.4')) {
+    if (is_sle || is_sle_micro) {
         assert_screen 'jeos-doyouaccept';
         send_key 'ret';
     }
@@ -178,14 +189,55 @@ sub run {
         send_key 'ret';
     }
 
+    if (is_bootloader_sdboot) {
+        send_key_until_needlematch 'jeos-fde-option-enroll-root-pw', 'down' unless check_screen('jeos-fde-option-enroll-root-pw', 1);
+        send_key 'ret';
+
+        if (get_var('QEMUTPM')) {
+            send_key_until_needlematch 'jeos-fde-option-enroll-tpm', 'down' unless check_screen('jeos-fde-option-enroll-tpm', 1);
+            send_key 'ret';
+        }
+
+        # All options used up, so no need to press 'Done' explicitly anymore.
+
+        # Continues below to verify that /etc/issue shows the recovery key
+    }
+
     if (is_sle || is_sle_micro) {
         assert_screen 'jeos-please-register';
         send_key 'ret';
     }
 
+    # Skip ssh key enrollment (for now)
+    unless (is_sle || is_sle_micro('<=6.0') || is_leap) {
+        assert_screen 'jeos-ssh-enroll-or-not';
+        send_key 'n';
+    }
+
     if (is_generalhw && is_aarch64 && !is_leap("<15.4") && !is_tumbleweed) {
         assert_screen 'jeos-please-configure-wifi';
         send_key 'n';
+    }
+
+    # Only execute this block on SLE Micro 6.0+ when using the encrypted image.
+    if ((is_sle_micro('>=6.0')) && get_var("ENCRYPTED_IMAGE")) {
+        # Select FDE with pass and tpm
+        assert_screen "alp-fde-pass-tpm";
+        # with the latest ALP 9.2/SLEM 3.4 build, this step takes more time than usual.
+        wait_screen_change(sub { send_key "ret" }, 25);
+        assert_screen("alp-fde-newluks", timeout => 120);
+        type_password;
+        send_key "ret";
+        wait_still_screen 2;
+        type_password;
+        send_key "ret";
+        # Disk encryption is gonna take time. Once this is done we can proceed with login.
+        wait_still_screen 5;
+    }
+
+    if (is_bootloader_sdboot) {
+        # Verify that /etc/issue shows the recovery key
+        wait_serial(qr/^Encryption recovery key:\s+(([a-z]+-)+[a-z]+)/m) or die 'The encryption recovery key is missing';
     }
 
     # Our current Hyper-V host and it's spindles are quite slow. Especially
@@ -206,6 +258,16 @@ sub run {
 
     # release console and reattach to be used again as serial output
     if (is_s390x && is_svirt) {
+        # enable root ssh login, see poo#154309
+        if (is_sle_micro('>=6.0') || is_sle('15-SP6+')) {
+            record_info "enable root ssh login";
+            enter_cmd "root";    # login to serial console at first
+            wait_still_screen 1;
+            enter_cmd "$testapi::password";
+            wait_still_screen 1;
+            enter_cmd "echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/root.conf";
+            enter_cmd "systemctl restart sshd";
+        }
         send_key('ctrl-^-]');
         $con->attach_to_running();
     }
@@ -234,6 +296,10 @@ sub run {
         assert_script_run "echo $username:$password | chpasswd";
     }
 
+    if (check_var('FLAVOR', 'JeOS-for-RaspberryPi')) {
+        assert_script_run("echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/permit-root-login.conf");
+    }
+
     ensure_serialdev_permissions;
 
     prepare_serial_console;
@@ -254,6 +320,7 @@ sub run {
     verify_hypervisor unless is_generalhw;
     verify_norepos unless is_opensuse;
     verify_bsc if is_jeos;
+    verify_partition_label;
 }
 
 sub test_flags {

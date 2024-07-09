@@ -15,19 +15,34 @@ use warnings;
 use testapi;
 use version_utils qw(is_leap is_storage_ng is_sle is_tumbleweed);
 use partition_setup qw(%partition_roles is_storage_ng_newui);
+use utils 'type_string_slow';
 
-sub run {
-    if (check_var('SYSTEM_ROLE', 'Common_Criteria')) {
+sub handle_common_criteria {
+    if (is_sle '<=15-SP5') {
         assert_screen 'Common-Criteria-Evaluated-Configuration-RN-Next';
         send_key 'alt-n';
+        return;
     }
+    wait_still_screen;
+    assert_screen 'Common-Criteria-Disk-Encryption-Passphrase';
+    send_key 'alt-e';
+    type_password;
+    send_key 'alt-v';
+    type_password;
+    send_key 'alt-n';
+    wait_still_screen;
+    send_key 'alt-y';    # to confirm "the password too simple" dialog
+}
+
+sub run {
+    handle_common_criteria if (check_var('SYSTEM_ROLE', 'Common_Criteria'));
     assert_screen 'partitioning-edit-proposal-button', 180;
     if (check_var('PARTITION_EDIT', 'ext4_btrfs')) {
         send_key 'alt-g';
         send_key 'alt-n';
         send_key 'down';
         send_key 'alt-f';
-        type_string 'ext4';
+        type_string_slow 'ext4';
         send_key 'alt-i';
         send_key 'b';
         assert_screen 'partitioning-ext4_root-btrfs_home';
@@ -38,7 +53,7 @@ sub run {
         send_key 'alt-n';
         send_key 'down';
         send_key 'alt-f';
-        type_string 'ext4';
+        type_string_slow 'ext4';
         send_key 'alt-i';
         send_key 'x';
         assert_screen 'partitioning-ext4_root-xfs_home';

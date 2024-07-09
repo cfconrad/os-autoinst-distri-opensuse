@@ -328,13 +328,6 @@
     <addons t="list">
       <addon t="map">
         <arch>{{ARCH}}</arch>
-        <name>sle-module-desktop-applications</name>
-        <reg_code/>
-        <release_type>nil</release_type>
-        <version>{{VERSION}}</version>
-      </addon>
-      <addon t="map">
-        <arch>{{ARCH}}</arch>
         <name>sle-module-server-applications</name>
         <reg_code/>
         <release_type>nil</release_type>
@@ -343,6 +336,13 @@
       <addon t="map">
         <arch>{{ARCH}}</arch>
         <name>sle-module-basesystem</name>
+        <reg_code/>
+        <release_type>nil</release_type>
+        <version>{{VERSION}}</version>
+      </addon>
+      <addon t="map">
+        <arch>{{ARCH}}</arch>
+        <name>sle-module-python3</name>
         <reg_code/>
         <release_type>nil</release_type>
         <version>{{VERSION}}</version>

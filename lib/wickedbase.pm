@@ -53,8 +53,7 @@ sub wicked_command {
 
     my $cmd = '/usr/sbin/wicked --log-target syslog --debug all ' . $action . ' ' . $iface;
     assert_script_run('echo -e "\n# $(date -Isecond)\n# "' . $cmd . ' >> ' . $serial_log);
-    $cmd = $self->valgrind_cmd(service => 'wicked') . " $cmd"
-      if (grep { /^wicked$/ } $self->valgrind_get_services());
+    $cmd = $self->valgrind_cmd('wicked') . " $cmd" if (grep { /^wicked$/ } $self->valgrind_get_services());
     record_info('wicked cmd', $cmd);
     assert_script_run('time ' . $cmd . ' 2>&1 | tee -a ' . $serial_log);
     assert_script_run(q(echo -e "\n# ip addr" >> ) . $serial_log);
@@ -545,8 +544,8 @@ sub unique_macaddr {
     $prefix =~ s/:/_/;
     $prefix = hex($prefix);
 
-    $self->{unique_macaddr_cnt} = $self->{unique_macaddr_cnt} ? 0 : $self->{unique_macaddr_cnt} + 1;
-    $prefix += $self->{unique_macaddr_cnt};
+    $self->{unique_macaddr_cnt} //= 0;
+    $prefix += $self->{unique_macaddr_cnt}++;
 
     my $w_id = get_required_var('WORKER_ID');
     die("WORKER_ID too big!") if ($w_id > 0xffffffff);
@@ -673,7 +672,6 @@ sub upload_wicked_logs {
     script_run("date +'%Y-%m-%d %T.%6N' > $logs_dir/date");
     script_run('journalctl --sync');
     script_run("journalctl -b -o short-precise > $logs_dir/journalctl.log");
-    script_run("journalctl -b -o short-monotonic > $logs_dir/journalctl_monotonic.log");
     script_run("wicked ifstatus --verbose all > $logs_dir/wicked_ifstatus.log 2>&1");
     script_run("wicked show-config > $logs_dir/wicked_config.log 2>&1");
     script_run("wicked show-xml > $logs_dir/wicked_xml.log 2>&1");
@@ -994,6 +992,8 @@ sub write_cfg {
     my $rand = random_string;
     # replace variables
     $content =~ s/\{\{(\w+)\}\}/$self->lookup($1, $args{env})/eg;
+    # make sure that dirs exists
+    assert_script_run('mkdir -p ' . dirname($filename));
     # unwrap content
     my ($indent) = $content =~ /^\r?\n?([ ]*)/m;
     $content =~ s/^$indent//mg;

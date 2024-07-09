@@ -147,7 +147,7 @@ sub _prepare_ssh_cmd {
         $cmd = "\$'$cmd'";
     }
 
-    my $ssh_cmd = sprintf('ssh -t %s "%s@%s" -- %s', $args{ssh_opts}, $args{username}, $self->public_ip, $cmd);
+    my $ssh_cmd = sprintf('ssh -tvE /var/tmp/ssh_sut.log %s "%s@%s" -- %s', $args{ssh_opts}, $args{username}, $self->public_ip, $cmd);
     return $ssh_cmd;
 }
 
@@ -200,7 +200,10 @@ sub ssh_script_output {
     delete($args{cmd});
     delete($args{ssh_opts});
     delete($args{username});
-    return script_output($ssh_cmd, %args);
+    my $output = script_output($ssh_cmd, %args);
+    # Filter the output ending from "Connection to ($HOST) closed."
+    $output =~ s/Connection to .* closed\.$//;
+    return $output;
 }
 
 =head2 ssh_script_retry
@@ -259,6 +262,32 @@ sub upload_log {
     my $ret = $self->scp('remote:' . $remote_file, $dest);
     upload_logs($dest, %args) if (defined($ret) && $ret == 0);
     assert_script_run("test -d '$tmpdir' && rm -rf '$tmpdir'");
+}
+
+=head2 upload_check_logs_tar
+
+    upload_check_logs_tar(@files);
+
+Check remote log files status and upload tar.gz of only ok logs, to oqa UI.
+
+Input: C<@files> full-path-files array;
+
+Return C<1> true explicit, as stateless and never impact calling code.
+
+=cut
+
+sub upload_check_logs_tar {
+    my ($self, @files) = @_;
+    my $remote_tar = "/tmp/" . $autotest::current_test->{name} . "_logs.tar.gz";
+    my $cmd = 'sudo ls -x ' . join(' ', @files) . " 2>/dev/null";
+    my $res = $self->ssh_script_output(cmd => $cmd, proceed_on_failure => 1);
+    my @logs = split(" ", $res);
+    return 1 unless (scalar(@logs) > 0);
+    # Upload existing logs to openqa  UI
+    $cmd = "sudo tar -czvf $remote_tar " . join(" ", @logs);
+    $res = $self->ssh_script_run(cmd => $cmd, proceed_on_failure => 1);
+    $self->upload_log("$remote_tar", log_name => basename($remote_tar), failok => 1) if ($res == 0);
+    return 1;
 }
 
 =head2 wait_for_guestregister
@@ -343,7 +372,7 @@ Return:
 sub wait_for_ssh {
     my ($self, %args) = @_;
     # Input parameters, see description in above head2 - Parameters section:
-    $args{timeout} //= 600;
+    $args{timeout} = get_var('PUBLIC_CLOUD_SSH_TIMEOUT', $args{timeout} // 600);
     $args{wait_stop} //= 0;
     $args{proceed_on_failure} //= $args{wait_stop};
     $args{systemup_check} //= not $args{wait_stop};
@@ -427,7 +456,8 @@ sub wait_for_ssh {
     # result display
     $sysout .= "\nTimeout $args{timeout} sec. expired" if ($duration >= $args{timeout});
     $instance_msg = "Check" . ($args{systemup_check} ? " SYSTEM " : " SSH ") . ($args{wait_stop} ? "DOWN" : "UP") .
-      ", $instance_msg, Duration: $duration sec.\nResult: $sshout . $sysout";
+      ", $instance_msg, Duration: $duration sec.\nResult: $sshout";
+    $instance_msg .= $sysout if defined($sysout);
     $instance_msg .= "\nRetries on failure: $retry" if ($retry);
     record_info("WAIT CHECK", $instance_msg);
     # OK
@@ -477,6 +507,11 @@ sub softreboot {
     if ($tunneled) {
         select_console('tunnel-console', await_console => 0);
         ssh_interactive_leave();
+        for (1 .. 5) {
+            last if (script_run(sprintf('ssh -O check %s@%s', $args{username}, $self->public_ip)) != 0);
+            script_run(sprintf('ssh -O exit %s@%s', $args{username}, $self->public_ip));
+            sleep 5;
+        }
     }
 
     $self->ssh_assert_script_run(cmd => 'sudo /sbin/shutdown -r +1');
@@ -582,7 +617,7 @@ sub measure_boottime() {
     my ($self, $instance, $type) = @_;
     my $data_collect = get_var('PUBLIC_CLOUD_PERF_COLLECT', 1);
 
-    return 0 unless ($data_collect);
+    return 0 if (!$data_collect || is_openstack);
 
     my $ret = {
         kernel_release => undef,
@@ -601,16 +636,18 @@ sub measure_boottime() {
     $ret->{blame} = $systemd_blame;
     $ret->{type} = $type;
     # $ret->{analyze}->{ssh_access} = $startup_time; # placeholder for next implementation
+    record_info("WARN", "High overall value:" . $ret->{analyze}->{overall}, result => 'fail') if ($ret->{analyze}->{overall} >= 3600.0);
 
     # Collect kernel version
     $ret->{kernel_release} = $instance->run_ssh_command(cmd => 'uname -r', proceed_on_failure => 1);
     $ret->{kernel_version} = $instance->run_ssh_command(cmd => 'uname -v', proceed_on_failure => 1);
 
-    # Do logging to openqa UI
     $Data::Dumper::Sortkeys = 1;
-    record_info("RESULTS", Dumper($ret));
+    my $dir = "/var/log";
     my @logs = qw(cloudregister cloud-init.log cloud-init-output.log messages NetworkManager);
-    $instance->upload_log("/var/log/" . $_, log_name => 'measure_boottime_' . $_ . '.txt', failok => 1) foreach (@logs);
+    $instance->upload_check_logs_tar(map { "$dir/$_" } @logs);
+
+    record_info("RESULTS", Dumper($ret));
     return $ret;
 }
 
@@ -627,14 +664,13 @@ To activate boottime push, shall be available results and
 =cut
 
 sub store_boottime_db() {
-    my ($self, $results) = @_;
+    my ($self, $results, $url) = @_;
     my $data_push = get_var('PUBLIC_CLOUD_PERF_PUSH_DATA', 1);
-    my $url = get_var('PUBLIC_CLOUD_PERF_DB_URI', 'http://publiccloud-ng.qa.suse.de:8086');
     my $org = get_var('PUBLIC_CLOUD_PERF_DB_ORG', 'qec');
     my $db = get_var('PUBLIC_CLOUD_PERF_DB', 'perf_2');
     my $token = get_var('_SECRET_PUBLIC_CLOUD_PERF_DB_TOKEN');
 
-    return unless ($results && $data_push);
+    return unless ($results && $data_push && $url);
     unless ($token) {
         record_info("WARN", "_SECRET_PUBLIC_CLOUD_PERF_DB_TOKEN is missing ", result => 'fail');
         return 0;
@@ -683,12 +719,13 @@ sub systemd_time_to_second
 {
     my $str_time = trim(shift);
 
-    if ($str_time !~ /^(?<check_min>(?<min>\d{1,2})\s*min\s*)?((?<sec>\d{1,2}\.\d{1,3})s|(?<ms>\d+)ms)$/) {
+    if ($str_time !~ /^(?<check_hour>(?<hour>\d{1,2})\s*h\s*)?(?<check_min>(?<min>\d{1,2})\s*min\s*)?((?<sec>\d{1,2}\.\d{1,3})s|(?<ms>\d+)ms)$/) {
         record_info("WARN", "Unable to parse systemd time '$str_time'", result => 'fail');
         return -1;
     }
     my $sec = $+{sec} // $+{ms} / 1000;
     $sec += $+{min} * 60 if (defined($+{check_min}));
+    $sec += $+{hour} * 3600 if (defined($+{check_hour}));
     return $sec;
 }
 

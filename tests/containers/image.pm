@@ -1,12 +1,12 @@
 # SUSE's openQA tests
 #
-# Copyright 2020-2021 SUSE LLC
+# Copyright 2020-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
-# Package: podman
-# Summary: Test installation and running of the docker image from the registry for this snapshot
+# Package: podman & docker
+# Summary: Test installation and running of the container image from the registry for this snapshot
 # This module is unified to run independented the host os.
-# Maintainer: Fabian Vogt <fvogt@suse.com>, qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'containers::basetest';
 use testapi;
@@ -17,6 +17,56 @@ use containers::container_images;
 use containers::urls qw(get_image_uri);
 use db_utils qw(push_image_data_to_db);
 use containers::utils qw(reset_container_network_if_needed);
+use version_utils qw(check_version get_os_release is_sle);
+
+sub scc_apply_docker_image_credentials {
+    my $regcode = get_var 'SCC_DOCKER_IMAGE';
+    assert_script_run "cp /etc/zypp/credentials.d/SCCcredentials{,.bak}";
+    assert_script_run "echo -ne \"$regcode\" > /etc/zypp/credentials.d/SCCcredentials";
+}
+
+sub scc_restore_docker_image_credentials {
+    assert_script_run "cp /etc/zypp/credentials.d/SCCcredentials{.bak,}" if (is_sle() && get_var('SCC_DOCKER_IMAGE'));
+}
+
+sub test_rpm_db_backend {
+    my ($self, %args) = @_;
+    my $image = $args{image};
+    my $runtime = $args{runtime};
+
+    die 'Argument $image not provided!' unless $image;
+    die 'Argument $runtime not provided!' unless $runtime;
+
+    my ($running_version, $sp, $host_distri) = get_os_release("$runtime run $image");
+    # TW and SLE 15-SP3+ uses rpm-ndb in the image
+    if ($host_distri eq 'opensuse-tumbleweed' || ($host_distri eq 'sles' && check_version('>=15-SP3', "$running_version-SP$sp", qr/\d{2}(?:-sp\d)?/))) {
+        validate_script_output "$runtime run $image rpm --eval %_db_backend", sub { m/ndb/ };
+    }
+}
+
+sub test_systemd_install {
+    my ($self, %args) = @_;
+    my $image = $args{image};
+    my $runtime = $args{runtime};
+    die 'Argument $image not provided!' unless $image;
+    die 'Argument $runtime not provided!' unless $runtime;
+    # reference values:
+    my $leap_vmin = '15.4';
+    my $sle_vmin = '15-SP4';
+    my $bci_vmin = '15-SP5';
+    # release
+    my ($image_version, $image_sp, $image_id) = get_os_release("$runtime run --entrypoint '' $image");
+    # TW and starting with SLE 15-SP4/Leap15.4 systemd's dependency with udev has been dropped
+    if ($image_id eq 'opensuse-tumbleweed' ||
+        ($image_id eq 'opensuse-leap' && check_version('>=' . $leap_vmin, "$image_version.$image_sp", qr/\d{2}\.\d/)) ||
+        ($image_id eq 'sles' && check_version('>=' . $sle_vmin, "$image_version-SP$image_sp", qr/\d{2}-sp\d/))) {
+        # Skip run case:
+        return 0 if ($image_id eq 'sles' && check_version('<' . $bci_vmin, "$image_version-SP$image_sp", qr/\d{2}-sp\d/));
+        # lock to SLE_BCI repo for SLES versions not under LTSS (LTSS has no BCI repo anymore)
+        my $repo = ($image_id eq 'sles' && check_version('>=' . $bci_vmin, "$image_version-SP$image_sp", qr/\d{2}-sp\d/)) ? '-r SLE_BCI' : '';
+        assert_script_run("$runtime run $image /bin/bash -c 'zypper al udev && zypper -n in $repo systemd'", timeout => 300);
+    }
+}
 
 sub run {
     my ($self, $args) = @_;
@@ -25,7 +75,6 @@ sub run {
     my $runtime = $args->{runtime};
     my $engine = $self->containers_factory($runtime);
     reset_container_network_if_needed($runtime);
-
 
     scc_apply_docker_image_credentials() if (get_var('SCC_DOCKER_IMAGE') && $runtime eq 'docker');
 
@@ -44,8 +93,8 @@ sub run {
 
         record_info "IMAGE", "Testing image: $image Version: $version";
         test_container_image(image => $image, runtime => $engine);
-        test_rpm_db_backend(image => $image, runtime => $engine);
-        test_systemd_install(image => $image, runtime => $engine);
+        $self->test_rpm_db_backend(image => $image, runtime => $engine);
+        $self->test_systemd_install(image => $image, runtime => $engine);
         my $beta = $version eq get_var('VERSION') ? get_var('BETA', 0) : 0;
         test_opensuse_based_image(image => $image, runtime => $engine, version => $version, beta => $beta) unless ($image =~ /bci/);
     }

@@ -23,7 +23,7 @@ unset only
 while test $# -gt 0 ; do
         case $1 in
         -p) pause=yes ;;
-        -d) wdebug='--debug all --log-level debug2 --log-target syslog' ;;
+        -d) wdebug='--debug all --log-level debug2 --log-target syslog::perror' ;;
 	-s) shift ; only="$1" ;;
 	-c) cprep=yes ;;
         -*) exit 2 ;;
@@ -132,11 +132,11 @@ step1()
 
 	wicked ifstatus all
 	for dev in ${bond_slaves} ${bond_master} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
-	ip a s dev ${bond_vlan1}  && ((err++))
+	ip -d a s dev ${bond_vlan1}  && ((err++))
 	for dev in ${bond_vlan2} ${other1} ${other2} ${bridge1} ${bridge2} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
 	show_bridges
 
@@ -205,11 +205,11 @@ step2()
 
 	wicked ifstatus all
 	for dev in ${bond_slaves} ${bond_master} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
-	ip a s dev ${bond_vlan1}  || ((err++))
+	ip -d a s dev ${bond_vlan1}  || ((err++))
 	for dev in ${bond_vlan2} ${other1} ${other2} ${bridge1} ${bridge2} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
 	show_bridges
 
@@ -271,11 +271,11 @@ step3()
 
 	wicked ifstatus all
 	for dev in ${bond_slaves} ${bond_master} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
-	ip a s dev ${bond_vlan1}  || ((err++))
+	ip -d a s dev ${bond_vlan1}  || ((err++))
 	for dev in ${bond_vlan2} ${other1} ${other2} ${bridge1} ${bridge2} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
 	show_bridges
 
@@ -332,11 +332,11 @@ step4()
 
 	wicked ifstatus all
 	for dev in ${bond_slaves} ${bond_master} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
-	ip a s dev ${bond_vlan1}  && ((err++))
+	ip -d a s dev ${bond_vlan1}  && ((err++))
 	for dev in ${bond_vlan2} ${other1} ${other2} ${bridge1} ${bridge2} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
 	show_bridges
 
@@ -405,11 +405,11 @@ step5()
 
 	wicked ifstatus all
 	for dev in ${bond_slaves} ${bond_master} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
-	ip a s dev ${bond_vlan1}  || ((err++))
+	ip -d a s dev ${bond_vlan1}  || ((err++))
 	for dev in ${bond_vlan2} ${other1} ${other2} ${bridge1} ${bridge2} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
 	show_bridges
 
@@ -472,11 +472,11 @@ step5()
 
 	wicked ifstatus all
 	for dev in ${bond_slaves} ${bond_master} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
-	ip a s dev ${bond_vlan1}  && ((err++))
+	ip -d a s dev ${bond_vlan1}  && ((err++))
 	for dev in ${bond_vlan2} ${other1} ${other2} ${bridge1} ${bridge2} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
 	show_bridges
 
@@ -556,11 +556,11 @@ step6()
 
 	wicked ifstatus all
 	for dev in ${bond_slaves} ${bond_master} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
-	ip a s dev ${bond_vlan1}  && ((err++))
+	ip -d a s dev ${bond_vlan1}  && ((err++))
 	for dev in ${bond_vlan2} ${other1} ${other2} ${bridge1} ${bridge2} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
 	show_bridges
 
@@ -648,11 +648,11 @@ step7()
 
 	wicked ifstatus all
 	for dev in ${bond_slaves} ${bond_master} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
-	ip a s dev ${bond_vlan1}  && ((err++))
+	ip -d a s dev ${bond_vlan1}  && ((err++))
 	for dev in ${bond_vlan2} ${other1} ${other2} ${bridge1} ${bridge2} ; do
-		ip a s dev ${dev} || ((err++))
+		ip -d a s dev ${dev} || ((err++))
 	done
 	show_bridges
 
@@ -713,7 +713,7 @@ cleanup()
 	echo "-----------------------------------"
 	wicked ifstatus $cfg all
 	echo "-----------------------------------"
-    show_bridges
+	show_bridges
 	echo "-----------------------------------"
 	ls -l /var/run/wicked/nanny/
 	echo "==================================="

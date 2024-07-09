@@ -1,20 +1,21 @@
 # SUSE's openQA tests
 #
-# Copyright 2016 SUSE LLC
+# Copyright 2016-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 package update_package;
 # Summary: update_package: Update all packages and use real repo as guest installation source before test.
-# Maintainer: John <xgwang@suse.com>
+# Maintainer: qe-virt@suse.com
 
 use strict;
 use warnings;
 use testapi;
 use base "virt_autotest_base";
+use utils 'is_uefi_boot';
+use version_utils 'is_sle';
 use virt_utils;
 use ipmi_backend_utils;
 use Utils::Architectures;
-use version_utils 'is_sle';
 use virt_autotest::utils qw(is_xen_host is_kvm_host);
 
 sub update_package {
@@ -47,14 +48,15 @@ sub update_package {
 
 sub run {
     my $self = shift;
-    #workaroud: skip update package for registered aarch64 tests and because there are conflicts on sles15sp2 XEN
-    $self->update_package() unless (!!get_var('AUTOYAST') || is_registered_sles && is_aarch64);
-    unless (!!get_var('AUTOYAST') || (is_registered_sles && is_aarch64) || is_s390x) {
+    #workaroud: skip update package for registered sles as the packages are already up-to-date
+    $self->update_package() unless (!!get_var('AUTOYAST') || (is_registered_sles && !is_s390x));
+    if (!!get_var('AUTOYAST') || (is_registered_sles && !is_s390x)) {
+        my @files_to_upload = ("/boot/grub2/grub.cfg", "/etc/default/grub");
+        push(@files_to_upload, script_output("ls /boot/efi/efi/sles/xen-*.cfg")) if is_xen_host and is_uefi_boot;
+        upload_logs($_, failok => 1) foreach (@files_to_upload);
+    } elsif (!is_s390x) {
         set_grub_on_vh('', '', 'xen') if is_xen_host;
         set_grub_on_vh('', '', 'kvm') if is_kvm_host;
-    } else {
-        my @files_to_upload = ("/boot/grub2/grub.cfg", "/etc/default/grub");
-        upload_logs($_, failok => 1) foreach (@files_to_upload);
     }
     update_guest_configurations_with_daily_build();
 
@@ -64,16 +66,15 @@ sub run {
     #workaround of bsc#1177790
     #disable DNSSEC validation as it is turned on by default but the forwarders donnot support it, refer to bsc#1177790
     if (is_sle('>=12-sp5')) {
-        #ues die_on_timeout=> 0 as workaround for s390x test during call script_run, refer to poo#106765
-        my %args = ();
         if (is_s390x) {
-            $args{die_on_timeout} = 0;
+            lpar_cmd("sed -i 's/#dnssec-validation auto;/dnssec-validation no;/g' /etc/named.conf");
+            lpar_cmd("grep 'dnssec-validation' /etc/named.conf");
+            lpar_cmd("systemctl restart named");
         } else {
-            $args{die_on_timeout} = 1;
+            script_run "sed -i 's/#dnssec-validation auto;/dnssec-validation no;/g' /etc/named.conf";
+            script_run "grep 'dnssec-validation' /etc/named.conf";
+            script_run "systemctl restart named";
         }
-        script_run "sed -i 's/#dnssec-validation auto;/dnssec-validation no;/g' /etc/named.conf", %args;
-        script_run "grep 'dnssec-validation' /etc/named.conf", %args;
-        script_run "systemctl restart named", %args;
         save_screenshot;
     }
 

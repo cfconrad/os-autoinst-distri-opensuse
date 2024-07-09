@@ -11,7 +11,7 @@ use warnings;
 use testapi qw(is_serial_terminal :DEFAULT);
 use lockapi 'mutex_wait';
 use mm_network;
-use version_utils qw(is_sle_micro is_microos is_leap is_public_cloud is_sle is_sle12_hdd_in_upgrade is_storage_ng is_jeos package_version_cmp);
+use version_utils qw(is_sle_micro is_microos is_krypton_argon is_leap is_leap_micro is_public_cloud is_sle is_sle12_hdd_in_upgrade is_storage_ng is_jeos package_version_cmp is_transactional is_bootloader_sdboot);
 use Utils::Architectures;
 use Utils::Systemd qw(systemctl disable_and_stop_service);
 use Utils::Backends;
@@ -19,10 +19,12 @@ use Mojo::UserAgent;
 use zypper qw(wait_quit_zypper);
 use Storable qw(dclone);
 use Getopt::Long qw(GetOptionsFromString);
+use File::Basename;
+use XML::LibXML;
 
 our @EXPORT = qw(
   generate_results
-  pars_results
+  parse_test_results
   check_console_font
   clear_console
   type_string_slow
@@ -48,8 +50,9 @@ our @EXPORT = qw(
   zypper_patches
   zypper_install_available
   set_zypper_lock_timeout
-  workaround_type_encrypted_passphrase
+  unlock_bootloader
   is_boot_encrypted
+  need_unlock_after_bootloader
   is_bridged_networking
   set_bridged_networking
   assert_screen_with_soft_timeout
@@ -108,7 +111,19 @@ our @EXPORT = qw(
   script_finish_io
   handle_screen
   define_secret_variable
+  write_sut_file
   @all_tests_results
+  ping_size_check
+  is_ipxe_boot
+  is_uefi_boot
+  is_usb_boot
+  remove_efiboot_entry
+  empty_usb_disks
+  upload_y2logs
+);
+
+our @EXPORT_OK = qw(
+  download_script
 );
 
 =head1 SYNOPSIS
@@ -355,6 +370,7 @@ sub unlock_if_encrypted {
             }
         }
         send_key "ret";
+        wait_still_screen 15;
     }
 }
 
@@ -761,6 +777,8 @@ the second run will update the system.
 =cut
 
 sub fully_patch_system {
+    my (%args) = @_;
+    my $trup_call_timeout = $args{trup_call_timeout} // '1800';
     # special handle for 11-SP4 s390 install
     if (is_sle('=11-SP4') && is_s390x && is_backend_s390x) {
         # first run, possible update of packager -- exit code 103
@@ -769,17 +787,26 @@ sub fully_patch_system {
         return;
     }
 
-    # Repeatedly call zypper patch until it returns something other than 103 (package manager updates)
     my $ret = 1;
-    # Add -q to reduce the unnecessary log output.
-    # Reduce the pressure of serial port when running hyperv test with sle15.
-    # poo#115454
-    my $zypp_opt = check_var('VIRSH_VMM_FAMILY', 'hyperv') ? '-q' : '';
-    for (1 .. 3) {
-        $ret = zypper_call("$zypp_opt patch --with-interactive -l", exitcode => [0, 4, 102, 103], timeout => 6000);
-        last if $ret != 103;
+    if (is_transactional) {
+        # Update package manager first, not possible to detect package manager update bsc#1216504
+        transactional::trup_call('patch', timeout => $trup_call_timeout);
+        transactional::reboot_on_changes();
+        # Continue with patch
+        transactional::trup_call('patch', timeout => $trup_call_timeout);
+        transactional::reboot_on_changes();
+        return;
+    } else {
+        # Repeatedly call zypper patch until it returns something other than 103 (package manager updates)
+        # Add -q to reduce the unnecessary log output.
+        # Reduce the pressure of serial port when running hyperv test with sle15.
+        # poo#115454
+        my $zypp_opt = check_var('VIRSH_VMM_FAMILY', 'hyperv') ? '-q' : '';
+        for (1 .. 3) {
+            $ret = zypper_call("$zypp_opt patch --with-interactive -l", exitcode => [0, 4, 102, 103], timeout => 6000);
+            last if $ret != 103;
+        }
     }
-
     if (($ret == 4) && is_sle('>=12') && is_sle('<15')) {
         record_soft_failure 'bsc#1176655 openQA test fails in patch_sle - binutils-devel-2.31-9.29.1.aarch64 requires binutils = 2.31-9.29.1';
         my $para = '';
@@ -789,6 +816,7 @@ sub fully_patch_system {
     }
 
     die "Zypper failed with $ret" if ($ret != 0 && $ret != 102);
+    return $ret;
 }
 
 =head2 ssh_fully_patch_system
@@ -803,7 +831,6 @@ the second run will update the system.
 
 sub ssh_fully_patch_system {
     my $remote = shift;
-
     my $cmd_time = time();
     # first run, possible update of packager -- exit code 103
     my $ret = script_run("ssh $remote 'sudo zypper -n patch --with-interactive -l'", 1500);
@@ -989,28 +1016,16 @@ sub set_zypper_lock_timeout {
     script_run("export ZYPP_LOCK_TIMEOUT='$timeout'");
 }
 
-=head2 workaround_type_encrypted_passphrase
+=head2 unlock_bootloader
 
- workaround_type_encrypted_passphrase();
+ unlock_bootloader();
 
-Record soft-failure for unresolved feature fsc#320901 which we think is
-important and then unlock encrypted boot partitions if we expect it to be
-encrypted. This condition is met on 'storage-ng' which by default puts the
-boot partition within the encrypted LVM same as in test scenarios where we
-explicitly create an LVM including boot (C<FULL_LVM_ENCRYPT>). C<ppc64le> was
-already doing the same by default also in the case of pre-storage-ng but not
-anymore for storage-ng.
+Unlock bootloader if boot partition is encrypted.
 
 =cut
 
-sub workaround_type_encrypted_passphrase {
-    # nothing to do if the boot partition is not encrypted in FULL_LVM_ENCRYPT
-    return unless is_boot_encrypted();
-    record_info(
-        "LUKS pass", "Workaround for 'Provide kernel interface to pass LUKS password from bootloader'.\n" .
-          'For further info, please, see https://fate.suse.com/320901, https://jira.suse.com/browse/SLE-2941, ' .
-          'https://jira.suse.com/browse/SLE-3976') if is_sle('12-SP4+');
-    unlock_if_encrypted;
+sub unlock_bootloader {
+    unlock_if_encrypted if is_boot_encrypted();
 }
 
 =head2 is_boot_encrypted
@@ -1038,6 +1053,29 @@ sub is_boot_encrypted {
     # installer would propose an encrypted installation again
     return 0 if get_var('ENCRYPT_ACTIVATE_EXISTING') && !get_var('ENCRYPT_FORCE_RECOMPUTE');
 
+    return 1;
+}
+
+=head2 need_unlock_after_bootloader
+
+ need_unlock_after_bootloader();
+
+Whether the disk encryption password(s) need to be entered during system boot
+(e.g. plymouth or systemd-cryptsetup text prompt).
+
+With newer grub2 (in TW and SLE15-SP6 currently), if root disk is encrypted and
+contains `/boot`, entering the passphrase in GRUB2 is enough. The key is passed
+on during boot, so it's not asked for a second time.
+We need to enter the passphrase again if there are separate partitions encrypted
+without LVM configuration (cr_swap,cr_home etc).
+
+=cut
+
+sub need_unlock_after_bootloader {
+    my $need_unlock_after_bootloader = is_leap('<15.6') || is_sle('<15-sp6') || is_leap_micro || is_sle_micro || (!get_var('LVM', '0') && !get_var('FULL_LVM_ENCRYPT', '0'));
+    return 0 if is_boot_encrypted && !$need_unlock_after_bootloader;
+    # MicroOS with sdboot supports automatic TPM based unlocking.
+    return 0 if is_microos && is_bootloader_sdboot && get_var('QEMUTPM');
     return 1;
 }
 
@@ -1113,6 +1151,16 @@ sub set_hostname {
 
     if (is_qemu && systemctl('is-active NetworkManager', ignore_failure => 1) == 0) {
         my $state = script_output 'nmcli networking connectivity check', proceed_on_failure => 1;
+
+        if (!($state =~ /full/)) {
+            systemctl('restart NetworkManager');
+
+            for (my $i = 0; $i < 10; $i++) {
+                $state = script_output 'nmcli -w 5 networking connectivity check';
+                last if $state =~ /full/;
+                sleep 1;
+            }
+        }
 
         if ($state =~ /full/) {
             my @devs = split("\n", script_output('nmcli device'));
@@ -1250,7 +1298,7 @@ This is needed to prevent access conflicts to the RPM database.
 =cut
 
 sub quit_packagekit {
-    script_run("systemctl mask packagekit; systemctl stop packagekit; while pgrep packagekitd; do sleep 1; done");
+    script_run("systemctl mask packagekit; systemctl stop packagekit; while pgrep packagekitd; do sleep 1; done", timeout => 60);
 }
 
 =head2 wait_for_purge_kernels
@@ -1460,7 +1508,7 @@ the session.
 =cut
 
 sub get_x11_console_tty {
-    my $new_sddm = !is_sle('<16') && !is_leap('<16.0');
+    my $new_sddm = (!is_sle('<15-SP6') && !is_leap('<15.6')) || is_krypton_argon;
     if (check_var('DESKTOP', 'kde') || check_var('DESKTOP', 'lxqt')) {
         return $new_sddm ? 2 : 7;
     }
@@ -1783,7 +1831,7 @@ sub reconnect_mgmt_console {
     elsif (is_x86_64) {
         if (is_ipmi) {
             select_console 'sol', await_console => 0;
-            assert_screen([qw(qa-net-selection prague-pxe-menu grub2)], 300);
+            assert_screen([qw(qa-net-selection prague-pxe-menu nue-ipxe-menu grub2)], 300);
             # boot to hard disk is default
             send_key 'ret';
         }
@@ -2091,6 +2139,38 @@ sub script_run_interactive {
     }
 }
 
+=head2 download_script
+
+ download_script($srcfile, [$destfile]);
+
+Download C<$srcfile> script from worker data directory to the SUT and save it
+as C<$destfile>, with executable bit set. If C<$destfile> is not set,
+the default is to save the script file under the same name in the current
+directory.
+=cut
+
+sub download_script {
+    my $srcfile = shift || die 'Script filename required';
+    my $destfile = shift || basename($srcfile);
+
+    if (get_var('OFFLINE_SUT')) {
+        my $data = get_test_data($srcfile);
+        my $eof = hashed_string("DS$data");
+
+        script_start_io("cat >$destfile <<'$eof'");
+        type_string("$data\n$eof\n");
+        # Flush the script contents from console to avoid confusing
+        # script_finish_io()
+        wait_serial(qr/\Q$eof\E$/) if is_serial_terminal;
+        script_finish_io();
+    }
+    else {
+        assert_script_run("curl -v -o $destfile " . data_url($srcfile));
+    }
+
+    assert_script_run("chmod a+x $destfile");
+}
+
 =head2 create_btrfs_subvolume
 
  create_btrfs_subvolume();
@@ -2373,7 +2453,6 @@ sub install_patterns {
                 $cf_selected = 1;
             }
             elsif ($cf_selected == 1) {
-                record_soft_failure 'bsc#950763 CFEngine pattern is listed twice in installer';
                 next;
             }
         }
@@ -2381,8 +2460,15 @@ sub install_patterns {
         if (($pt =~ /sap_server/) && is_sle('=11-SP4')) {
             next;
         }
+        # skip the installation of Amazon-Web-Service due to bsc#1202478
+        if (($pt =~ /Amazon-Web-Service/) && is_aarch64) {
+            record_soft_failure('bsc#1202478 - skip pattern Amazon-Web-Service');
+            next;
+        }
         # For Public cloud module test we need install 'Tools' but not 'Instance' pattern if outside of public cloud images.
         next if (($pt =~ /OpenStack/) && ($pt !~ /Tools/) && !is_public_cloud);
+        # skip installation of wsl_base, wsl_gui and wsl_systemd patterns due to bsc#1226314.
+        next if (($pt =~ /wsl_base|wsl_gui|wsl_systemd/) && check_var('PATTERNS', 'all'));
         # if pattern is common-criteria and PATTERNS is all, skip, poo#73645
         next if (($pt =~ /common-criteria/) && check_var('PATTERNS', 'all'));
         zypper_call("in -t pattern $pt", timeout => 1800);
@@ -2504,9 +2590,6 @@ sub cleanup_disk_space {
     my $avail = script_output('findmnt -n -D -r -o avail / | awk \'{print $1+0}\'', timeout => 120);
     diag "available space = $avail GB";
     return if ($avail > get_var("DISK_LOW_WATERMARK"));
-
-    record_soft_failure('bsc#1192331 - Low diskspace on Filesystem root');
-
     my $ret = script_run("snapper --help | grep disable-used-space");
     my $disable = $ret ? '' : '--disable-used-space';
     my @snap_lists = split /\n/, script_output("snapper list $disable | grep important= | grep -v single | awk \'{print \$1}\'");
@@ -2589,8 +2672,8 @@ sub generate_results {
     return %results;
 }
 
-=head2 pars_results
-    pars_results();
+=head2 parse_test_results
+    parse_test_results();
 
 Takes C<test> as an argument. C<test> is an array of hashes which contain the
 test results. They usually are generated by C<generate_results>. Those are
@@ -2598,37 +2681,33 @@ parsed and create the junit xml representation.
 
 =cut
 
-sub pars_results {
+sub parse_test_results {
     my ($testsuite, $xmlfile, @test) = @_;
 
-    # check if there are some single test failing
-    # and if so, make sure the whole testsuite will fail
-    my $fail_check = 0;
-    for my $i (@test) {
-        if ($i->{result} eq 'FAIL') {
-            $fail_check++;
-        }
-    }
+    my $dom = XML::LibXML::Document->new('1.0', 'utf-8');
+    my $root = $dom->createElement('testsuite');
+    $root->setAttribute(name => "$testsuite");
+    my $date_elem = $dom->createElement('date');
+    $date_elem->appendTextNode(`date +"%m/%d/%Y"`);
+    my $build_elem = $dom->createElement('build');
+    $build_elem->appendTextNode(get_required_var('BUILD'));
+    $root->appendChild($build_elem);
+    $root->appendChild($date_elem);
 
-    if ($fail_check > 0) {
-        script_run(qq{echo "<testsuite name='$testsuite' errors='1'>" >> $xmlfile});
-    } else {
-        script_run(qq{echo "<testsuite name='$testsuite'>" >> $xmlfile});
-    }
-
-    # parse all results and provide expected xml file
     for my $i (@test) {
+        my $tc_elem = $dom->createElement('testcase');
+        $tc_elem->setAttribute(name => "$i->{test}");
         if ($i->{result} eq 'FAIL') {
-            script_run("echo \"<testcase name='$i->{test}' errors='1'>\" >>  $xmlfile");
-        } else {
-            script_run("echo \"<testcase name='$i->{test}'>\" >> $xmlfile");
+            $tc_elem->setAttribute(error => '1');
         }
-        script_run("echo \"<system-out>\" >> $xmlfile");
-        script_run("echo $i->{description} >>  $xmlfile");
-        script_run("echo \"</system-out>\" >> $xmlfile");
-        script_run("echo \"</testcase>\" >> $xmlfile");
+        my $description_elem = $dom->createElement('system-out');
+        $description_elem->appendTextNode($i->{description});
+        $tc_elem->appendChild($description_elem);
+        $root->appendChild($tc_elem);
     }
-    script_run("echo \"</testsuite>\" >> $xmlfile");
+    $dom->setDocumentElement($root);
+    $dom->toFile(hashed_string($xmlfile), 1);
+    assert_script_run('curl -v ' . autoinst_url("/files/" . $xmlfile) . " -o /tmp/$xmlfile");
 }
 
 our @all_tests_results;
@@ -2636,7 +2715,7 @@ our @all_tests_results;
 =head2 test_case
     test_case($name, $description, $result);
 
-C<test_case> can produce a data_structure which C<pars_results> can utilize.
+C<test_case> can produce a data_structure which C<parse_test_results> can utilize.
 Using C<test_case> in an OpenQA module you are able to /name/ and describe
 the whole test as subtasks, in a XUnit format.
 
@@ -2824,6 +2903,157 @@ sub define_secret_variable {
     script_run("read -sp '$var_name: ' $var_name", 0);
     type_password($var_value . "\n");
     script_run("set +a");
+}
+
+=head2 ping_size_check
+    ping_size_check($target, $size);
+ping_size_check will ping the defined target with different and increasing sizes with
+disabled packet fragmentation. If a size is specified, it will do single ping check with
+one size.
+
+Mandatory parameter: C<target> destination of ping target.
+
+Optional parameter: C<size> ping size for single ping test.
+=cut
+
+sub ping_size_check {
+    my $target = shift;
+    my $size = shift;
+    # Check connectivity with different packet size to target
+    # Fragmentation is disabled, maximum size is 1352 to fit in 1380 MTU in GRE tunel
+    my $max_mtu = get_var('MM_MTU', 1380);
+    my @sizes = $size ? $size : (100, 1000, 1252, 1350, 1352, 1400, 1430);
+    for my $size (@sizes) {
+        last if ($size + 28) > $max_mtu;    # ping adds 8 Bytes ICMP header and 20 Bytes IPv4 header = 28 Bytes
+        script_retry("ping -M do -s $size -c 1 $target", retry => 3, delay => 5, fail_message => "ping with packet size $size failed, problems with MTU size are expected. If it is multi-machine job, it can be GRE tunnel setup issue.");
+    }
+}
+
+=head2 write_sut_file
+
+  write_sut_file($path, $contents)
+
+Write C<$contents> to a file C<$path> on the SUT. The directories in C<$path>
+must already exist.
+=cut
+
+sub write_sut_file {
+    my ($path, $contents) = @_;
+
+    save_tmp_file($path, $contents);
+    my $url = join('/', (autoinst_url, 'files', $path));
+    assert_script_run("curl -v -o $path $url");
+}
+
+=head2 is_ipxe_boot
+
+Returns true if the current instance is in IPXE boot mode
+
+=cut
+
+sub is_ipxe_boot {
+
+    if (check_var('IPXE', '1') or check_var('IPXE_UEFI', '1')) {
+        return 1;
+    }
+    return 0;
+}
+
+=head2 is_uefi_boot
+
+Returns true if the current instance is in UEFI boot mode
+
+=cut
+
+sub is_uefi_boot {
+
+    if (check_var('UEFI', '1') or check_var('IPXE_UEFI', '1')) {
+        return 1;
+    }
+    return 0;
+}
+
+=head2 is_usb_boot
+
+ is_usb_boot();
+
+This will return C<1> if the env variables suggest
+that it boots from USB.
+
+=cut
+
+sub is_usb_boot {
+    return 1 if get_var('USB_BOOT', '');
+    return 0;
+}
+
+=head2 remove_efiboot_entry
+
+ remove_efiboot_entry(boot_entry => 'entry');
+
+Remove provided efiboot entry name by its corresponding boot number.
+
+=cut
+
+sub remove_efiboot_entry {
+    my %args = @_;
+    $args{boot_entry} //= '';
+
+    if ($args{boot_entry}) {
+        if (script_run("efibootmgr | grep $args{boot_entry}") == 0) {
+            script_output("efibootmgr | grep $args{boot_entry}") =~ /Boot([0-9A-F]+)\*/m;
+            assert_script_run("efibootmgr -B -b $1");
+            save_screenshot;
+            record_info("efiboot entry $args{boot_entry} deleted", script_output('efibootmgr -v'));
+        }
+        else {
+            record_info("efiboot entry $args{boot_entry} does not exist", script_output('efibootmgr -v'));
+        }
+    }
+    else {
+        record_info("No efiboot entry provided", script_output('efibootmgr -v'));
+    }
+}
+
+=head2 empty_usb_disks
+
+ empty_usb_disks(usb_disks => 'disk1 disk2');
+
+Empty contents of all plugged-in usb disks by formatting them. Passed argument
+usb_disks takes value if the form of "usb_disk1 usb_disk2 usb_disk3". Remove all
+plugged-in usb disks if usb_disks is empty.
+
+=cut
+
+sub empty_usb_disks {
+    my %args = @_;
+    $args{usb_disks} //= '';
+
+    my @usb_disks = $args{usb_disks} ? split(' ', $args{usb_disks}) : split('\n', script_output("ls /dev/disk/by-id/ -l | grep -i usb | grep -i -v -E \"generic|part|Virtual\" | sed \'s#^.*\\\/##\'"));
+    record_info("USB disks to be emptied are @usb_disks", "All plugged-in usb disks are " . script_output("ls /dev/disk/by-id/ -l; fdisk -l"));
+    foreach (@usb_disks) {
+        assert_script_run("echo y | mkfs.ext4 /dev/$_", timeout => 120);
+        record_info("USB disk /dev/$_ emptied");
+    }
+}
+
+=head2 upload_y2logs
+
+  upload_y2logs(file => '/tmp/y2logs123.tar.bz2', failok => 1);
+
+No arguments are required, y2logs can be created and uploaded with custom C<file>
+name, upload_logs can fail and continue with failok C<failok> set to 1
+
+=cut
+
+sub upload_y2logs {
+    my (%args) = @_;
+    $args{file} //= '/tmp/y2logs.tar.xz';
+    $args{failok} //= 0;
+    # Create and Upload y2log for analysis
+    script_retry("save_y2logs $args{file}", timeout => 180, retry => 3);
+    upload_logs($args{file}, failok => $args{failok});
+    save_screenshot;
 }
 
 1;

@@ -11,7 +11,7 @@ terraform:
     az_region: '%REGION%'
     deployment_name: '%DEPLOYMENTNAME%'
     os_image: '%OS_VER%'
-    public_key: '%SSH_KEY_PUB%'
+    public_key: '%SLES4SAP_PUBSSHKEY%'
     hana_remote_python: '%ANSIBLE_REMOTE_PYTHON%'
     iscsi_remote_python: '%ANSIBLE_REMOTE_PYTHON%'
     vnet_address_range: '%VNET_ADDRESS_RANGE%'
@@ -28,13 +28,14 @@ ansible:
   hana_vars:
     sap_hana_install_software_directory: /hana/shared/install
     sap_hana_install_master_password: 'DoNotUseThisPassw0rd'
-    sap_hana_install_sid: 'HDB'
+    sap_hana_install_sid: 'HA0'
     sap_hana_install_instance_number: '00'
     sap_domain: 'qe-test.example.com'
     primary_site: 'goofy'
     secondary_site: 'miky'
   create:
     - registration_role.yaml -e reg_code='%SCC_REGCODE_SLES4SAP%' -e email_address='testing@suse.com'
+    - fully-patch-system.yaml
     - pre-cluster.yaml
     - sap-hana-preconfigure.yaml -e use_reboottimeout=900
     - cluster_sbd_prep.yaml

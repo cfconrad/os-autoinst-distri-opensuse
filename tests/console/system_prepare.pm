@@ -22,8 +22,9 @@ use bootloader_setup qw(change_grub_config grub_mkconfig);
 use registration;
 use services::registered_addons 'full_registered_check';
 use List::MoreUtils 'uniq';
-use migration 'disable_kernel_multiversion';
+use migration 'modify_kernel_multiversion';
 use strict;
+use Utils::Architectures 'is_ppc64le';
 use warnings;
 
 sub run {
@@ -43,10 +44,11 @@ sub run {
 
     # Register the modules after media migration, so it can do regession
     if (get_var('MEDIA_UPGRADE') && get_var('DO_REGISTRY')) {
-        add_suseconnect_product(uc get_var('SLE_PRODUCT'), undef, undef, "-r " . get_var('SCC_REGCODE') . " --url " . get_var('SCC_URL'), 300, 1);
+        assert_script_run "SUSEConnect -r " . get_var('SCC_REGCODE') . " --url " . get_var('SCC_URL');
         if (is_sle('15+') && check_var('SLE_PRODUCT', 'sles')) {
             add_suseconnect_product(get_addon_fullname('base'), undef, undef, undef, 300, 1);
             add_suseconnect_product(get_addon_fullname('serverapp'), undef, undef, undef, 300, 1);
+            add_suseconnect_product(get_addon_fullname('desktop'), undef, undef, undef, 300, 1) if is_sle('=12-sp5', get_var('ORIGIN_SYSTEM_VERSION')) && is_ppc64le;
         }
         if (is_sle('15+') && check_var('SLE_PRODUCT', 'sled')) {
             add_suseconnect_product(get_addon_fullname('base'), undef, undef, undef, 300, 1);
@@ -87,15 +89,17 @@ sub run {
             diag "SUSEConnect --status-text locked: $out";
         }
         diag "SUSEConnect --status-text: $out";
-        if (!get_var('MEDIA_UPGRADE')) {
+        # System is unregistered for installation process via Full medium prepared for migration test,
+        # set INSTALL_FOR_MIGRATION=1 to skip the registration check. Use this setting to distinguish
+        # installation process for migration or migration process even in same migration flavor.
+        if (!get_var('MEDIA_UPGRADE') && !get_var('INSTALL_FOR_MIGRATION')) {
             services::registered_addons::full_registered_check;
         }
     }
 
     # enable multiversion for kernel-default based on bsc#1097111, for migration continuous cases only
     if (get_var('FLAVOR', '') =~ /Continuous-Migration/) {
-        record_soft_failure 'bsc#1097111 - File conflict of SLE12 SP3 and SLE15 kernel';
-        disable_kernel_multiversion;
+        modify_kernel_multiversion("enable");
     }
 
     assert_script_run 'rpm -q systemd-coredump || zypper -n in systemd-coredump || true', timeout => 200 if get_var('COLLECT_COREDUMPS');

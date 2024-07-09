@@ -89,7 +89,6 @@ EOT
         $package_list .= ' radvd' if (check_var('WICKED', 'ipv6'));
         # Common REF Configuration
         $package_list .= ' dhcp-server';
-
         zypper_call("-q in $package_list", timeout => 400);
         if ($need_reboot) {
             $self->reboot();
@@ -105,6 +104,9 @@ EOT
         $self->get_from_data('wicked/dhcp/dhcpd.conf', '/etc/dhcpd.conf');
         if (is_sle('<12-sp1')) {
             file_content_replace('/etc/dhcpd.conf', '^\s*ddns-update-style' => '# ddns-update-style', '^\s*dhcp-cache-threshold' => '# dhcp-cache-threshold');
+        }
+        if (my $mtu = get_var('MM_MTU')) {
+            file_content_replace('/etc/dhcpd.conf', 'interface-mtu 1380' => "interface-mtu $mtu");
         }
         file_content_replace('/etc/sysconfig/dhcpd', '--sed-modifier' => 'g', '^DHCPD_INTERFACE=.*' => 'DHCPD_INTERFACE="' . $ctx->iface() . '"');
 

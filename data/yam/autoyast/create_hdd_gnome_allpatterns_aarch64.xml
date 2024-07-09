@@ -61,9 +61,6 @@
       <pattern>print_server</pattern>
       <pattern>sap_server</pattern>
       <pattern>sw_management</pattern>
-      <pattern>wsl_base</pattern>
-      <pattern>wsl_gui</pattern>
-      <pattern>wsl_systemd</pattern>
       <pattern>x11</pattern>
       <pattern>x11_enhanced</pattern>
       <pattern>x11_raspberrypi</pattern>
@@ -92,6 +89,13 @@
       <addon t="map">
         <arch>{{ARCH}}</arch>
         <name>sle-module-basesystem</name>
+        <reg_code/>
+        <release_type>nil</release_type>
+        <version>{{VERSION}}</version>
+      </addon>
+      <addon t="map">
+        <arch>{{ARCH}}</arch>
+        <name>sle-module-python3</name>
         <reg_code/>
         <release_type>nil</release_type>
         <version>{{VERSION}}</version>

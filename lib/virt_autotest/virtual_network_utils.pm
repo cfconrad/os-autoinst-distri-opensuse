@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2019-2022 SUSE LLC
+# Copyright 2019-2023 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # Summary: virtual_network_utils:
@@ -26,7 +26,7 @@ use version_utils qw(is_sle is_alp);
 use virt_autotest::utils;
 
 our @EXPORT
-  = qw(download_network_cfg prepare_network restore_standalone destroy_standalone restart_network
+  = qw(download_network_cfg prepare_network restore_standalone destroy_standalone
   restore_guests restore_network destroy_vir_network restore_libvirt_default pload_debug_log
   check_guest_status check_guest_module check_guest_ip save_guest_ip test_network_interface hosts_backup
   hosts_restore get_free_mem get_active_pool_and_available_space clean_all_virt_networks setup_vm_simple_dns_with_ip
@@ -109,8 +109,15 @@ sub test_network_interface {
     my $gate = $args{gate};
     my $isolated = $args{isolated} // 0;
     my $routed = $args{routed} // 0;
-    my $target = $args{target} // script_output("dig +short openqa.oqa.prg2.suse.org");
+    my $target = $args{target} // script_output("dig +short google.com");
+    # Expect $target is an IP address
+    if ($target !~ /^[\d\.]+/) {
+        record_info("Incorrect remote target to test your network connection", $target, result => 'fail');
+        $target = script_output("dig +short libvirt.org");
+        $target =~ /^[\d\.]+/ ? record_info("One more try succeed!") : die "Unable to test network connections!";
+    }
 
+    record_info("Network test", "testing $mac");
     check_guest_ip("$guest", net => $net) if ((is_sle('>15') || is_alp) && ($isolated == 1) && get_var('VIRT_AUTOTEST'));
 
     save_guest_ip("$guest", name => $net);
@@ -121,16 +128,13 @@ sub test_network_interface {
     $is_sriov_test = "true" if caller 0 eq 'sriov_network_card_pci_passthrough';
     script_retry("nmap $guest -PN -p ssh | grep open", delay => 30, retry => 6, timeout => 180);
     my $nic = script_output "ssh root\@$guest \"grep '$mac' /sys/class/net/*/address | cut -d'/' -f5 | head -n1\"";
+    die "$mac not found in guest $guest" unless $nic;
     if (check_var('TEST', 'qam-xen-networking') || check_var('TEST', 'qam-kvm-networking') || $is_sriov_test eq "true") {
         assert_script_run("ssh root\@$guest \"echo BOOTPROTO=\\'dhcp\\' > /etc/sysconfig/network/ifcfg-$nic\"");
 
         # Restart the network - the SSH connection may drop here, so no return code is checked.
         if ($is_sriov_test ne "true") {
-            if (($guest =~ m/sles11/i) || ($guest =~ m/sles-11/i)) {
-                script_run("ssh root\@$guest service network restart", 300);
-            } else {
-                script_run("ssh root\@$guest systemctl restart network", 300);
-            }
+            script_run("ssh root\@$guest systemctl restart network", 300);
         }
         # Exit the SSH master socket if open
         script_run("ssh -O exit root\@$guest");
@@ -145,7 +149,14 @@ sub test_network_interface {
 
     # Show the IP address of secondary (tested) interface
     assert_script_run("ssh root\@$guest ip -o -4 addr list $nic | awk \"{print \\\$4}\" | cut -d/ -f1 | head -n1");
-    my $addr = script_output "ssh root\@$guest ip -o -4 addr list $nic | awk \"{print \\\$4}\" | cut -d/ -f1 | head -n1";
+    my $addr = "";
+    my $test_timeout = ($net eq 'vnet_host_bridge') ? 360 : 90;
+    my $start_time = time();
+    while (time() - $start_time <= $test_timeout) {
+        $addr = script_output("ssh root\@$guest ip -o -4 addr list $nic | awk \"{print \\\$4}\" | cut -d/ -f1 | head -n1", proceed_on_failure => 1);
+        last if ($addr ne "");
+        sleep 30;
+    }
     if ($addr eq "") {
         assert_script_run "ssh root\@$guest 'ip a'";
         die "No IP found for $nic in $guest";
@@ -253,10 +264,6 @@ sub destroy_standalone {
     #File cleanup was installed from qa_test_virtualization package
     my $cleanup_path = "/usr/share/qa/qa_test_virtualization/cleanup";
     assert_script_run("source $cleanup_path", 60) if (script_run("[[ -f $cleanup_path ]]") == 0);
-}
-
-sub restart_network {
-    is_sle('=11-sp4') ? script_run("service network restart") : systemctl 'restart network';
 }
 
 sub restore_guests {

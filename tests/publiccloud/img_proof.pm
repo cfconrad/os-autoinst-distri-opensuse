@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2018-2019 SUSE LLC
+# Copyright 2018-2023 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: python3-img-proof
@@ -12,8 +12,26 @@ use Mojo::Base 'publiccloud::basetest';
 use testapi;
 use Mojo::File 'path';
 use Mojo::JSON;
-use publiccloud::utils 'is_ondemand';
+use publiccloud::utils qw(is_ondemand is_hardened);
 use publiccloud::ssh_interactive 'select_host_console';
+use version_utils 'is_sle';
+use File::Basename 'basename';
+
+sub patch_json {
+    my ($file) = @_;
+    my $data = Mojo::JSON::decode_json(script_output("cat $file"));
+
+    foreach my $i (0 .. $#{$data->{tests}}) {
+        # Change "failed" to "passed"
+        if ($data->{tests}[$i]{nodeid} =~ /^test_sles_hardened/ && $data->{tests}[$i]{outcome} eq 'failed') {
+            $data->{tests}[$i]{outcome} = 'passed';
+            record_soft_failure(get_var('PUBLIC_CLOUD_SOFTFAIL_SCAP', "bsc#1220269 - scap-security-guide fails"));
+            my $json = Mojo::JSON::encode_json($data);
+            assert_script_run "cat > $file <<EOF\n$json\nEOF";
+            return;
+        }
+    }
+}
 
 sub run {
     my ($self, $args) = @_;
@@ -33,9 +51,27 @@ sub run {
         $instance = $provider->create_instance(check_guestregister => is_ondemand ? 1 : 0);
     }
 
+    if (is_hardened) {
+        # Fix permissions for /etc/ssh/sshd_config
+        # https://bugzilla.suse.com/show_bug.cgi?id=1219100
+        $instance->ssh_assert_script_run('sudo chmod 600 /etc/ssh/sshd_config');
+        # Avoid "pam_apparmor(sudo:session): Unknown error occurred changing to root hat: Operation not permitted"
+        $instance->ssh_assert_script_run('sudo sed -i /pam_apparmor.so/d /etc/pam.d/*');
+    }
+
     if ($tests eq "default") {
         record_info("Deprecated setting", "PUBLIC_CLOUD_IMG_PROOF_TESTS should not use 'default' anymore. Please use 'test_sles' instead.", result => 'softfail');
         $tests = "test_sles";
+    }
+
+    if (get_var('IMG_PROOF_GIT_REPO')) {
+        my $repo = get_required_var('IMG_PROOF_GIT_REPO');
+        my $branch = get_required_var('IMG_PROOF_GIT_BRANCH');
+        assert_script_run "zypper rm -y python3-img-proof python3-img-proof-tests";
+        assert_script_run "git clone --depth 1 -q --branch $branch $repo";
+        assert_script_run "cd img-proof";
+        assert_script_run "python3 setup.py install";
+        assert_script_run "cp -r usr/* /usr";
     }
 
     my $img_proof = $provider->img_proof(
@@ -49,9 +85,17 @@ sub run {
     # Because the IP address of instance might change during img_proof due to the hard-reboot, we need to re-add the ssh public keys
     assert_script_run(sprintf('ssh-keyscan %s >> ~/.ssh/known_hosts', $instance->public_ip));
 
-    upload_logs($img_proof->{logfile});
+    if (is_hardened) {
+        # Add soft-failure for https://bugzilla.suse.com/show_bug.cgi?id=1220269
+        patch_json $img_proof->{results} if (get_var('PUBLIC_CLOUD_SOFTFAIL_SCAP'));
+    }
+
+    upload_logs($img_proof->{logfile}, log_name => basename($img_proof->{logfile}) . ".txt");
     parse_extra_log(IPA => $img_proof->{results});
     assert_script_run('rm -rf img_proof_results');
+
+    $instance->ssh_script_run(cmd => 'sudo chmod a+r /var/tmp/report.html || true', no_quote => 1);
+    $instance->upload_log('/var/tmp/report.html', failok => 1);
 
     # fail, if at least one test failed
     if ($img_proof->{fail} > 0) {
@@ -63,13 +107,20 @@ sub run {
             my $file = path(bmwqemu::result_dir(), $filename);
             my $json = Mojo::JSON::decode_json($file->slurp);
             next if ($json->{result} ne 'fail');
-            $instance->upload_log('/var/log/cloudregister', log_name => 'cloudregister.log');
+            $instance->upload_log('/var/log/cloudregister', log_name => 'cloudregister.txt');
             last;
         }
         $instance->run_ssh_command(cmd => 'rpm -qa > /tmp/rpm_qa.txt', no_quote => 1);
         upload_logs('/tmp/rpm_qa.txt');
         $instance->run_ssh_command(cmd => 'sudo journalctl -b > /tmp/journalctl_b.txt', no_quote => 1);
         upload_logs('/tmp/journalctl_b.txt');
+    }
+
+    if (is_hardened) {
+        # Upload SCAP profile used by img-proof
+        my $url = "https://ftp.suse.com/pub/projects/security/oval/suse.linux.enterprise.15.xml.gz";
+        assert_script_run("curl --fail -LO $url");
+        upload_logs("suse.linux.enterprise.15.xml.gz");
     }
 }
 
@@ -97,34 +148,3 @@ public cloud module.
 The variables DISTRI, VERSION and ARCH must correspond to the system where
 img-proof get installed in and not to the public cloud image.
 
-=head1 Configuration
-
-=head2 PUBLIC_CLOUD_IMAGE_LOCATION
-
-Is used to retrieve the actually image ID from CSP via C<$provider->get_image_id()>
-
-For azure, the name of the image, e.g. B<SLES12-SP4-Azure-BYOS.x86_64-0.9.0-Build3.23.vhd>.
-For ec2 the AMI, e.g. B<ami-067a77ef88a35c1a5>.
-
-=head2 PUBLIC_CLOUD_PROVIDER
-
-The type of the CSP (Cloud service provider).
-
-=head2 PUBLIC_CLOUD_REGION
-
-The region to use. (default-azure: westeurope, default-ec2: eu-central-1)
-
-=head2 PUBLIC_CLOUD_INSTANCE_TYPE
-
-Specify the instance type. Which instance types exists depends on the CSP.
-(default-azure: Standard_A2, default-ec2: t2.large )
-
-More infos:
-Azure: https://docs.microsoft.com/en-us/rest/api/compute/virtualmachinesizes/list
-EC2: https://aws.amazon.com/ec2/instance-types/
-
-=head2 PUBLIC_CLOUD_AZURE_SUBSCRIPTION_ID
-
-This is B<only for azure> and used to create the service account file.
-
-=cut

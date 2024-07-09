@@ -20,7 +20,7 @@ use Carp;
 use microos 'microos_reboot';
 use power_action_utils qw(power_action prepare_system_shutdown);
 use version_utils;
-use utils 'reconnect_mgmt_console';
+use utils qw(reconnect_mgmt_console unlock_if_encrypted);
 use Utils::Backends;
 use Utils::Architectures;
 use publiccloud::instances;
@@ -28,6 +28,7 @@ use publiccloud::instances;
 our @EXPORT = qw(
   process_reboot
   check_reboot_changes
+  check_target_version
   rpmver
   trup_call
   trup_install
@@ -44,7 +45,7 @@ sub get_utt_packages {
     # SLE and SUSE MicroOS need an additional repo for testing
     if (is_sle || is_sle_micro) {
         assert_script_run 'curl -O ' . data_url("microos/utt.repo");
-    } elsif (is_leap_micro || is_alp) {
+    } elsif (is_leap_micro) {
         assert_script_run 'curl -o utt.repo ' . data_url("microos/utt-leap.repo");
     }
 
@@ -75,6 +76,7 @@ sub process_reboot {
     $args{trigger} //= 0;
     $args{automated_rollback} //= 0;
     $args{expected_grub} //= 1;
+    $args{expected_passphrase} //= 0;
 
     if (is_public_cloud) {
         my $instance = publiccloud::instances::get_instance();
@@ -88,7 +90,7 @@ sub process_reboot {
 
     handle_first_grub if ($args{automated_rollback});
 
-    if (is_microos || is_sle_micro && !is_s390x) {
+    if (!is_s390x && (is_microos || is_sle_micro('<6.0'))) {
         microos_reboot $args{trigger};
         record_kernel_audit_messages();
     } elsif (is_backend_s390x) {
@@ -106,7 +108,11 @@ sub process_reboot {
                 # Use firmware boot manager of aarch64 to boot HDD, when needed
                 opensusebasetest::handle_uefi_boot_disk_workaround();
             }
+            if ($args{expected_passphrase}) {
+                unlock_if_encrypted();
+            }
             # Replace by wait_boot if possible
+            select_console('sol', await_console => 0) if (is_ipmi);
             assert_screen 'grub2', 150;
             wait_screen_change { send_key 'ret' };
         }
@@ -142,7 +148,13 @@ sub check_reboot_changes {
     process_reboot(trigger => 1) if $change_happened;
 }
 
+# Check target version after migration
+sub check_target_version {
+    my $release = script_output "cat /etc/os-release";
+    my $expected_version = get_var("TARGET_VERSION", get_required_var("VERSION"));
 
+    die "Target version not found! Expected: $expected_version" if ($release !~ "VERSION=\"?$expected_version\"?");
+}
 
 =head2 record_kernel_audit_messages
 

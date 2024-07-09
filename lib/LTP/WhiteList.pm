@@ -72,7 +72,7 @@ sub find_whitelist_entry {
         @issues = @{$suite};
     }
     else {
-        $test =~ s/_postun$//g if check_var('KGRAFT', 1) && check_var('UNINSTALL_INCIDENT', 1);
+        $test =~ s/_postun$//g if check_var('KGRAFT', 1) && (check_var('UNINSTALL_INCIDENT', 1) || check_var('KGRAFT_DOWNGRADE', 1));
         return undef unless exists $suite->{$test};
         @issues = @{$suite->{$test}};
     }
@@ -126,10 +126,16 @@ sub override_known_failures {
         }
     }
 
-    my $msg = "Failure in LTP:$suite:$testname is known, overriding to softfail";
-    bmwqemu::diag($msg);
-    $testmod->{result} = 'softfail';
-    $testmod->record_soft_failure_result(join("\n", $msg, ($entry->{message} // ())));
+    if ($entry->{keep_fail}) {
+        $testmod->record_resultfile('Known', $entry->{message}, result => 'fail');
+    }
+    else {
+        my $msg = "Failure in LTP:$suite:$testname is known, overriding to softfail";
+        bmwqemu::diag($msg);
+        $testmod->{result} = 'softfail';
+        $testmod->record_soft_failure_result(join("\n", $msg, ($entry->{message} // ())));
+    }
+
     return 1;
 }
 

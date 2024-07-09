@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2016-2021 SUSE LLC
+# Copyright 2016-2023 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 package kdump_utils;
@@ -13,29 +13,37 @@ use registration;
 use Utils::Backends;
 use Utils::Architectures;
 use power_action_utils 'power_action';
-use version_utils qw(is_sle is_jeos is_leap is_tumbleweed is_opensuse);
+use version_utils qw(is_sle is_jeos is_leap is_tumbleweed is_opensuse is_transactional
+  is_leap_micro is_sle_micro);
 use utils 'ensure_serialdev_permissions';
 use virt_autotest::utils 'is_xen_host';
 
 our @EXPORT = qw(install_kernel_debuginfo prepare_for_kdump
-  activate_kdump activate_kdump_cli activate_kdump_without_yast
+  activate_kdump activate_kdump_cli activate_kdump_without_yast activate_kdump_transactional
   kdump_is_active do_kdump configure_service check_function
   full_kdump_check deactivate_kdump_cli);
 
-sub install_kernel_debuginfo {
-    my $import_gpg = get_var('BUILD') =~ /^MR:/ ? '--gpg-auto-import-keys' : '';
-    zypper_call "$import_gpg ref";
+sub determine_kernel_debuginfo_package {
     # Using the provided capabilities of the currently active kernel, get the
     # name and version of the shortest flavor and add "-debuginfo" to the name.
-    # Before kernel-default-base was built separately (< 15 SP2/15.2):
-    # kernel-default-base(x86-64) = 4.12.14-197.37.1
-    # -> kernel-default-base-debuginfo-4.12.14-197.37.1
-    # With kernel-default-base built separately (>= 15 SP2/15.2):
-    # kernel-default(x86-64) = 5.3.18-lp152.26.2
-    # kernel-default-base(x86-64) = 5.3.18-lp152.26.2.lp152.8.2.2
-    # -> kernel-default-debuginfo-5.3.18-lp152.26.2
-    my $debuginfo = script_output('rpm -qf /boot/initrd-$(uname -r) --provides | awk \'match($0,/(kernel-.+)\(.+\) = (.+)/,m) {printf "%d %s-debuginfo-%s\n", length($0), m[1], m[2]}\' | sort -n | head -n1 | cut -d" " -f2-');
-    zypper_call("-v in $debuginfo", timeout => 4000);
+    return script_output('rpm -qf /boot/initrd-$(uname -r) --provides | awk \'match($0,/(kernel-.+)\(.+\) = (.+)/,m) {printf "%d %s-debuginfo-%s\n", length($0), m[1], m[2]}\' | sort -n | head -n1 | cut -d" " -f2-');
+}
+
+my $install_debug_info_timeout = 4000;
+
+sub install_transactional_kernel_debuginfo {
+    return undef if get_var('SKIP_KERNEL_DEBUGINFO');
+    my $cmd = 'transactional-update --continue --non-interactive pkg install kernel-default-debuginfo';
+    assert_script_run($cmd, timeout => $install_debug_info_timeout);
+}
+
+sub install_kernel_debuginfo {
+    return install_transactional_kernel_debuginfo if is_transactional;
+    my $import_gpg = get_var('BUILD') =~ /^MR:/ ? '--gpg-auto-import-keys' : '';
+    zypper_call "$import_gpg ref";
+    return undef if get_var('SKIP_KERNEL_DEBUGINFO');
+    my $debuginfo = determine_kernel_debuginfo_package;
+    zypper_call("-v in $debuginfo", timeout => $install_debug_info_timeout);
 }
 
 sub get_repo_url_for_kdump_sle {
@@ -87,11 +95,15 @@ sub prepare_for_kdump_sle {
     }
 }
 
-sub prepare_for_kdump {
-    my %args = @_;
-    $args{test_type} //= '';
+sub install_kernel_debuginfo_via_repo {
+    my ($repo_url) = @_;
+    zypper_call("ar $repo_url debuginfo");
+    install_kernel_debuginfo;
+    zypper_call("rr debuginfo");
+}
 
-    # disable packagekitd
+sub disable_packagekitd {
+    return if is_transactional;
     quit_packagekit;
     my @pkgs = qw(yast2-kdump kdump);
     push @pkgs, qw(crash);
@@ -99,9 +111,14 @@ sub prepare_for_kdump {
     if (is_jeos && get_var('UEFI')) {
         push @pkgs, is_aarch64 ? qw(mokutil shim) : qw(mokutil);
     }
-
     zypper_call "in @pkgs";
+}
 
+sub prepare_for_kdump {
+    my %args = @_;
+    $args{test_type} //= '';
+
+    disable_packagekitd;
     return if ($args{test_type} eq 'before');
 
     # add debuginfo channels
@@ -116,6 +133,13 @@ sub prepare_for_kdump {
         zypper_call("rr $snapshot_debuginfo_repo");
         return;
     }
+
+    # handle micro via REPO_TRANSACTIONAL_DEBUG or skip repo setup if not set
+    if (my $transactional_debuginfo_repo = get_var('REPO_TRANSACTIONAL_DEBUG')) {
+        return install_kernel_debuginfo_via_repo($transactional_debuginfo_repo);
+    }
+    return if is_leap_micro || is_sle_micro;
+
     my $opensuse_debug_repos = 'repo-debug';
     $opensuse_debug_repos .= ' repo-debug-update' unless is_tumbleweed;
     $opensuse_debug_repos .= ' repo-sle-debug-update' if is_leap("15.3+");
@@ -155,6 +179,7 @@ sub activate_kdump {
     # get kdump memory size bsc#1161421
     my $memory_total = script_output('kdumptool  calibrate | awk \'/Total:/ {print $2}\'');
     my $memory_kdump = $memory_total >= 2048 ? 1024 : 320;
+    $memory_kdump = get_var('CRASH_MEMORY') if get_var('CRASH_MEMORY');
     my $module_name = y2_module_consoletest::yast2_console_exec(yast2_module => 'kdump', yast2_opts => '--ncurses');
     my @initial_tags = qw(yast2-kdump-disabled yast2-kdump-enabled);
     push(@initial_tags,
@@ -211,21 +236,7 @@ sub activate_kdump {
     wait_serial("$module_name-0", 240) || die "'yast2 kdump' didn't finish";
 }
 
-# Activate kdump using yast command line interface
-sub activate_kdump_cli {
-    # Skip configuration, if is kdump already enabled and no special memory settings is required
-    # Yast cli may timeout on with XEN bsc#1206274, we need to check configuration directly
-    my $status;
-    if (is_xen_host) {
-        $status = script_run('! grep "GRUB_CMDLINE_XEN_DEFAULT.*crashkernel" /etc/default/grub');
-    } else {
-        $status = script_run('yast kdump show 2>&1 | grep "Kdump is disabled"', 180);
-    }
-    return if ($status and !get_var('CRASH_MEMORY'));
-
-    # Make sure fadump is disabled on PowerVM
-    assert_script_run('yast2 kdump fadump disable', 180) if is_pvm;
-
+sub determine_crash_memory {
     # Use kdumptool calibrate to get default memory settings
     my $kdumptool_calibrate = script_output('kdumptool calibrate');
     record_info('KDUMPTOOL CALIBRATE', $kdumptool_calibrate);
@@ -234,6 +245,27 @@ sub activate_kdump_cli {
 
     # Set kernel crash memory from job variable or use kdumptool calibrate value
     my $crash_memory = get_var('CRASH_MEMORY') ? get_var('CRASH_MEMORY') : $calibrated_memory;
+    record_info('CRASH MEMORY', $crash_memory);
+    return $crash_memory;
+}
+
+# Activate kdump using yast command line interface
+sub activate_kdump_cli {
+    # Skip configuration, if is kdump already enabled and no special memory settings is required
+    # and always proceed with kdump configuration if fadump is requested
+    # Yast cli may timeout on with XEN bsc#1206274, we need to check configuration directly
+    my $status;
+    if (is_xen_host) {
+        $status = script_run('! grep "GRUB_CMDLINE_XEN_DEFAULT.*crashkernel" /etc/default/grub');
+    } else {
+        $status = script_run('yast kdump show 2>&1 | grep "Kdump is disabled"', 180);
+    }
+    return if ($status and !get_var('CRASH_MEMORY') and !get_var('FADUMP'));
+
+    # Make sure fadump is disabled on PowerVM
+    assert_script_run('yast2 kdump fadump disable', 180) if is_pvm;
+
+    my $crash_memory = determine_crash_memory;
     record_info('CRASH MEMORY', $crash_memory);
     assert_script_run("yast kdump startup enable alloc_mem=${crash_memory}", 180);
     # Enable firmware assisted dump if needed
@@ -266,6 +298,11 @@ sub activate_kdump_without_yast {
     # sync changes from /etc/default/grub into /boot/grub2/grub.cfg
     assert_script_run('grub2-mkconfig -o /boot/grub2/grub.cfg');
     systemctl('enable kdump.service');
+}
+
+sub activate_kdump_transactional {
+    my $crash_memory = determine_crash_memory;
+    assert_script_run("transactional-update --continue setup-kdump --crashkernel=0,$crash_memory");
 }
 
 sub kdump_is_active {
@@ -321,10 +358,11 @@ sub configure_service {
     }
 
     prepare_for_kdump(%args);
+    select_console 'root-console';
     if ($args{yast_interface} eq 'cli') {
-        activate_kdump_cli;
+        is_transactional ? activate_kdump_transactional : activate_kdump_cli;
     } else {
-        return 16 if (activate_kdump == 16);
+        return 16 if activate_kdump == 16;
     }
 
     # restart to activate kdump
@@ -353,7 +391,7 @@ sub configure_service {
 sub check_function {
     my %args = @_;
     $args{test_type} //= '';
-    my $boot_timeout = is_aarch64 || is_hyperv ? 240 : undef;
+    my $boot_timeout = is_aarch64 || is_hyperv ? 300 : undef;
 
     my $self = y2_module_consoletest->new();
 
@@ -361,6 +399,7 @@ sub check_function {
     return 1 unless kdump_is_active;
 
     do_kdump;
+
 
     if (get_var('FADUMP')) {
         reconnect_mgmt_console;
@@ -383,11 +422,28 @@ sub check_function {
     assert_script_run 'find /var/crash/';
 
     if ($args{test_type} eq 'function') {
-        # Check, that vmcore exists, otherwise fail
-        assert_script_run('ls -lah /var/crash/*/vmcore', 240);
-        my $vmlinux = (is_sle("<16") || is_leap("<16.0")) ? '/boot/vmlinux-$(uname -r)*' : '/usr/lib/modules/$(uname -r)/vmlinux*';
-        my $crash_cmd = "echo exit | crash `ls -1t /var/crash/*/vmcore | head -n1` $vmlinux";
-        validate_script_output "$crash_cmd", sub { m/PANIC:\s([^\s]+)/ }, is_aarch64 ? 1200 : 800;
+        # check that core dump exists and that it is not empty
+        assert_script_run('files=(/var/crash/*/vmcore) && test -s "${files[-1]}"', 240);
+
+        # check the core dump via the crash utility if possible
+        my $crash_cmd;
+        my $vmcore_glob = '/var/crash/*/vmcore';
+        my $vmlinux_glob = (is_sle("<16") || is_sle_micro("<6.0") || is_leap("<16.0"))
+          ? '/boot/vmlinux-$(uname -r)*'
+          : '/usr/lib/modules/$(uname -r)/vmlinux*';
+        if (!is_transactional) {
+            $crash_cmd = "echo exit | crash `ls -1t $vmcore_glob | head -n1` $vmlinux_glob";
+        }
+        elsif (!get_var('SKIP_KERNEL_DEBUGINFO')) {
+            my $vmcore = script_output("ls -1t $vmcore_glob");
+            my $vmlinux = script_output("ls -1t $vmlinux_glob");
+            my $vmlinuxd = script_output('rpm -ql kernel-default-debuginfo | grep vmlinux');
+            my $zypper_call = 'zypper -n in crash';
+            my $crash_call = "echo exit | crash /host/$vmcore /host/$vmlinux /host/$vmlinuxd";
+            my $bash_cmd = "$zypper_call && $crash_call";
+            $crash_cmd = "podman container run --privileged -v '/:/host' registry.opensuse.org/opensuse/tumbleweed bash -c '$bash_cmd'";
+        }
+        validate_script_output $crash_cmd, sub { m/PANIC:\s([^\s]+)/ }, is_aarch64 ? 1200 : 800 if $crash_cmd;
     }
     else {
         # migration tests need remove core files before migration start

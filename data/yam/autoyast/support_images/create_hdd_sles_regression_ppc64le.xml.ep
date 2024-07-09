@@ -248,13 +248,6 @@
         <products config:type="list">
             <product><%= uc $get_var->('SLE_PRODUCT') %></product>
         </products>
-        <packages config:type="list">
-            <!-- Workaround for bsc#1202234: [addon]-release packages are missing after autoyast installation. -->
-            % foreach (values %$addons) {
-            <package><%= lc($_->{name}) %>-release</package>
-            % }
-            <!-- end of workaround -->
-        </packages>
 	<patterns config:type="list">
            % for my $pattern (@$patterns) {
            <pattern><%= $pattern %></pattern>
@@ -295,7 +288,7 @@
             </password_settings>
             <shell>/bin/bash</shell>
             <uid>1000</uid>
-            <user_password>nots3cr3t</user_password>
+            <user_password>{{PASSWORD}}</user_password>
             <username>bernhard</username>
         </user>
         <user>
@@ -313,7 +306,7 @@
             </password_settings>
             <shell>/bin/bash</shell>
             <uid>0</uid>
-            <user_password>nots3cr3t</user_password>
+            <user_password>{{PASSWORD}}</user_password>
             <username>root</username>
         </user>
     </users>

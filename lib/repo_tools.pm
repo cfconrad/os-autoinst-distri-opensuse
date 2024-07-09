@@ -68,7 +68,7 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_leap is_sle is_tumbleweed);
+use version_utils qw(is_leap is_sle is_sle_micro is_tumbleweed);
 use y2_module_consoletest;
 use Test::Assert ':all';
 use xml_utils;
@@ -263,8 +263,9 @@ sub rmt_wizard {
         record_soft_failure 'bsc#1195759';
         zypper_call 'in rmt-server';
     }
-    zypper_call 'in mariadb';
 
+    my $count = 1;
+  WORKAROUND:
     enter_cmd "yast2 rmt;echo yast2-rmt-wizard-\$? > /dev/$serialdev";
     assert_screen 'yast2_rmt_registration';
     send_key 'alt-u';
@@ -276,8 +277,16 @@ sub rmt_wizard {
     type_string(get_required_var('SMT_ORG_PASSWORD'));
     wait_still_screen(2, 5);
     send_key 'alt-n';
-    assert_screen 'yast2_rmt_config_written_successfully', 200;
-    send_key 'alt-o';
+    assert_screen [qw(yast2_rmt_config_written_successfully yast2_rmt_timeout)], 200;
+    if (match_has_tag 'yast2_rmt_timeout') {
+        die 'Credentials timed out 10 times' if $count == 10;
+        # soft_fail is on needle
+        send_key 'ret';
+        wait_still_screen(1, 2);
+        record_info 'Retry', "Retry No. " . $count++;
+        goto WORKAROUND;
+    }
+    send_key 'alt-o' if match_has_tag 'yast2_rmt_config_written_successfully';
     assert_screen 'yast2_rmt_db_password';
     send_key 'alt-p';
     type_string "rmt";
@@ -417,7 +426,7 @@ sub prepare_source_repo {
         }
         # SLE maintenance tests are assumed to be SCC registered
         # and source repositories disabled by default
-        elsif (get_var('FLAVOR') =~ /-Updates$|-Incidents$/) {
+        elsif (main_common::is_updates_tests) {
             zypper_call(q{mr -e $(zypper -n lr | awk '/-Source/ {print $1}')});
         }
         else {
@@ -482,6 +491,15 @@ sub generate_version {
     $separator //= '_';
     if (is_leap(">=15.4")) {
         return $version;
+    } elsif (is_sle_micro) {
+        $dist = 'SLE';
+        if (is_sle_micro('<5.3')) {
+            $version = "15_SP3";
+        } elsif (is_sle_micro('<5.5')) {
+            $version = "15_SP4";
+        } elsif (is_sle_micro('<6.0')) {
+            $version = "15_SP5";
+        }
     } elsif (is_sle) {
         $dist = 'SLE';
         $version =~ s/-/$separator/;
@@ -490,6 +508,7 @@ sub generate_version {
     } elsif (is_leap) {
         $dist = 'openSUSE_Leap';
     }
+
     return $dist . $separator . $version;
 }
 

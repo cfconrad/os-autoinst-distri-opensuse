@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021 SUSE LLC
+# Copyright 2021-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Test rootless mode on podman.
@@ -13,7 +13,7 @@
 #   * container is launched with existing user id
 #   * container is launched with keep-id of the user who run the container
 # - Restore /etc/zypp/credentials.d/ credentials
-# Maintainer: qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'containers::basetest';
 use testapi;
@@ -21,12 +21,9 @@ use serial_terminal 'select_serial_terminal';
 use utils;
 use containers::common;
 use containers::container_images;
-use containers::utils qw(registry_url get_podman_version);
-use version_utils qw(is_sle is_leap is_jeos is_transactional package_version_cmp);
-use power_action_utils 'power_action';
-use bootloader_setup 'add_grub_cmdline_settings';
+use containers::utils qw(get_podman_version);
+use version_utils qw(is_sle is_leap is_jeos is_transactional package_version_cmp is_tumbleweed);
 use Utils::Architectures;
-use transactional 'process_reboot';
 use Utils::Logging 'save_and_upload_log';
 
 my $bsc1200623 = 0;    # to prevent printing the soft-failure more than once
@@ -39,11 +36,11 @@ sub run {
 
     my $podman = $self->containers_factory('podman');
 
+    $podman_version = get_podman_version();
     # add testuser to systemd-journal group to allow non-root
     # user to access container logs via journald event driver
-    # to avoid flakes w/ Podman <=4.0.0
-    $podman_version = get_podman_version();
-    if (package_version_cmp($podman_version, '4.0.0') <= 0) {
+    # bsc#1207673, bsc#1218023
+    if (is_leap("<16.0") || is_sle("<16")) {
         assert_script_run "usermod -a -G systemd-journal $testapi::username";
     }
 
@@ -52,34 +49,25 @@ sub run {
         my $cont_storage = '/etc/containers/storage.conf';
         if ($unresolved_config =~ m|$cont_storage|) {
             assert_script_run(sprintf('mv  %s.rpmnew %s', $cont_storage, $cont_storage));
+            assert_script_run('rm -rf /var/lib/containers/storage');
             assert_script_run('podman system reset -f');
         }
     }
 
     # Prepare for Podman 3.4.4 and CGroups v2
-    if (is_sle('15-SP3+') || is_leap('15.3+')) {
-        record_info 'cgroup v2', 'Switching to cgroup v2';
-        assert_script_run "usermod -a -G systemd-journal $testapi::username";
-        if (is_transactional) {
-            add_grub_cmdline_settings('systemd.unified_cgroup_hierarchy=1', update_grub => 0);
-            assert_script_run('transactional-update grub.cfg');
-            process_reboot(trigger => 1);
-        } else {
-            add_grub_cmdline_settings('systemd.unified_cgroup_hierarchy=1', update_grub => 1);
-            power_action('reboot', textmode => 1);
-            $self->wait_boot(bootloader_time => 360);
-        }
+    if ((is_sle('15-SP3+') || is_leap('15.3+')) && !check_var('CONTAINERS_CGROUP_VERSION', '1')) {
+        switch_cgroup_version($self, 2);
         select_serial_terminal;
 
-        validate_script_output 'cat /proc/cmdline', sub { /systemd\.unified_cgroup_hierarchy=1/ };
         validate_script_output 'podman info', sub { /cgroupVersion: v2/ };
         validate_script_output "id $testapi::username", sub { /systemd-journal/ };
     }
 
-    if ((is_s390x || is_ppc64le) && check_bsc1192051()) {
-        record_soft_failure("bsc#1192051 - Permission denied for faccessat2");
-        return;
-    }
+    # Check for bsc#1192051
+    # Test needs to pass, if seccomp filtering is off
+    assert_script_run('podman run --security-opt=seccomp=unconfined --rm -it registry.opensuse.org/opensuse/tumbleweed:latest bash -c "test -x /bin/sh"');
+    # And this one is the actual check for bsc#1192051, with seccomp filtering on
+    assert_script_run('podman run --rm -it registry.opensuse.org/opensuse/tumbleweed:latest bash -c "test -x /bin/sh"', fail_message => "bsc#1192051 - Permission denied for faccessat2");
 
     my $image = 'registry.opensuse.org/opensuse/tumbleweed:latest';
 
@@ -96,7 +84,7 @@ sub run {
     if ($subuid_start eq '') {
         record_soft_failure 'bsc#1185342 - YaST does not set up subuids/-gids for users';
         $subuid_start = 200000;
-        my $subuid_range = $subuid_start + 1000;
+        my $subuid_range = $subuid_start + 65535;
         assert_script_run "usermod --add-subuids $subuid_start-$subuid_range --add-subgids $subuid_start-$subuid_range $user";
     }
     assert_script_run "grep $user /etc/subuid", fail_message => "subuid range not assigned for $user";
@@ -172,7 +160,8 @@ sub verify_userid_on_container {
             record_soft_failure "bsc#1182428 - Issue with nsenter from podman-top";
         }
     } else {
-        validate_script_output "podman top $cid user huser", sub { /bernhard\s+bernhard/ };
+        my $exp_user = $testapi::username;
+        validate_script_output "podman top $cid user huser", sub { /$exp_user\s+$exp_user/ };
         my $output = script_output "podman top $cid capeff";
 
         if ($output !~ /none/) {
@@ -190,14 +179,6 @@ sub verify_userid_on_container {
     my $cmd = '(id | grep uid=0) && zypper -n -q in sudo shadow && useradd geeko -u 1000 && (sudo -u geeko id | grep geeko)';
     script_retry("podman run -ti --rm '$image' bash -c '$cmd'", timeout => 300, retry => 3, delay => 60);
 
-}
-
-# Check if bsc#1192051 is present. bsc#1192051 is basically a permission denied error in faccessat2
-sub check_bsc1192051() {
-    # Test needs to pass, if seccomp filtering is off
-    assert_script_run('podman run --security-opt=seccomp=unconfined --rm -it registry.opensuse.org/opensuse/tumbleweed:latest bash -c "test -x /bin/sh"');
-    # And this one is the actual check for bsc#1192051, with seccomp filtering on
-    return script_run('podman run --rm -it registry.opensuse.org/opensuse/tumbleweed:latest bash -c "test -x /bin/sh"') != 0;
 }
 
 sub check_bsc1200623() {
@@ -225,8 +206,6 @@ sub post_run_hook {
 sub post_fail_hook {
     my $self = shift;
     save_and_upload_log('cat /etc/{subuid,subgid}', "/tmp/permissions.txt");
-    assert_script_run("tar -capf /tmp/proc_files.tar.xz /proc/self");
-    upload_logs("/tmp/proc_files.tar.xz");
     if (is_sle) {
         save_and_upload_log('ls -la /etc/zypp/credentials.d', "/tmp/credentials.d.perm.txt");
         assert_script_run "setfacl -x u:$testapi::username /etc/zypp/credentials.d/*";

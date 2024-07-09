@@ -15,7 +15,8 @@ use publiccloud::utils "is_byos";
 use publiccloud::aws_client;
 use publiccloud::ssh_interactive 'select_host_console';
 
-has ssh_key_file => undef;
+has ssh_key_pair => undef;
+use constant SSH_KEY_PEM => 'QA_SSH_KEY.pem';
 
 sub init {
     my ($self) = @_;
@@ -36,32 +37,26 @@ sub find_img {
     return;
 }
 
-sub get_default_instance_type {
-    # Returns the default machine family type to be used, based on the public cloud architecture
-
-    my $arch = get_var("PUBLIC_CLOUD_ARCH", "x86_64");
-    return "a1.large" if ($arch eq 'arm64');
-    return "t2.large";
-}
+# Returns true if key is already created in EC2 otherwise tries 10 times to create it and then fails
+# If the subroutine manager to create key pair in EC2 it stores it in $self->ssh_key_pair
 
 sub create_keypair {
-    my ($self, $prefix, $out_file) = @_;
+    my ($self, $prefix) = @_;
 
-    return $self->ssh_key_file if ($self->ssh_key_file);
+    return 1 if (script_run('test -s ' . SSH_KEY_PEM) == 0);
 
     for my $i (0 .. 9) {
         my $key_name = $prefix . "_" . $i;
         my $cmd = "aws ec2 create-key-pair --key-name '" . $key_name
-          . "' --query 'KeyMaterial' --output text > " . $out_file;
+          . "' --query 'KeyMaterial' --output text > " . SSH_KEY_PEM;
         my $ret = script_run($cmd);
         if (defined($ret) && $ret == 0) {
-            assert_script_run('chmod 600 ' . $out_file);
-            $self->ssh_key($key_name);
-            $self->ssh_key_file($out_file);
-            return $key_name;
+            assert_script_run('chmod 0400 ' . SSH_KEY_PEM);
+            $self->ssh_key_pair($key_name);
+            return 1;
         }
     }
-    return;
+    return 0;
 }
 
 sub delete_keypair {
@@ -77,7 +72,7 @@ sub delete_keypair {
 sub upload_img {
     my ($self, $file) = @_;
 
-    die("Create key-pair failed") unless ($self->create_keypair($self->prefix . time, 'QA_SSH_KEY.pem'));
+    die("Create key-pair failed") unless ($self->create_keypair($self->prefix . time));
 
     # AMI of image to use for helper VM to create/build the image on CSP.
     my $helper_ami_id = get_var('PUBLIC_CLOUD_EC2_UPLOAD_AMI');
@@ -133,7 +128,32 @@ sub upload_img {
     my $img_arch = get_var('PUBLIC_CLOUD_ARCH', 'x86_64');
     my $sec_group = get_var('PUBLIC_CLOUD_EC2_UPLOAD_SECGROUP');
     my $vpc_subnet = get_var('PUBLIC_CLOUD_EC2_UPLOAD_VPCSUBNET');
-    my $instance_type = get_var('PUBLIC_CLOUD_EC2_UPLOAD_INSTANCE_TYPE', get_default_instance_type());
+    my $instance_type = get_required_var('PUBLIC_CLOUD_EC2_UPLOAD_INSTANCE_TYPE');
+
+    if (!$sec_group) {
+        $sec_group = script_output("aws ec2 describe-security-groups --output text "
+              . "--region " . $self->provider_client->region . " "
+              . "--filters 'Name=group-name,Values=tf-sg' "
+              . "--query 'SecurityGroups[0].GroupId'"
+        );
+        $sec_group = "" if ($sec_group eq "None");
+    }
+    if (!$vpc_subnet) {
+        my $vpc_id = script_output("aws ec2 describe-vpcs --output text "
+              . "--region " . $self->provider_client->region . " "
+              . "--filters 'Name=tag:Name,Values=tf-vpc' "
+              . "--query 'Vpcs[0].VpcId'"
+        );
+        if ($vpc_id ne "None") {
+            # Grab subnet with CidrBlock defined in https://gitlab.suse.de/qac/infra/-/blob/master/aws/tf/main.tf
+            $vpc_subnet = script_output("aws ec2 describe-subnets --output text "
+                  . "--region " . $self->provider_client->region . " "
+                  . "--filters 'Name=vpc-id,Values=$vpc_id' 'Name=cidr-block,Values=10.11.4.0/22' "
+                  . "--query 'Subnets[0].SubnetId'"
+            );
+            $vpc_subnet = "" if ($vpc_subnet eq "None");
+        }
+    }
 
     # ec2uploadimg will fail without this file, but we can have it empty
     # because we passing all needed info via params anyway
@@ -149,13 +169,14 @@ sub upload_img {
           . '--ena-support '
           . "--verbose "
           . "--regions '" . $self->provider_client->region . "' "
-          . "--ssh-key-pair '" . $self->ssh_key . "' "
-          . "--private-key-file " . $self->ssh_key_file . " "
+          . "--ssh-key-pair '" . $self->ssh_key_pair . "' "
+          . "--private-key-file " . SSH_KEY_PEM . " "
           . "-d 'OpenQA upload image' "
           . "--wait-count 3 "
           . "--ec2-ami '" . $helper_ami_id . "' "
           . "--type '" . $instance_type . "' "
           . "--user '" . $self->provider_client->username . "' "
+          . "--boot-mode '" . get_var('PUBLIC_CLOUD_EC2_BOOT_MODE', 'uefi-preferred') . "' "
           . ($sec_group ? "--security-group-ids '" . $sec_group . "' " : '')
           . ($vpc_subnet ? "--vpc-subnet-id '" . $vpc_subnet . "' " : '')
           . "'$file'",
@@ -164,6 +185,7 @@ sub upload_img {
 
     my $ami = $self->find_img($img_name);
     die("Cannot find image after upload!") unless $ami;
+    script_run("aws ec2 create-tags --resources $ami --tags Key=pcw_ignore,Value=1") if (check_var('PUBLIC_CLOUD_KEEP_IMG', '1'));
     validate_script_output('aws ec2 describe-images --image-id ' . $ami, sub { /"EnaSupport":\s+true/ });
     record_info('INFO', "AMI: $ami");    # Show the ami-* number, could be useful
 }
@@ -180,7 +202,7 @@ sub img_proof {
     $args{instance_type} //= 't2.large';
     $args{user} //= 'ec2-user';
     $args{provider} //= 'ec2';
-    $args{ssh_private_key_file} //= $self->ssh_key_file;
+    $args{ssh_private_key_file} //= SSH_KEY_PEM;
     $args{key_name} //= $self->ssh_key;
 
     return $self->run_img_proof(%args);
@@ -188,19 +210,20 @@ sub img_proof {
 
 sub cleanup {
     my ($self, $args) = @_;
-    my $instance_id = $args->{my_instance}->{instance_id};
+    script_run('cd ~/terraform');
+    my $instance_id = script_output('terraform output -json | jq -r ".vm_name.value[0]"', proceed_on_failure => 1);
+    script_run('cd');
 
     select_host_console(force => 1);
+    if (!check_var('PUBLIC_CLOUD_SLES4SAP', 1) && defined($instance_id)) {
+        script_run("aws ec2 get-console-output --instance-id $instance_id | jq -r '.Output' > console.txt");
+        upload_logs("console.txt", failok => 1);
 
-    script_run("aws ec2 get-console-output --instance-id $instance_id | jq -r '.Output' > console.txt");
-    upload_logs("console.txt", failok => 1);
-
-    script_run("aws ec2 get-console-screenshot --instance-id $instance_id | jq -r '.ImageData' | base64 --decode > console.jpg");
-    upload_logs("console.jpg", failok => 1);
-
+        script_run("aws ec2 get-console-screenshot --instance-id $instance_id | jq -r '.ImageData' | base64 --decode > console.jpg");
+        upload_logs("console.jpg", failok => 1);
+    }
     $self->terraform_destroy() if ($self->terraform_applied);
     $self->delete_keypair();
-    $self->provider_client->cleanup();
 }
 
 sub describe_instance

@@ -224,11 +224,11 @@ sub add_junit_log {
 sub upload_guest_assets {
     my $self = shift;
 
-    if (get_var('CASEDIR')) {
-        record_info('Skip uploading guest assets', 'Guest assets will only be uploaded with test codes in git master branch.');
+    if (get_var('CASEDIR') =~ /os-autoinst-distri-opensuse/) {
+        record_info('Skip uploading guest assets', 'Guest assets is not allowed to be uploaded with test codes in git.');
         return;
     }
-    record_info('Uploading guest assets', 'as UPLOAD_GUEST_ASSETS flag is set');
+    record_info('Uploading guest assets as UPLOAD_GUEST_ASSETS flag is set');
     record_info('Skip upload guest asset.', 'No successful guest, skip upload assets.') unless @{$self->{success_guest_list}};
 
     foreach my $guest (@{$self->{success_guest_list}}) {
@@ -278,13 +278,7 @@ sub post_fail_hook {
 
     check_host_health;
 
-    if (get_var('VIRT_PRJ1_GUEST_INSTALL')) {
-        #collect and upload guest autoyast control files
-        assert_script_run "cp -r /srv/www/htdocs/install/autoyast /guest_autoyast_files";
-        virt_utils::collect_host_and_guest_logs('', '/guest_autoyast_files', '');
-        assert_script_run "rm -rf /guest_autoyast_files";
-    }
-    elsif (get_var("VIRT_PRJ2_HOST_UPGRADE")) {
+    if (get_var("VIRT_PRJ2_HOST_UPGRADE")) {
         virt_utils::collect_host_and_guest_logs('', '/root/autoupg.xml', '');
     }
     else {

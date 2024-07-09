@@ -26,7 +26,7 @@ sub yast2_migration_gnome_remote {
 
 sub yast2_migration_gnome_x11 {
     # just use this workaround for sles15+
-    return check_var('MIGRATION_METHOD', 'yast') && check_var('DESKTOP', 'gnome') && is_sle('15+');
+    return check_var('MIGRATION_METHOD', 'yast') && check_var('DESKTOP', 'gnome') && is_sle('15+') && !check_var("VIDEOMODE", 'text');
 }
 
 # deal with yast2 online migration conflicts in gnome x11 with yast2
@@ -52,7 +52,7 @@ sub yast2_migration_handle_conflicts_text {
     # give a little time to check package conflicts
     assert_screen 'yast2-migration-summary', 200;
     if (check_screen("yast2-migration-conflicts", 15)) {
-        if (!is_desktop_installed()) {
+        if (!is_desktop_installed() || check_var("VIDEOMODE", 'text')) {
             send_key "alt-c";
             send_key "alt-p";    # show package dependencies
         }
@@ -88,6 +88,20 @@ sub yast2_migration_handle_conflicts_text {
             }
             assert_screen 'yast2-migration-proposal';
             wait_screen_change { send_key 'alt-n' };
+        }
+        elsif (get_var('VENDOR_CHG_DEPS')) {
+            return unless check_screen 'dependency-issue', 10;
+
+            while (check_screen('dependency-issue', 5)) {
+                wait_screen_change { send_key 'alt-s' };
+                wait_screen_change { send_key 'ret' };
+                wait_screen_change { send_key 'alt-o' };
+            }
+            assert_screen('software-dependency');
+            send_key 'alt-a';
+            assert_screen('automatic-change');
+            send_key 'alt-o';
+            assert_screen('yast2-migration-next', 100);
         }
         else {
             die "package conflicts";
@@ -245,7 +259,7 @@ sub run {
     my $timeout = 7200;
     my @tags = qw(
       yast2-migration-wrongdigest yast2-migration-packagebroken yast2-migration-internal-error
-      yast2-migration-finish      yast2-migration-notifications
+      yast2-migration-finish      yast2-migration-notifications yast2-migration-sle-packageconflict
     );
     while (1) {
         assert_screen \@tags, $timeout;
@@ -269,8 +283,8 @@ sub run {
             send_key "alt-n";
             return;
         }
-        elsif (match_has_tag("yast2-migration-notifications")) {
-            # close notification window
+        elsif (match_has_tag("yast2-migration-notifications") || match_has_tag("yast2-migration-sle-packageconflict")) {
+            # close notification/packageconflict window
             send_key "alt-o";
             # wait a second after pressing close button
             wait_still_screen(1);

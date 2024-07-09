@@ -16,7 +16,7 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_sle is_leap check_version is_tumbleweed);
+use version_utils qw(is_sle is_leap check_version is_tumbleweed is_jeos);
 use Utils::Architectures qw(is_aarch64);
 
 our @EXPORT = qw(setup_apache2 setup_pgsqldb destroy_pgsqldb test_pgsql test_mysql postgresql_cleanup);
@@ -42,7 +42,7 @@ sub setup_apache2 {
     push @packages, get_var('APACHE2_PKG', "apache2");
 
     # For gensslcert
-    push @packages, 'apache2-utils', 'openssl' if is_tumbleweed;
+    push @packages, 'apache2-utils', 'openssl' if (is_tumbleweed || is_jeos);
 
     if (($mode eq "NSS") && get_var("FIPS")) {
         $mode = "NSSFIPS";
@@ -269,7 +269,7 @@ sub test_pgsql {
     assert_script_run "sudo -u postgres psql -d openQAdb -c \"SELECT * FROM test\" | grep 'can php write this?'";
 
     # add sudo rights to switch postgresql version and run script to determine oldest and latest version
-    assert_script_run 'echo "postgres ALL=(root) NOPASSWD: ALL" >>/etc/sudoers';
+    assert_script_run 'echo "postgres ALL=(root) NOPASSWD: ALL" >/etc/sudoers.d/postgres';
     assert_script_run "gpasswd -a postgres \$(stat -c %G /dev/$serialdev)";
     assert_script_run 'sudo chsh postgres -s /bin/bash';
     enter_cmd "su - postgres", wait_still_screen => 1;

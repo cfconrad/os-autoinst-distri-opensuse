@@ -13,7 +13,7 @@ use utils;
 use Utils::Logging 'tar_and_upload_log';
 
 sub run ($self) {
-    my $mpi = $self->get_mpi();
+    my $mpi = get_required_var('MPI');
     my %exports_path = (bin => '/home/bernhard/bin');
 
     $self->mount_nfs_exports(\%exports_path);
@@ -26,7 +26,6 @@ sub run ($self) {
     barrier_wait('CLUSTER_PROVISIONED');
     barrier_wait('MPI_SETUP_READY');
     if (check_var('HPC_LIB', 'boost')) {
-        assert_script_run 'source /usr/share/spack/setup-env.sh';
         assert_script_run "spack load boost^$mpi";
     } else {
         assert_script_run "spack load $mpi";

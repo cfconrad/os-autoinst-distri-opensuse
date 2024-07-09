@@ -9,7 +9,7 @@ use warnings;
 use testapi qw(check_var get_var get_required_var set_var);
 use lockapi;
 use needle;
-use version_utils ':VERSION';
+use version_utils qw(:VERSION is_upgrade);
 use File::Find;
 use File::Basename;
 use DistributionProvider;
@@ -22,6 +22,7 @@ BEGIN {
 use utils;
 use version_utils qw(is_jeos is_gnome_next is_krypton_argon is_leap is_tumbleweed is_rescuesystem is_desktop_installed is_opensuse is_sle is_staging);
 use main_common;
+use main_ltp_loader 'load_kernel_tests';
 use known_bugs;
 use YuiRestClient;
 
@@ -331,6 +332,11 @@ elsif (get_var('XFSTESTS')) {
 }
 else {
     if (get_var("LIVETEST") || get_var('LIVE_INSTALLATION') || get_var('LIVE_UPGRADE')) {
+        if (get_var('PATCH_BEFORE_MIGRATION')) {
+            boot_hdd_image;
+            loadtest 'migration/patch_and_reboot_system';
+            loadtest 'migration/reboot_to_upgrade';
+        }
         load_boot_tests();
         loadtest "installation/finish_desktop";
         loadtest "installation/opensuse_welcome" if opensuse_welcome_applicable;
@@ -342,15 +348,28 @@ else {
         }
     }
     elsif (get_var("AUTOYAST")) {
+        loadtest 'autoyast/prepare_profile';
         load_boot_tests();
         load_autoyast_tests();
         load_reboot_tests();
     }
     elsif (installzdupstep_is_applicable()) {
+        if (is_upgrade && get_var('PATCH_BEFORE_MIGRATION')) {
+            boot_hdd_image;
+            loadtest 'migration/patch_and_reboot_system';
+            loadtest 'migration/reboot_to_upgrade';
+        }
         load_zdup_tests();
     }
     elsif (get_var("BOOT_HDD_IMAGE")) {
         boot_hdd_image;
+        if (is_upgrade && get_var('PATCH_BEFORE_MIGRATION')) {
+            loadtest 'migration/patch_and_reboot_system';
+            loadtest 'migration/reboot_to_upgrade';
+            load_boot_tests();
+            load_inst_tests();
+            load_reboot_tests();
+        }
         if (get_var("ISCSI_SERVER")) {
             set_var('INSTALLONLY', 1);
             loadtest "iscsi/iscsi_server";

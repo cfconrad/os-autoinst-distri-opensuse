@@ -5,7 +5,7 @@
 
 # Package: podman network
 # Summary: Test podman network
-# Maintainer: qac team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'containers::basetest';
 use testapi;
@@ -18,6 +18,8 @@ my $test_dir = "test_dir";
 sub run {
     my ($self, $args) = @_;
     my $runtime = $args->{runtime};
+
+    my $engine = $self->containers_factory($runtime);
 
     select_serial_terminal();
 
@@ -43,7 +45,7 @@ sub run {
     assert_script_run("mkdir -p $test_dir");
 
     # Create Dockerfile with VOLUME defined
-    assert_script_run("echo -e 'FROM busybox\\nVOLUME /$test_dir' > $test_dir/Dockerfile");
+    assert_script_run("echo -e 'FROM registry.opensuse.org/opensuse/busybox:latest\\nVOLUME /$test_dir' > $test_dir/Dockerfile");
 
     # Build image
     assert_script_run("$runtime build -t $test_image -f $test_dir/Dockerfile $test_dir/");
@@ -61,7 +63,7 @@ sub run {
     # NOTE: When https://github.com/containers/podman/issues/19529 is solved we must add a version check here
     my $ret = script_run("$runtime run --rm --volumes-from $test_container $test_image ls /$test_dir/$test_file");
     if ($ret != 0) {
-        if ($runtime eq "podman") {
+        if ($runtime eq "podman" && (version->parse($podman_version) < version->parse('4.7.0'))) {
             record_soft_failure("gh#containers/podman#19529 - Unexpected error with --volumes-from") if ($ret != 0 && $runtime == "podman");
         } else {
             die("--volumes-from failed");
@@ -144,6 +146,8 @@ sub run {
     assert_script_run("$runtime volume prune $all -f | grep -Fx $test_volume");
     assert_script_run("! $runtime volume inspect $test_volume");
     assert_script_run("[ \$($runtime volume ls --quiet --filter dangling=true | wc -l\) -eq 0 ]");
+
+    $engine->cleanup_system_host();
 }
 
 1;

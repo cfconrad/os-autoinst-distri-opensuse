@@ -62,7 +62,6 @@ conditional_schedule:
                 - console/gcc
                 - console/wpa_supplicant
                 - appgeo/gdal
-                - console/rabbitmq
                 - console/openqa_review
                 - console/zbar
                 - console/a2ps
@@ -71,10 +70,13 @@ conditional_schedule:
                 - console/nano
                 - '{{steamcmd}}'
                 - console/libqca2
-                - console/python_scientific
                 - console/vmstat
                 - console/kdump_and_crash
                 - console/ansible
+    opensuse_repos:
+        DISTRI:
+            opensuse:
+                - console/opensuse_repos
     validate_packages_and_patterns:
         DISTRI:
             sle:
@@ -85,7 +87,6 @@ conditional_schedule:
                 - console/supportutils
                 - console/zziplib
                 - console/vsftpd
-                - console/python3_new_version_check
                 - console/year_2038_detection
     tumbleweed_tests:
         VERSION:
@@ -93,8 +94,6 @@ conditional_schedule:
                 - console/parsec
                 - console/systemd_rpm_macros
                 - console/vsftpd
-                - console/python_flake8
-                - console/python3_new_version_check
                 - console/year_2038_detection
 schedule:
     - installation/bootloader_start
@@ -103,7 +102,9 @@ schedule:
     - console/prepare_test_data
     - console/consoletest_setup
     - '{{update_repos}}'
+    - console/man_pages
     - console/ping
+    - console/arping
     - console/orphaned_packages_check
     - console/zypper_lr_validate
     - console/zypper_ref
@@ -120,7 +121,6 @@ schedule:
     - console/rpm
     - console/slp
     - console/pkcon
-    - console/python_pycairo
     - console/command_not_found
     - console/openssl_alpn
     - console/autoyast_removed
@@ -166,10 +166,12 @@ schedule:
     - console/aaa_base
     - console/osinfo_db
     - '{{opensuse_tests}}'
+    - '{{opensuse_repos}}'
     - '{{tumbleweed_tests}}'
     - console/journalctl
     - console/tar
     - console/coredump_collect
     - console/valgrind
     - console/sssd_389ds_functional
+    - console/libgit2
     - console/zypper_log_packages

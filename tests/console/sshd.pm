@@ -26,7 +26,8 @@ use strict;
 use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal 'select_serial_terminal';
 use utils qw(systemctl exec_and_insert_password zypper_call random_string clear_console);
-use version_utils qw(is_upgrade is_sle is_tumbleweed is_leap is_opensuse);
+use Utils::Architectures 'is_ppc64le';
+use version_utils qw(is_upgrade is_sle is_tumbleweed is_leap is_opensuse is_public_cloud);
 use services::sshd;
 use ssh_crypto_policy;
 
@@ -76,7 +77,7 @@ sub test_cryptographic_policies() {
     # TODO: This does not work for Tumbleweed because of nmap
     # See pull request #11930 for more details
     my @crypto_params = (["Ciphers", "cipher", "-c "], ["KexAlgorithms", "kex", "-o kexalgorithms="], ["MACS", "mac", "-m "]);
-    push(@crypto_params, ["HostKeyAlgorithms", "key", "-o HostKeyAlgorithms="]) unless (is_opensuse);
+    push(@crypto_params, ["HostKeyAlgorithms", "key", "-o UpdateHostKeys=no -o HostKeyAlgorithms="]) unless (is_opensuse);
     my @policies;
 
     # Create an array of the different cryptographic policies that will be tested
@@ -104,10 +105,13 @@ sub test_cryptographic_policies() {
 
 sub check_journal {
     # bsc#1175310 bsc#1181308 - Detect serious errors as they can be invisible because sshd may silently recover
+    # bsc#1223178 - [Build 80.1] openQA test fails in sshd: Segfault or fatal journal entry detected in journal
     if (script_run("journalctl -b -u sshd.service | grep -A6 -B24 'segfault\\|fatal'") == 0) {
-        my $journalctl = script_output("journalctl -b -u sshd.service | grep 'segfault\\|fatal'", proceed_on_failure => 1);
+        my $journalctl = script_output("journalctl -b -u sshd.service | grep -E 'segfault|fatal'", proceed_on_failure => 1);
         if (is_sle('<15') && $journalctl =~ /diffie-hellman-group1-sha1/) {
             record_info("diffie-hellman-group1-sha1", "Expected message - bsc#1185584 diffie-hellman-group1-sha1 is not enabled on this product");
+        } elsif (is_ppc64le && $journalctl =~ /Timeout before authentication/) {
+            record_info("Timeout before authentication", "bsc#1223178 - [Build 80.1] openQA test fails in sshd: Segfault or fatal journal entry detected in journal");
         } else {
             die("Please check the journalctl! Segfault or fatal journal entry detected.");
         }
@@ -136,7 +140,7 @@ sub cleanup() {
 }
 
 sub test_flags {
-    return get_var('PUBLIC_CLOUD') ? {milestone => 0, no_rollback => 1} : {milestone => 1, fatal => 1};
+    return is_public_cloud() ? {milestone => 0, no_rollback => 1} : {milestone => 1, fatal => 1};
 }
 
 1;

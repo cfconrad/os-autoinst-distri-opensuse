@@ -20,7 +20,7 @@ use bootloader_setup qw(add_custom_grub_entries add_grub_cmdline_settings);
 use power_action_utils 'power_action';
 use repo_tools 'add_qa_head_repo';
 use upload_system_log;
-use version_utils qw(is_jeos is_opensuse is_released is_sle is_leap is_tumbleweed is_rt is_transactional is_alp);
+use version_utils qw(is_jeos is_opensuse is_released is_sle is_leap is_tumbleweed is_rt is_transactional);
 use Utils::Architectures;
 use Utils::Systemd qw(systemctl disable_and_stop_service);
 use LTP::utils;
@@ -28,6 +28,7 @@ use rpi 'enable_tpm_slb9670';
 use bootloader_setup 'add_grub_xen_replace_cmdline_settings';
 use virt_autotest::utils 'is_xen_host';
 use Utils::Backends 'get_serial_console';
+use kdump_utils;
 
 sub add_we_repo_if_available {
     # opensuse doesn't have extensions
@@ -72,6 +73,8 @@ sub install_runtime_dependencies {
       audit
       bc
       binutils
+      bcachefs-tools
+      btrfsprogs
       dosfstools
       e2fsprogs
       evmctl
@@ -238,69 +241,6 @@ sub install_from_git {
               . get_ltp_version_file()));
 }
 
-sub add_ltp_repo {
-    my $repo = get_var('LTP_REPOSITORY');
-
-    if (!$repo) {
-        if (is_sle || is_transactional) {
-            add_qa_head_repo;
-            return;
-        }
-
-        # ltp for leap15.2 is available only x86_64
-        if (is_leap('15.4+')) {
-            $repo = get_var('VERSION');
-        } elsif ((is_leap('=15.2') && is_x86_64) || is_leap('15.3+')) {
-            $repo = sprintf("openSUSE_Leap_%s", get_var('VERSION'));
-        } elsif (is_tumbleweed) {
-            $repo = "openSUSE_Factory";
-            $repo = "openSUSE_Factory_ARM" if (is_aarch64() || is_arm());
-            $repo = "openSUSE_Factory_PowerPC" if is_ppc64le();
-            $repo = "openSUSE_Factory_zSystems" if is_s390x();
-        } else {
-            die sprintf("Unexpected combination of version (%s) and architecture (%s) used", get_var('VERSION'), get_var('ARCH'));
-        }
-        $repo = "https://download.opensuse.org/repositories/benchmark:/ltp:/devel/$repo/";
-    }
-
-    zypper_ar($repo, name => 'ltp_repo');
-}
-
-sub get_default_pkg {
-    my @packages;
-
-    if (is_sle && is_released) {
-        push @packages, 'ltp-stable';
-        push @packages, 'ltp-stable-32bit' if is_x86_64;
-    } else {
-        push @packages, 'ltp';
-        push @packages, 'ltp-32bit' if is_x86_64 && !is_jeos;
-    }
-
-    return join(' ', @packages);
-}
-
-sub install_from_repo {
-    my @pkgs = split(/\s* \s*/, get_var('LTP_PKG', get_default_pkg));
-
-    if (is_transactional) {
-        assert_script_run("transactional-update -n -c pkg install " . join(' ', @pkgs), 180);
-    } else {
-        zypper_call("in --recommends " . join(' ', @pkgs));
-    }
-
-    my $run_cmd = is_transactional ? 'transactional-update -c -d --quiet run' : '';
-    for my $pkg (@pkgs) {
-        my $want_32bit = want_ltp_32bit($pkg);
-
-        record_info("LTP pkg: $pkg", script_output("$run_cmd rpm -qi $pkg | tee "
-                  . get_ltp_version_file($want_32bit)));
-        assert_script_run "find " . get_ltproot($want_32bit) .
-          q(/testcases/bin/openposix/conformance/interfaces/ -name '*.run-test' > )
-          . get_ltp_openposix_test_list_file($want_32bit);
-    }
-}
-
 sub setup_network {
     my $content;
 
@@ -309,7 +249,7 @@ sub setup_network {
     assert_script_run("printf \"$content\" >> /etc/securetty");
 
     # ftp
-    assert_script_run('sed -i \'s/^\s*\(root\)\s*$/# \1/\' /etc/ftpusers');
+    assert_script_run('if test -f /etc/ftpusers; then sed -i \'s/^\s*\(root\)\s*$/# \1/\' /etc/ftpusers; fi');
 
     # getaddrinfo_01: missing hostname in /etc/hosts
     assert_script_run('h=`hostname`; grep -q $h /etc/hosts || printf "# ltp\n127.0.0.1\t$h\n::1\t$h\n" >> /etc/hosts');
@@ -353,6 +293,7 @@ sub run {
     my $inst_ltp = get_var 'INSTALL_LTP';
     my $cmd_file = get_var('LTP_COMMAND_FILE');
     my $grub_param = 'ignore_loglevel';
+    my $is_ima = $cmd_file =~ m/^ima$/i;
 
     if ($inst_ltp !~ /(repo|git)/i) {
         die 'INSTALL_LTP must contain "git" or "repo"';
@@ -362,9 +303,17 @@ sub run {
         $self->wait_boot;
     }
 
-    enable_tpm_slb9670 if (get_var('MACHINE') =~ /RPi/);
+    enable_tpm_slb9670 if ($is_ima && get_var('MACHINE') =~ /RPi/);
 
+    if (get_var('LTP_COMMAND_FILE') && check_var_array('LTP_DEBUG', 'crashdump')) {
+        select_serial_terminal;
+        configure_service(yast_interface => 'cli');
+    }
+
+    # Initialize VNC console now to avoid login attempts on frozen system
+    select_console('root-console') if get_var('LTP_DEBUG');
     select_serial_terminal;
+    export_ltp_env;
 
     if (script_output('cat /sys/module/printk/parameters/time') eq 'N') {
         script_run('echo 1 > /sys/module/printk/parameters/time');
@@ -380,6 +329,9 @@ sub run {
     upload_logs('/boot/config-$(uname -r)', failok => 1);
     set_zypper_lock_timeout(300);
     add_we_repo_if_available;
+
+    # Enables repositories on full installation medium
+    zypper_enable_install_dvd if (get_var('FLAVOR') eq 'Full-QR');
 
     if ($inst_ltp =~ /git/i) {
         install_build_dependencies;
@@ -403,11 +355,7 @@ sub run {
 
     log_versions 1;
 
-    if (is_alp) {
-        assert_script_run("transactional-update -n -c pkg install efivar", 90);
-    } else {
-        zypper_call('in efivar') if is_sle('12+') || is_opensuse;
-    }
+    zypper_call('in efivar') if is_sle('12+') || is_opensuse;
 
     $grub_param .= ' console=hvc0' if (get_var('ARCH') eq 'ppc64le');
     $grub_param .= ' console=ttysclp0' if (get_var('ARCH') eq 's390x');
@@ -443,6 +391,7 @@ sub run {
     } elsif ($cmd_file) {
         assert_secureboot_status(1) if get_var('SECUREBOOT');
         prepare_ltp_env() if (is_sle('<12'));
+        check_kernel_taint($self, 1);
         init_ltp_tests($cmd_file);
         schedule_tests($cmd_file);
     }

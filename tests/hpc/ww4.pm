@@ -43,11 +43,19 @@ sub run ($self) {
     $rt = (systemctl 'enable --now warewulfd') ? 1 : 0;
     test_case('systemd', 'ww4', $rt);
     record_info "warewulf.conf", script_output("cat /etc/warewulf/warewulf.conf");
-    record_info "defaults.conf", script_output("cat /etc/warewulf/defaults.conf");
+    record_info "defaults.conf", script_output("cat /usr/share/warewulf/defaults.conf");
 
-    $rt = (assert_script_run "wwctl container import docker://registry.suse.de/suse/containers/sle-micro/5.3/containers/suse/sle-micro-rancher/5.3:latest sle-micro-5.3 --setdefault", timeout => 320) ? 1 : 0;
+    # Authentication support
+    my $warewulf_oci_username = get_var('HPC_WAREWULF_CONTAINER_USERNAME');
+    if ($warewulf_oci_username) {
+        assert_script_run('export WAREWULF_OCI_USERNAME=' . $warewulf_oci_username);
+        assert_script_run('export WAREWULF_OCI_PASSWORD=' . get_var('_SECRET_HPC_WAREWULF_CONTAINER_PASSWORD', get_required_var('SCC_REGCODE_HPC')), quiet => 1);
+        record_info('authentication', 'container authentication is enabled');
+    }
+    my $hpc_container = get_required_var('HPC_WAREWULF_CONTAINER');
+    $rt = (assert_script_run "wwctl container import $hpc_container warewulf-container --setdefault", timeout => 320) ? 1 : 0;
     test_case('Container pull', 'ww4', $rt);
-    $rt = (assert_script_run "wwctl profile set -y -C sle-micro-5.3") ? 1 : 0;
+    $rt = (assert_script_run "wwctl profile set -y -C warewulf-container") ? 1 : 0;
     test_case('Profile', 'ww4', $rt);
     assert_script_run "wwctl profile set -y default --netname default --netmask 255.255.255.0 --gateway 192.168.10.100";
     assert_script_run "wwctl profile list -a";
@@ -59,10 +67,15 @@ sub run ($self) {
     my $compute_nodes = script_output "wwctl node list -a";
     record_info "nodes in conf", "$compute_nodes";
 
+    # Build container, mandatory since warewulf4 version 4.5
+    assert_script_run "wwctl container build warewulf-container";
+
     # I think running the configuration after the profile and the nodes are set
     # provides complete results of the scripts.
     $rt = (assert_script_run "echo yes | wwctl -v configure --all") ? 1 : 0;
     test_case('Service configuration', 'ww4', $rt);
+    # Build overlay, mandatory since warewulf4 version 4.5
+    assert_script_run "wwctl overlay build";
     barrier_wait('WWCTL_READY');
     record_info 'WWCTL_READY', strftime("\%H:\%M:\%S", localtime);
     mutex_unlock 'ww4_ready';
@@ -74,7 +87,8 @@ sub run ($self) {
         script_run("ssh -o StrictHostKeyChecking=accept-new $node ip a | tee /tmp/script_out");
         $rt = (assert_script_run "grep -E 'inet 192\.168\.10\.11[1-5]' /tmp/script_out", fail_message => 'IP address likely is not set or is not in the defined IP range!!') ? 1 : 0;
         test_case("Check IP on $node", 'Compute Validate IP', $rt);
-        $rt = validate_script_output("ssh -o StrictHostKeyChecking=accept-new $node cat /etc/os-release", sub { m/NAME.+SLE Micro/ });
+        my $expected_name = get_required_var('HPC_WAREWULF_CONTAINER_NAME');
+        $rt = validate_script_output("ssh -o StrictHostKeyChecking=accept-new $node cat /etc/os-release", sub { m/NAME.+$expected_name/ });
         test_case("Check OS on $node", 'Compute Validate OS', $rt);
     }
     barrier_wait('WWCTL_COMPUTE_DONE');
@@ -92,8 +106,8 @@ sub test_flags ($self) {
 
 sub post_run_hook ($self) {
     record_info "post_run", "hook started";
-    pars_results('HPC warewulf4 controller tests', $file, @all_tests_results);
-    parse_extra_log('XUnit', $file);
+    parse_test_results('HPC warewulf4 controller tests', $file, @all_tests_results);
+    parse_extra_log('XUnit', "/tmp/$file");
     $self->upload_service_log('warewulfd');
     save_and_upload_log('cat /etc/hosts', "/tmp/hostfile");
     save_and_upload_log('ip a', "/tmp/controller_network");

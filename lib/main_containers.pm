@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021 SUSE LLC
+# Copyright 2021-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: module loader of container tests
@@ -13,6 +13,7 @@ use utils;
 use version_utils;
 use main_common qw(loadtest boot_hdd_image);
 use testapi qw(check_var get_required_var get_var set_var);
+use publiccloud::utils 'is_gce';
 use Utils::Architectures;
 use Utils::Backends;
 use strict;
@@ -21,14 +22,10 @@ use warnings;
 our @EXPORT = qw(
   is_container_test
   load_container_tests
-  load_host_tests_podman
-  load_image_test
-  load_3rd_party_image_test
-  load_container_engine_test
 );
 
 sub is_container_test {
-    return get_var('CONTAINER_RUNTIME', 0);
+    return get_var('CONTAINER_RUNTIMES', 0);
 }
 
 sub is_container_image_test {
@@ -60,6 +57,12 @@ sub load_container_engine_test {
     loadtest('containers/container_engine', run_args => $run_args, name => $run_args->{runtime});
 }
 
+sub load_rt_workload {
+    my ($args) = @_;
+    loadtest('containers/realtime', run_args => $args, name => $args->{runtime} . '_realtime');
+
+}
+
 sub load_container_helm {
     my ($run_args, $backend) = @_;
     loadtest('containers/helm', run_args => $run_args, name => $run_args->{runtime} . "_" . $backend);
@@ -75,6 +78,16 @@ sub load_volume_tests {
     loadtest('containers/volumes', run_args => $run_args, name => 'volumes_' . $run_args->{runtime});
 }
 
+sub load_secret_tests {
+    my ($run_args) = @_;
+    loadtest('containers/secret', run_args => $run_args, name => 'secret_' . $run_args->{runtime});
+}
+
+sub load_buildah_tests {
+    my ($run_args) = @_;
+    loadtest('containers/buildah', run_args => $run_args, name => 'buildah_' . $run_args->{runtime});
+}
+
 sub load_image_tests_docker {
     my ($run_args) = @_;
     load_image_test($run_args);
@@ -85,42 +98,74 @@ sub load_image_tests_docker {
     }
 }
 
+sub load_container_engine_privileged_mode {
+    my ($run_args) = @_;
+    loadtest('containers/privileged_mode', run_args => $run_args, name => $run_args->{runtime} . "_privileged_mode");
+}
+
+sub load_compose_tests {
+    my ($run_args) = @_;
+    return if (is_staging);
+    return unless (is_tumbleweed || is_microos);
+    # compose is only available on these arches:
+    # https://github.com/containers/podman/issues/21757
+    return unless (is_aarch64 || is_x86_64);
+    loadtest('containers/compose', run_args => $run_args, name => $run_args->{runtime} . "_compose");
+}
+
+sub load_firewall_test {
+    return if (is_public_cloud || is_openstack || is_microos ||
+        get_var('FLAVOR') =~ /dvd/i && (is_sle_micro('<6.0') || is_leap_micro('<6.0'))
+    );
+    my ($run_args) = @_;
+    loadtest('containers/firewall', run_args => $run_args, name => $run_args->{runtime} . "_firewall");
+}
+
 sub load_host_tests_podman {
     my ($run_args) = @_;
-    # podman package is only available as of 15-SP1
-    unless (is_sle("<15-sp1")) {
-        load_container_engine_test($run_args);
-        # In Public Cloud we don't have internal resources
-        load_image_test($run_args) unless is_public_cloud || is_alp;
-        load_3rd_party_image_test($run_args);
-        loadtest 'containers/podman_pods';
-        # Default for ALP is Netavark
-        loadtest('containers/podman_network_cni') unless (is_alp);
-        # Netavark not supported in 15-SP1 and 15-SP2 (due to podman version older than 4.0.0)
-        loadtest 'containers/podman_netavark' unless (is_staging || is_sle("<15-sp3") || is_ppc64le);
-        # Firewall is not installed in JeOS OpenStack, MicroOS and Public Cloud images
-        loadtest 'containers/podman_firewall' unless (is_public_cloud || is_openstack || is_microos || is_alp);
-        # Buildah is not available in SLE Micro, MicroOS and staging projects
-        loadtest 'containers/buildah' unless (is_sle_micro || is_microos || is_leap_micro || is_alp || is_staging);
-        # https://github.com/containers/podman/issues/5732#issuecomment-610222293
-        # exclude rootless poman on public cloud because of cgroups2 special settings
-        loadtest 'containers/rootless_podman' unless (is_sle('<15-sp2') || is_openstack || is_public_cloud);
-        load_volume_tests($run_args);
+    load_container_engine_test($run_args);
+    # In Public Cloud we don't have internal resources
+    load_image_test($run_args) unless is_public_cloud;
+    load_3rd_party_image_test($run_args) unless is_staging;
+    load_rt_workload($run_args) if is_rt;
+    load_container_engine_privileged_mode($run_args);
+    loadtest 'containers/podman_bci_systemd';
+    loadtest 'containers/podman_pods';
+    loadtest('containers/podman_network_cni') unless (is_sle_micro('6.0+') || (is_sle_micro('=5.5') && is_public_cloud));
+    # Firewall is not installed in JeOS OpenStack, MicroOS and Public Cloud images
+    load_firewall_test($run_args);
+    loadtest 'containers/podman_ipv6' if (is_gce && is_sle('>=15-SP5'));
+    # Netavark not supported in 15-SP1 and 15-SP2 (due to podman version older than 4.0.0)
+    loadtest 'containers/podman_netavark' unless (is_staging || is_sle("<15-sp3") || is_ppc64le);
+    # Buildah is not available in SLE Micro, MicroOS and staging projects
+    load_buildah_tests($run_args) unless (is_sle('<15') || is_sle_micro || is_microos || is_leap_micro || is_staging);
+    loadtest 'containers/podman_quadlet' if is_tumbleweed;
+    # https://github.com/containers/podman/issues/5732#issuecomment-610222293
+    # exclude rootless podman on public cloud because of cgroups2 special settings
+    unless (is_openstack || is_public_cloud) {
+        loadtest 'containers/rootless_podman';
+        loadtest 'containers/podman_remote';
     }
+    load_secret_tests($run_args);
+    load_volume_tests($run_args);
+    load_compose_tests($run_args);
+    loadtest('containers/seccomp', run_args => $run_args, name => $run_args->{runtime} . "_seccomp") unless is_sle('<15');
 }
 
 sub load_host_tests_docker {
     my ($run_args) = @_;
     load_container_engine_test($run_args);
     # In Public Cloud we don't have internal resources
-    load_image_test($run_args) unless is_public_cloud || is_alp;
+    load_image_test($run_args) unless is_public_cloud;
     load_3rd_party_image_test($run_args);
+    load_rt_workload($run_args) if is_rt;
+    load_container_engine_privileged_mode($run_args);
     # Firewall is not installed in Public Cloud, JeOS OpenStack and MicroOS but it is in SLE Micro
-    loadtest 'containers/docker_firewall' unless (is_public_cloud || is_openstack || is_microos);
+    load_firewall_test($run_args);
     unless (is_sle("<=15") && is_aarch64) {
         # these 2 packages are not avaiable for <=15 (aarch64 only)
-        # zypper-docker is not available in factory and in SLE Micro/MicroOS
-        loadtest 'containers/zypper_docker' unless (is_tumbleweed || is_sle_micro || is_microos || is_leap_micro);
+        # zypper-docker is only available on SLES < 15-SP6
+        loadtest 'containers/zypper_docker' if (is_sle("<15-SP6") || is_leap("<15.6"));
         loadtest 'containers/docker_runc';
     }
     unless (check_var('BETA', 1) || is_sle_micro || is_microos || is_leap_micro || is_staging) {
@@ -128,14 +173,20 @@ sub load_host_tests_docker {
         # to maintenance jobs or new products after Beta release
         # PackageHub is not available in SLE Micro | MicroOS
         loadtest 'containers/registry' if (is_x86_64 || is_sle('>=15-sp4'));
-        loadtest 'containers/docker_compose' unless is_public_cloud;
     }
+    load_buildah_tests($run_args) unless (is_sle('<15') || is_sle_micro || is_microos || is_leap_micro || is_staging);
+    if (is_tumbleweed || is_microos) {
+        loadtest 'containers/buildx';
+        loadtest 'containers/rootless_docker';
+    }
+    loadtest('containers/skopeo', run_args => $run_args, name => $run_args->{runtime} . "_skopeo") unless (is_sle('<15'));
+    load_volume_tests($run_args);
+    load_compose_tests($run_args);
+    loadtest('containers/seccomp', run_args => $run_args, name => $run_args->{runtime} . "_seccomp") unless is_sle('<15');
     # Expected to work anywhere except of real HW backends, PC and Micro
     unless (is_generalhw || is_ipmi || is_public_cloud || is_openstack || is_sle_micro || is_microos || is_leap_micro) {
         loadtest 'containers/validate_btrfs';
     }
-    load_volume_tests($run_args);
-    loadtest 'containers/buildx' if (is_tumbleweed || is_microos);
 }
 
 sub load_host_tests_containerd_crictl {
@@ -190,7 +241,8 @@ sub update_host_and_publish_hdd {
         # we only need to shutdown the VM before publishing the HDD
         loadtest 'boot/boot_to_desktop';
         loadtest 'containers/update_host';
-        loadtest 'containers/openshift_setup' if check_var('CONTAINER_RUNTIME', 'openshift');
+        loadtest 'containers/openshift_setup' if check_var('CONTAINER_RUNTIMES', 'openshift');
+        loadtest 'containers/bci_prepare';
     }
     loadtest 'shutdown/cleanup_before_shutdown' if is_s390x;
     loadtest 'shutdown/shutdown';
@@ -198,7 +250,7 @@ sub update_host_and_publish_hdd {
 }
 
 sub load_container_tests {
-    my $runtime = get_required_var('CONTAINER_RUNTIME');
+    my $runtime = get_required_var('CONTAINER_RUNTIMES');
 
     if (get_var('CONTAINER_UPDATE_HOST')) {
         update_host_and_publish_hdd();
@@ -206,7 +258,7 @@ sub load_container_tests {
     }
 
     # Need to boot a qcow except in JeOS, SLEM and MicroOS where the system is booted already
-    if (get_var('BOOT_HDD_IMAGE') && !(is_jeos || is_sle_micro || is_microos || is_leap_micro || is_alp)) {
+    if (get_var('BOOT_HDD_IMAGE') && !(is_jeos || is_sle_micro || is_microos || is_leap_micro)) {
         loadtest 'installation/bootloader_zkvm' if is_s390x;
         # On Public Cloud we're already booted in the SUT
         loadtest 'boot/boot_to_desktop' unless is_public_cloud;
@@ -215,7 +267,10 @@ sub load_container_tests {
     if (is_container_image_test() && !(is_jeos || is_sle_micro || is_microos || is_leap_micro) && $runtime !~ /k8s|openshift/) {
         # Container Image tests common
         loadtest 'containers/host_configuration';
-        loadtest 'containers/bci_prepare' if (get_var('BCI_TESTS') && !get_var('BCI_SKIP'));
+        if (get_var('BCI_TESTS') && !get_var('BCI_SKIP')) {
+            # bci_version_check required jq from bci_prepare.
+            loadtest 'containers/bci_version_check' if (get_var('CONTAINER_IMAGE_TO_TEST') && get_var('CONTAINER_IMAGE_BUILD'));
+        }
     }
 
     if (get_var('CONTAINER_SLEM_RANCHER')) {
@@ -224,6 +279,7 @@ sub load_container_tests {
     }
 
     if (get_var('HELM_CONFIG')) {
+        set_var('K3S_ENABLE_COREDNS', 1);
         loadtest 'containers/helm_rmt';
         return;
     }
@@ -233,17 +289,58 @@ sub load_container_tests {
         return;
     }
 
+    if (get_var('CONTAINER_SUMA')) {
+        loadtest 'containers/suma_containers';
+        return;
+    }
+
+    if (get_var('PODMAN_BATS_SKIP')) {
+        if (!check_var('SKOPEO_BATS_SKIP', 'all')) {
+            loadtest 'containers/skopeo_integration' if (is_tumbleweed || is_microos || is_sle || is_leap || is_sle_micro('>=5.5'));
+        }
+        if (!check_var('PODMAN_BATS_SKIP', 'all')) {
+            loadtest 'containers/podman_integration';
+        }
+        if (!check_var('RUNC_BATS_SKIP', 'all')) {
+            loadtest 'containers/runc_integration' if (is_tumbleweed || is_sle || is_leap);
+        }
+        if (!check_var('NETAVARK_BATS_SKIP', 'all')) {
+            loadtest 'containers/netavark_integration' if (is_tumbleweed || is_sle || is_leap);
+        }
+        if (!check_var('AARDVARK_BATS_SKIP', 'all')) {
+            loadtest 'containers/aardvark_integration' if (is_tumbleweed);
+        }
+        return;
+    }
+
+    if (get_var('BUILDAH_BATS_SKIP')) {
+        loadtest 'containers/buildah_integration';
+        return;
+    }
+
+    if (get_var('FIPS_ENABLED')) {
+        loadtest "fips/fips_setup";
+        foreach (split(',\s*', $runtime)) {
+            my $run_args = OpenQA::Test::RunArgs->new();
+            $run_args->{runtime} = $_;
+            load_container_engine_test($run_args);
+            load_image_test($run_args);
+        }
+        return;
+    }
+
     foreach (split(',\s*', $runtime)) {
         my $run_args = OpenQA::Test::RunArgs->new();
         $run_args->{runtime} = $_;
         if (is_container_image_test()) {
             if (get_var('BCI_TESTS')) {
                 unless (get_var('BCI_SKIP')) {
+                    loadtest('containers/bci_prepare') if (check_var('BCI_PREPARE', '1'));
                     loadtest('containers/bci_test', run_args => $run_args, name => 'bci_test_' . $run_args->{runtime});
                     # For Base image we also run traditional image.pm test
                     load_image_test($run_args) if (is_sle(">=15-SP3") && check_var('BCI_TEST_ENVS', 'base'));
                 }
-            } elsif (is_sle_micro || is_alp) {
+            } elsif (is_sle_micro) {
                 # Test toolbox image updates
                 loadtest 'microos/toolbox';
             } else {
@@ -266,5 +363,5 @@ sub load_container_tests {
         }
     }
     loadtest 'containers/bci_logs' if (get_var('BCI_TESTS') && !get_var('BCI_SKIP'));
-    loadtest 'console/coredump_collect' unless (is_public_cloud || is_jeos || is_sle_micro || is_microos || is_leap_micro || is_alp || get_var('BCI_TESTS') || is_ubuntu_host || is_expanded_support_host);
+    loadtest 'console/coredump_collect' unless (is_public_cloud || is_jeos || is_sle_micro || is_microos || is_leap_micro || get_var('BCI_TESTS') || is_ubuntu_host || is_expanded_support_host);
 }

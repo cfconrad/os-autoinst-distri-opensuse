@@ -5,7 +5,7 @@ use Test::Exception;
 use Test::MockModule;
 use hacluster;
 use testapi;
-use Scalar::Util 'looks_like_number';
+use Scalar::Util qw(looks_like_number);
 
 my %sbd_delay_params = (
     'sbd_delay_start' => 'yes',
@@ -18,9 +18,9 @@ my %sbd_delay_params = (
 subtest '[calculate_sbd_start_delay] Check sbd_delay_start values' => sub {
     my $sbd_delay;
     my %value_vs_expected = (
-        'yes' => 25,
+        yes => 25,
         '1' => 25,
-        'no' => 0,
+        no => 0,
         '0' => 0,
         '120' => 120,
     );
@@ -114,6 +114,132 @@ subtest '[cluster_status_matches_regex] Cluster with errors' => sub {
 
     my $res = cluster_status_matches_regex($cmr_status);
     ok scalar $res == 1, 'Cluster health problem properly detected';
+};
+
+subtest '[cluster_status_matches_regex] Cluster with master failed errors' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my $cmr_status = "* stonith-sbd	(stonith:external/sbd):	 Started vmhana01
+    	* Clone Set: cln_azure-events [rsc_azure-events]:
+    	* Started: [ vmhana01 vmhana02 ]
+  	* Clone Set: cln_SAPHanaTopology_HDB_HDB00 [rsc_SAPHanaTopology_HDB_HDB00]:
+    	     * Started: [ vmhana01 vmhana02 ]
+  	* Clone Set: msl_SAPHana_HDB_HDB00 [rsc_SAPHana_HDB_HDB00] (promotable):
+    	     * rsc_SAPHana_HDB_HDB00	(ocf::suse:SAPHana):	 FAILED Master vmhana01 (Monitoring)
+    	     * Slaves: [ vmhana02 ]
+  	* rsc_socat_HDB_HDB00	(ocf::heartbeat:azure-lb):	 Started vmhana02
+  	* Resource Group: g_ip_HDB_HDB00:
+    	    * rsc_ip_HDB00	(ocf::heartbeat:IPaddr2):	 Started vmhana01";
+    $hacluster->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
+
+    my $res = cluster_status_matches_regex($cmr_status);
+    ok scalar $res == 1, 'Cluster health problem properly detected';
+};
+
+subtest '[cluster_status_matches_regex] Cluster with starting errors' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my $cmr_status = "* rsc_stonith_azure	(stonith:fence_azure_arm):	 Started vmhana01
+  	* Clone Set: cln_azure-events [rsc_azure-events]:
+    	* Started: [ vmhana01 vmhana02 ]
+  	* Clone Set: cln_SAPHanaTopology_HDB_HA000 [rsc_SAPHanaTopology_HDB_HA000]:
+    	     * Started: [ vmhana01 vmhana02 ]
+  	* Clone Set: msl_SAPHana_HDB_HA000 [rsc_SAPHana_HDB_HA000] (promotable):
+    	     * rsc_SAPHana_HDB_HA000	(ocf::suse:SAPHana):	 Starting vmhana02
+             * Masters: [ vmhana01 ]
+  	* rsc_socat_HDB_HA000	(ocf::heartbeat:azure-lb):	 Started vmhana02
+  	* Resource Group: g_ip_HDB_HA000:
+            * rsc_ip_HA000	(ocf::heartbeat:IPaddr2):	 Started vmhana01";
+    $hacluster->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
+
+    my $res = cluster_status_matches_regex($cmr_status);
+    ok scalar $res == 1, 'Cluster health problem properly detected';
+};
+
+subtest '[setup_sbd_delay] Test OpenQA parameter input' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    $hacluster->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
+    $hacluster->redefine(file_content_replace => sub { return 1; });
+    $hacluster->redefine(calculate_sbd_start_delay => sub {
+            my $param = get_var('HA_SBD_START_DELAY', '');
+            my $default = 30;
+            return $default if grep /$param/, ('yes', '1', '');
+            return 0 if grep /$param/, qw(no 0);
+            return 100 if $param eq '100s';
+            return $param if looks_like_number($param); });
+    $hacluster->redefine(set_sbd_service_timeout => sub {
+            my ($timeout) = @_;
+            return $timeout;
+    });
+
+    my %passing_values_vs_expected = (
+        yes => '30',
+        '' => '30',
+        no => '0',
+        '0' => '0',
+        '100' => '100',
+        '100s' => '100');
+
+    my @failok_values = ('aasd', '100asd', '100S', ' ');
+
+    for my $input_value (@failok_values) {
+        set_var('HA_SBD_START_DELAY', $input_value);
+        dies_ok { setup_sbd_delay() } "Test expected failing 'HA_SBD_START_DELAY' value: $input_value";
+    }
+
+    for my $value (keys %passing_values_vs_expected) {
+        set_var('HA_SBD_START_DELAY', $value);
+        my $returned_value = setup_sbd_delay();
+        is($returned_value, $passing_values_vs_expected{$value},
+            "Test 'HA_SBD_START_DELAY' passing values:\ninput_value: $value\n result: $returned_value");
+    }
+
+};
+
+subtest '[set_sbd_service_timeout] Check failing values' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    $hacluster->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
+    $hacluster->redefine(file_content_replace => sub { return 1; });
+    $hacluster->redefine(assert_script_run => sub { return 1; });
+    $hacluster->redefine(script_run => sub { return 0; });
+    dies_ok { set_sbd_service_timeout() } 'Expected failure if no argument is provided';
+    dies_ok { set_sbd_service_timeout('Chupacabras') } 'Expected failure if argument is not a number';
+    is set_sbd_service_timeout('42'), '42', 'Function should not change delay time';
+};
+
+subtest '[crm_wait_for_maintenance] arguments validation' => sub {
+    # only supported values are 'false', 'true'
+    dies_ok { crm_wait_for_maintenance(target_state => 'superposition',
+            loop_sleep => 1) } 'Expected failure with incorrect argument';
+};
+
+subtest '[crm_wait_for_maintenance]' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    $hacluster->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
+
+    my %correct_output_values = (true => ' maintenance-mode=true ', false => ' maintenance-mode=false ');
+    my @wrong_output_values = (' maintenance-mode=weirdKernelMessage ', 'as mweirdKernel_message aintenance-mode=false ');
+
+    foreach (@wrong_output_values) {
+        $hacluster->redefine(script_output => sub { return $_; });
+        dies_ok { crm_wait_for_maintenance(target_state => $_, loop_sleep => 1) }
+        'Fail with incorrect or mangled crm output';
+    }
+
+    foreach (keys %correct_output_values) {
+        $hacluster->redefine(script_output => sub { return $correct_output_values{$_}; });
+        is crm_wait_for_maintenance(target_state => $_, loop_sleep => 1), $_, "Return correct value: $_";
+    }
+};
+
+subtest '[crm_check_resource_location]' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my $resource = 'grp_EN2_ASCS00';
+    my $hostname = 'ensa-node01';
+    my @calls;
+    $hacluster->redefine(script_output => sub { return "resource $resource is running on: $hostname"; });
+
+    is crm_check_resource_location(resource => $resource), $hostname, "Return correct hostname: $hostname";
+    is crm_check_resource_location(resource => $resource, wait_for_target => $hostname),
+      $hostname, "Return correct hostname: $hostname";
 };
 
 done_testing;

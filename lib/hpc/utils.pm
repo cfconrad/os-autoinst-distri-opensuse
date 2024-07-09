@@ -14,19 +14,22 @@ use utils;
 use version_utils 'is_sle';
 use serial_terminal 'select_serial_terminal';
 use version;
+use Exporter 'import';
 
-sub get_mpi() {
-    my $mpi = get_required_var('MPI');
+our @EXPORT = qw(get_slurm_version);
 
-    if ($mpi eq 'openmpi3') {
-        if (is_sle('<15')) {
-            $mpi = 'openmpi';
-        } elsif (is_sle('<15-SP2')) {
-            $mpi = 'openmpi2';
-        }
-    }
+=head2 get_slurm_version
 
-    return $mpi;
+ get_slurm_version();
+
+Returns the slurm package to be installed. C<SLURM_VERSION> takes the form of I<Major_Minor>.
+for instance: 23_02.
+
+=cut
+
+sub get_slurm_version {
+    my $pkg_version = shift;
+    return $pkg_version ? 'slurm_' . $pkg_version : 'slurm';
 }
 
 =head2 get_mpi_src

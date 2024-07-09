@@ -18,9 +18,10 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_sle is_public_cloud get_version_id is_transactional);
+use version_utils qw(is_sle is_public_cloud get_version_id is_transactional is_openstack);
 use transactional qw(check_reboot_changes trup_call process_reboot);
 use registration;
+use maintenance_smelt qw(is_embargo_update);
 
 # Indicating if the openQA port has been already allowed via SELinux policies
 my $openqa_port_allowed = 0;
@@ -37,15 +38,16 @@ our @EXPORT = qw(
   is_gce
   is_container_host
   is_hardened
-  is_embargo_update
   registercloudguest
   register_addon
   register_openstack
   register_addons_in_pc
   gcloud_install
+  get_ssh_private_key_path
   prepare_ssh_tunnel
   kill_packagekit
   allow_openqa_port_selinux
+  ssh_update_transactional_system
 );
 
 # Get the current UTC timestamp as YYYY/mm/dd HH:MM:SS
@@ -190,14 +192,6 @@ sub is_hardened() {
     return is_public_cloud && get_var('FLAVOR') =~ 'Hardened';
 }
 
-sub is_embargo_update {
-    my ($incident, $type) = @_;
-    return 0 if ($type =~ /PTF/);
-    script_retry("curl -sSf https://build.suse.de/attribs/SUSE:Maintenance:$incident -o /tmp/$incident.txt");
-    return 1 if (script_run("grep 'OBS:EmbargoDate' /tmp/$incident.txt") == 0);
-    return 0;
-}
-
 # Get credentials from the Public Cloud micro service, which requires user
 # and password. The resulting json will be stored in a file.
 sub get_credentials {
@@ -241,8 +235,17 @@ sub gcloud_install {
     my $dir = $args{dir} || 'google-cloud-sdk';
     my $timeout = $args{timeout} || 700;
 
-    zypper_call("in curl tar gzip", $timeout);
+    # WARNING:  Python 3.6.x is no longer officially supported by the Google Cloud CLI
+    # and may not function correctly. Please use Python version 3.8 and up.
+    my @pkgs = qw(curl tar gzip);
+    my $py_version = get_var('PYTHON_VERSION', '3.11');
+    my $py_pkg_version = $py_version =~ s/\.//gr;
+    push @pkgs, 'python' . $py_pkg_version;
+    add_suseconnect_product(get_addon_fullname('python3')) if is_sle('15-SP6+');
 
+    zypper_call("in @pkgs", $timeout);
+
+    assert_script_run("export CLOUDSDK_PYTHON=/usr/bin/python$py_version");
     assert_script_run("export CLOUDSDK_CORE_DISABLE_PROMPTS=1");
     assert_script_run("curl $url | bash", $timeout);
     assert_script_run("echo . /root/$dir/completion.bash.inc >> ~/.bashrc");
@@ -252,12 +255,18 @@ sub gcloud_install {
     record_info('GCE', script_output('gcloud version'));
 }
 
+sub get_ssh_private_key_path {
+    # Paramiko needs to be updated for ed25519 https://stackoverflow.com/a/60791079
+    return (is_azure() || is_openstack() || get_var('PUBLIC_CLOUD_LTP')) ? "~/.ssh/id_rsa" : '~/.ssh/id_ed25519';
+}
+
 sub prepare_ssh_tunnel {
-    my $instance = shift;
+    my ($instance) = @_;
 
     # configure ssh client
     my $ssh_config_url = data_url('publiccloud/ssh_config');
     assert_script_run("curl $ssh_config_url -o ~/.ssh/config");
+    file_content_replace("~/.ssh/config", "%SSH_KEY%" => get_ssh_private_key_path());
 
     # Create the ssh alias
     assert_script_run(sprintf(q(echo -e 'Host sut\n  Hostname %s' >> ~/.ssh/config), $instance->public_ip));
@@ -272,7 +281,7 @@ sub prepare_ssh_tunnel {
     # Permit root passwordless login over SSH
     $instance->ssh_assert_script_run('sudo cat /etc/ssh/sshd_config');
     $instance->ssh_assert_script_run('sudo sed -i "s/PermitRootLogin no/PermitRootLogin prohibit-password/g" /etc/ssh/sshd_config');
-    $instance->ssh_assert_script_run('sudo sed -iE "/^AllowTcpForwarding/c\AllowTcpForwarding yes" /etc/ssh/sshd_config') if (is_hardened());
+    $instance->ssh_assert_script_run('sudo sed -i "/^AllowTcpForwarding/c\AllowTcpForwarding yes" /etc/ssh/sshd_config') if (is_hardened());
     $instance->ssh_assert_script_run('sudo systemctl reload sshd');
 
     # Copy SSH settings for remote root
@@ -322,6 +331,36 @@ sub allow_openqa_port_selinux {
     assert_script_run("semanage port -a -t ssh_port_t -p tcp $upload_port");
     process_reboot(trigger => 1) if (is_transactional);
     $openqa_port_allowed = 1;
+}
+
+
+=head2 ssh_update_transactional_system
+
+ssh_update_transactional_system($host);
+
+Connect to the remote host C<$instance> using ssh and update the system by
+running C<zypper update> twice, in transactional mode. The first run will update the package manager,
+the second run will update the system.
+Transactional systems like SLE micro used C<transactional_update up> and reboot. 
+
+=cut
+
+sub ssh_update_transactional_system {
+    my ($instance) = @_;
+    my $cmd_time = time();
+    my $cmd = "sudo transactional-update -n up";
+    my $cmd_name = "transactional update";
+    # first run, possible update of packager
+    my $ret = $instance->ssh_script_run(cmd => $cmd, timeout => 1500);
+    $instance->softreboot(timeout => get_var('PUBLIC_CLOUD_REBOOT_TIMEOUT', 600));
+    record_info($cmd_name, 'The command ' . $cmd_name . ' took ' . (time() - $cmd_time) . ' seconds.');
+    die "$cmd_name failed with $ret" if ($ret != 0 && $ret != 102 && $ret != 103);
+    # second run, full system update
+    $cmd_time = time();
+    $ret = $instance->ssh_script_run(cmd => $cmd, timeout => 6000);
+    $instance->softreboot(timeout => get_var('PUBLIC_CLOUD_REBOOT_TIMEOUT', 600));
+    record_info($cmd_name, 'The second command ' . $cmd_name . ' took ' . (time() - $cmd_time) . ' seconds.');
+    die "$cmd_name failed with $ret" if ($ret != 0 && $ret != 102);
 }
 
 1;

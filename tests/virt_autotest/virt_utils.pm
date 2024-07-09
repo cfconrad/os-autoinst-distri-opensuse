@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2012-2020 SUSE LLC
+# Copyright 2012-2023 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 package virt_utils;
@@ -32,13 +32,20 @@ sub enable_debug_logging {
     turn_on_libvirt_debugging_log;
 
     # enable journal log with previous reboot
-    my $journald_conf_file = "/etc/systemd/journald.conf";
-    if (!script_run "ls $journald_conf_file") {
+    if (is_sle('>=15-SP6')) {
+        unless (get_var('AUTOYAST')) {
+            my $journald_conf_file = "/etc/systemd/journald.conf.d/01-virt-test.conf";
+            script_run("echo -e \"[Journal]\\\nStorage=persistent\" > $journald_conf_file");
+            script_run "systemd-analyze cat-config systemd/journald.conf | grep Storage";
+            script_run 'systemctl restart systemd-journald';
+        }
+    }
+    else {
+        my $journald_conf_file = "/etc/systemd/journald.conf";
         script_run "sed -i '/^[# ]*Storage *=/{h;s/^[# ]*Storage *=.*\$/Storage=persistent/};\${x;/^\$/{s//Storage=persistent/;H};x}' $journald_conf_file";
         script_run "grep Storage $journald_conf_file";
         script_run 'systemctl restart systemd-journald';
     }
-    save_screenshot;
 
     # enable qemu core dumps
     my $qemu_conf_file = "/etc/libvirt/qemu.conf";
@@ -68,8 +75,13 @@ sub get_version_for_daily_build_guest {
 sub locate_sourcefile {
     my $location = '';
     if (!is_s390x) {
-        $location = script_output("perl /usr/share/qa/tools/location_detect_impl.pl", 60);
-        $location =~ s/[\r\n]+$//;
+        $location = script_output("perl /usr/share/qa/tools/location_detect_impl.pl", 60, proceed_on_failure => 1);
+        if ($location) {
+            $location =~ s/[\r\n]+$//;
+        }
+        else {
+            $location = 'de';
+        }
     }
     else {
         #S390x LPAR just be only located at DE now.
@@ -330,13 +342,11 @@ sub get_guest_disk_name_from_guest_xml {
 # Please refer to https://qemu.readthedocs.io/en/latest/tools/qemu-img.html to ease your mind on working with --force-share and convert and many others.
 sub compress_single_qcow2_disk {
     my ($orig_disk, $compressed_disk) = @_;
+    my $timeout = '720';
+    my $cmd = "time nice ionice qemu-img convert --force-share -c -m 1 -p -O qcow2 $orig_disk $compressed_disk";
 
     if ($orig_disk =~ /qcow2/) {
-        my $cmd = "nice ionice qemu-img convert -c -p -O qcow2 $orig_disk $compressed_disk";
-        if (script_run($cmd, 360) ne 0) {
-            $cmd = "nice ionice qemu-img convert --force-share -c -p -O qcow2 $orig_disk $compressed_disk";
-            die("Disk compression failed from $orig_disk to $compressed_disk.") if (script_run($cmd, 360) ne 0);
-        }
+        die("Disk compression failed from $orig_disk to $compressed_disk.") if (script_run($cmd, timeout => $timeout, die => 0, retry => 2) ne 0);
         save_screenshot;
         record_info('Disk compression', "Disk compression done from $orig_disk to $compressed_disk.");
     }

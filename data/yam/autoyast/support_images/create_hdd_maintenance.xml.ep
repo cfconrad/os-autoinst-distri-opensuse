@@ -31,16 +31,13 @@
         %}
     </suse_register>
     <add-on>
-        <add_on_others config:type="list">
-            % for my $repo (@$repos) {
-            % my ($repo_id, $addon) = $repo =~ (/(\d+)\/(.*)\//);
-        <listentry>
-        <media_url><%= $repo %></media_url>
-            <name><%= $addon . "_" . $repo_id %></name>
-            <alias><%= $addon . "_" . $repo_id %></alias>
-        </listentry>
-        %}
-        </add_on_others>
+       <add_on_products config:type="list">
+         % for my $repo (@$repos) {
+         <listentry>
+           <media_url><%= $repo %></media_url>
+         </listentry>
+         % }
+       </add_on_products>
     </add-on>
     <bootloader>
         <global>
@@ -140,13 +137,6 @@
             <pattern><%= $pattern %></pattern>
             % }
         </patterns>
-        <!-- Workaround for bsc#1202234: [addon]-release packages are missing after autoyast installation. -->
-        <packages config:type="list">
-        % foreach (values %$addons) {
-            <package><%= lc($_->{name}) %>-release</package>
-        % }
-        </packages>
-        <!-- end of workaround -->
     </software>
     <services-manager>
         % if ($check_var->('DESKTOP', 'gnome')) {
@@ -182,7 +172,7 @@
             </password_settings>
             <shell>/bin/bash</shell>
             <uid>1000</uid>
-            <user_password>nots3cr3t</user_password>
+            <user_password>{{PASSWORD}}</user_password>
             <username>bernhard</username>
         </user>
         <user>
@@ -200,7 +190,7 @@
             </password_settings>
             <shell>/bin/bash</shell>
             <uid>0</uid>
-            <user_password>nots3cr3t</user_password>
+            <user_password>{{PASSWORD}}</user_password>
             <username>root</username>
         </user>
     </users>
@@ -216,7 +206,7 @@ cd /etc/zypp/repos.d
 sed -i 's/enabled=1/enabled=0/' $(ls|grep -i nvidia)
 zypper lr
 
-% if ( $get_var->('VERSION') =~ /15-SP[3-5]/ ) {
+% if ( $get_var->('VERSION') =~ /15-SP[3-7]/ ) {
     # Regarding rpm lock see Q9@ https://documentation.suse.com/de-de/sles/15-SP1/html/SLES-all/app-ay-faq.html
     # quote : "during the post-script phase, YaST still has an exclusive lock on the RPM database."
     # the package cannot be installed the autoyast way, because of the changing package name (eg libyui-rest-api15)

@@ -3,7 +3,7 @@
 # Copyright 2022 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
-# Summary: module loader for MicroOS, SLE Micro, Leap Micro and ALP.
+# Summary: module loader for MicroOS, SLE Micro and Leap Micro.
 # Maintainer: qa-c@suse.de
 
 package main_micro_alp;
@@ -12,7 +12,10 @@ use warnings;
 use base 'Exporter';
 use Exporter;
 use main_common;
+use main_ltp_loader 'load_kernel_tests';
 use main_containers qw(load_container_tests is_container_test);
+use main_publiccloud qw(load_publiccloud_download_repos);
+use main_security qw(load_security_tests is_security_test);
 use testapi qw(check_var get_required_var get_var set_var);
 use version_utils;
 use utils;
@@ -20,7 +23,7 @@ use Utils::Architectures;
 use Utils::Backends;
 
 sub is_image {
-    return get_required_var('FLAVOR') =~ /image|default|kvm/i;
+    return get_required_var('FLAVOR') =~ /image|default|kvm|base/i;
 }
 
 sub is_dvd {
@@ -38,18 +41,37 @@ sub load_config_tests {
     loadtest 'transactional/host_config' unless is_dvd;
     loadtest 'rt/rt_is_realtime' if is_rt;
     loadtest 'transactional/enable_selinux' if (get_var('ENABLE_SELINUX') && is_image);
-    loadtest 'console/suseconnect_scc' if (is_sle_micro && get_var('SCC_REGISTER') && !is_dvd);
+    loadtest 'console/suseconnect_scc' if (get_var('SCC_REGISTER') && !is_dvd);
     loadtest 'transactional/install_updates' if (is_sle_micro && is_released);
 }
 
 sub load_boot_from_disk_tests {
-    loadtest 'installation/bootloader_start' if is_s390x();
+    # add additional image handling module for svirt workers
+    if (is_s390x()) {
+        loadtest 'installation/bootloader_start';
+    } elsif (is_vmware()) {
+        loadtest 'installation/bootloader_svirt';
+        loadtest 'installation/bootloader_uefi';
+    }
+
+    # read FIRST_BOOT_CONFIG in order to know how the image will be configured
+    # ignition|combustion|ignition+combustion is considered as default path
     if (check_var('FIRST_BOOT_CONFIG', 'wizard')) {
         loadtest 'jeos/firstrun';
-    } elsif (is_s390x()) {
-        loadtest 'boot/boot_to_desktop';
+    } elsif (check_var('FIRST_BOOT_CONFIG', 'cloud-init')) {
+        unless (is_s390x) {
+            loadtest 'installation/bootloader_uefi';
+            loadtest 'installation/first_boot';
+        }
+        loadtest 'jeos/verify_cloudinit';
     } else {
-        loadtest 'microos/disk_boot';
+        if (is_s390x()) {
+            loadtest 'boot/boot_to_desktop';
+        } elsif (is_vmware) {
+            ;
+        } else {
+            loadtest 'microos/disk_boot';
+        }
     }
 
     loadtest 'installation/system_workarounds' if (is_aarch64 && is_microos);
@@ -100,7 +122,8 @@ sub load_installation_tests {
     } else {
         loadtest 'installation/installation_overview';
     }
-    loadtest 'installation/disable_grub_timeout';
+    loadtest 'installation/disable_grub_timeout' if is_bootloader_grub2;
+    loadtest 'installation/configure_sdboot' if is_bootloader_sdboot;
     loadtest 'installation/enable_selinux' if get_var('ENABLE_SELINUX');
     loadtest 'installation/start_install';
     loadtest 'installation/await_install';
@@ -170,18 +193,21 @@ sub load_common_tests {
     loadtest 'console/regproxy' if is_regproxy_required;
     loadtest 'microos/networking';
     loadtest 'microos/libzypp_config';
-    loadtest 'microos/image_checks' if is_image;
+    loadtest 'microos/image_checks' if (is_image || is_selfinstall);
     loadtest 'microos/one_line_checks';
     loadtest 'microos/services_enabled';
     # MicroOS -old images use wicked, but cockpit-wicked is no longer supported in TW
-    loadtest 'microos/cockpit_service' unless is_staging || (is_microos('Tumbleweed') && get_var('HDD_1') =~ /-old/);
+    loadtest 'microos/cockpit_service' unless (is_microos('Tumbleweed') && is_staging) || (is_microos('Tumbleweed') && get_var('HDD_1', '') =~ /-old/) || !get_var('SCC_REGISTER');
+    loadtest 'console/perl_bootloader' unless (is_bootloader_sdboot);
     # Staging has no access to repos and the MicroOS-DVD does not contain ansible
     # Ansible test needs Packagehub in SLE and it can't be enabled in SLEM
-    loadtest 'console/ansible' unless (is_staging || is_sle_micro || is_leap_micro || is_alp);
-    loadtest 'console/kubeadm' if (check_var('SYSTEM_ROLE', 'kubeadm'));
-    # SLE Micro is not 2038-proof, so it doesn't apply here, but it does for ALP.
+    loadtest 'console/ansible' unless (is_staging || is_sle_micro || is_leap_micro);
     # On s390x zvm setups we need more time to wait for system to boot up.
-    loadtest 'console/year_2038_detection' unless (is_s390x || is_sle_micro || is_leap_micro);
+    # Skip this test with sd-boot. The reason is not what you'd think though:
+    # With sd-boot, host_config does not perform a reboot and a snapshot is made while the serial terminal
+    # is logged in. year_2038_detection does a forced rollback to this snapshot and triggers poo#109929,
+    # breaking most later modules.
+    loadtest 'console/year_2038_detection' unless (is_s390x || is_sle_micro || is_leap_micro || is_bootloader_sdboot);
 }
 
 
@@ -192,7 +218,7 @@ sub load_transactional_tests {
     loadtest 'microos/patterns' if is_sle_micro;
     loadtest 'transactional/transactional_update';
     loadtest 'transactional/rebootmgr';
-    loadtest 'transactional/health_check';
+    loadtest 'transactional/health_check' if is_bootloader_grub2;    # health-checker needs GRUB2 (poo#129748)
 }
 
 
@@ -200,7 +226,6 @@ sub load_network_tests {
     loadtest 'microos/networking';
     loadtest 'microos/networkmanager';
     loadtest 'microos/libzypp_config';
-    # This method is only loaded in ALP
     loadtest 'console/firewalld';
 }
 
@@ -220,7 +245,8 @@ sub load_fips_tests {
     loadtest 'fips/openssl/openssl_fips_cipher';
     loadtest 'fips/openssl/openssl_fips_dhparam';
     loadtest 'fips/openssl/openssl_fips_hash';
-    loadtest 'fips/openssl/openssl_pubkey_dsa';
+    # https://bugzilla.suse.com/show_bug.cgi?id=1223200#c2
+    loadtest 'fips/openssl/openssl_pubkey_dsa' if is_sle_micro('<6.0');
     loadtest 'fips/openssl/openssl_pubkey_rsa';
     loadtest 'fips/gnutls/gnutls_base_check';
     loadtest 'fips/gnutls/gnutls_server';
@@ -233,9 +259,8 @@ sub load_fips_tests {
 sub load_selinux_tests {
     loadtest 'security/selinux/selinux_setup';
     loadtest 'security/selinux/sestatus';
-    # ALP has selinux enabled and in enforcing mode by default
-    loadtest 'security/selinux/selinux_smoke' unless is_alp;
-    loadtest 'security/selinux/enforcing_mode_setup' unless is_alp;
+    loadtest 'security/selinux/selinux_smoke';
+    loadtest 'security/selinux/enforcing_mode_setup';
     loadtest 'security/selinux/semanage_fcontext';
     loadtest 'security/selinux/semanage_boolean';
     loadtest 'security/selinux/fixfiles';
@@ -266,18 +291,28 @@ sub load_journal_check_tests {
 
 sub load_slem_on_pc_tests {
     my $args = OpenQA::Test::RunArgs->new();
-
-    loadtest("boot/boot_to_desktop");
-    loadtest("publiccloud/prepare_instance", run_args => $args);
-    loadtest("publiccloud/registration", run_args => $args);
-    loadtest("publiccloud/ssh_interactive_start", run_args => $args);
-    loadtest("publiccloud/instance_overview", run_args => $args);
-    loadtest("publiccloud/slem_prepare", run_args => $args);
-    loadtest("transactional/enable_selinux") if (get_var('ENABLE_SELINUX'));
-    if (get_var("PUBLIC_CLOUD_CONTAINERS")) {
-        load_container_tests() if is_container_test;
+    if (get_var('PUBLIC_CLOUD_DOWNLOAD_TESTREPO')) {
+        load_publiccloud_download_repos();
+    } elsif (get_var('PUBLIC_CLOUD_UPLOAD_IMG')) {
+        loadtest("boot/boot_to_desktop");
+        loadtest("publiccloud/upload_image");
+    } else {
+        # SLEM basic test
+        loadtest("boot/boot_to_desktop");
+        loadtest("publiccloud/prepare_instance", run_args => $args);
+        loadtest("publiccloud/registration", run_args => $args);
+        # 2 next modules of pubcloud needed for sle-micro incidents/repos verification
+        if (get_var('PUBLIC_CLOUD_QAM', 0)) {
+            loadtest("publiccloud/transfer_repos", run_args => $args);
+            loadtest("publiccloud/patch_and_reboot", run_args => $args);
+        }
+        if (get_var('PUBLIC_CLOUD_LTP', 0)) {
+            loadtest("publiccloud/run_ltp", run_args => $args);
+        }
+        else {
+            loadtest("publiccloud/slem_basic", run_args => $args);
+        }
     }
-    loadtest("publiccloud/ssh_interactive_end", run_args => $args);
 }
 
 sub load_xfstests_tests {
@@ -315,6 +350,14 @@ sub load_tests {
         return 1;
     }
 
+    if (get_var('BTRFS_PROGS')) {
+        boot_hdd_image;
+        loadtest 'btrfs-progs/install';
+        loadtest 'btrfs-progs/run';
+        loadtest 'btrfs-progs/generate_report';
+        return 1;
+    }
+
     if (get_var('REMOTE_TARGET')) {
         load_remote_target_tests;
         return 1;
@@ -326,7 +369,7 @@ sub load_tests {
 
     if (get_var('BOOT_HDD_IMAGE')) {
         load_boot_from_disk_tests;
-    } elsif (get_var('SELFINSTALL')) {
+    } elsif (is_selfinstall) {
         load_selfinstall_boot_tests;
     } elsif (get_var('AUTOYAST')) {
         load_autoyast_installation_tests;
@@ -361,6 +404,8 @@ sub load_tests {
         # Container tests didn't execute journal check. However, if doing so, there
         # are some errors to be investigated. We need to remove this return;
         return 1;
+    } elsif (is_security_test) {
+        load_security_tests;
     } elsif (check_var('EXTRA', 'networking')) {
         load_network_tests;
     } elsif (check_var('EXTRA', 'provisioning')) {

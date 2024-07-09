@@ -22,14 +22,17 @@ use constant {
           is_microos
           is_leap_micro
           is_sle_micro
+          is_micro
           is_alp
           is_selfinstall
           is_gnome_next
           is_jeos
+          is_community_jeos
           is_krypton_argon
           is_leap
           is_opensuse
           is_tumbleweed
+          is_slowroll
           is_rescuesystem
           is_sles4sap
           is_sles4sap_standard
@@ -45,10 +48,14 @@ use constant {
           is_openstack
           is_leap_migration
           is_tunneled
+          is_bootloader_grub2
+          is_bootloader_sdboot
+          is_plasma6
           requires_role_selection
           check_version
           get_os_release
           check_os_release
+          verify_os_version
           package_version_cmp
           get_version_id
           php_version
@@ -154,7 +161,7 @@ sub is_rescuesystem {
 
 =head2 is_virtualization_server
 
-Returns true if called on a virutalization server
+Returns true if called on a virtualization server
 =cut
 
 sub is_virtualization_server {
@@ -174,7 +181,7 @@ sub is_livecd {
 
 Usage: check_version('>15.0', get_var('VERSION'), '\d{2}')
 Query format: [= > < >= <=] version [+] (Example: <=12-sp3 =12-sp1 <4.0 >=15 3.0+)
-Check agains: product version to check against - probably get_var('VERSION')
+Check against: product version to check against - probably get_var('VERSION')
 Regex format: checks query version format (Example: /\d{2}\.\d/)#
 =cut
 
@@ -230,7 +237,7 @@ sub is_microos {
         return $flavor =~ /DVD/;    # DVD and Staging-?-DVD
     }
     elsif ($filter eq 'VMX') {
-        return $flavor !~ /DVD/;    # If not DVD it's VMX
+        return $flavor =~ /image|default|kvm/i;
     }
     elsif ($filter eq 'Tumbleweed') {
         return $version_is_tw;
@@ -277,6 +284,18 @@ sub is_sle_micro {
     return check_version($query, $version, qr/\d{1,}\.\d/);
 }
 
+=head2 is_micro
+
+Check if distribution is any of MicroOS, Leap Micro or SL-Micro
+=cut
+
+sub is_micro {
+    my $query = shift;
+    my $version = shift // get_var('VERSION');
+
+    return is_microos($query, $version) || is_leap_micro($query, $version) || is_sle_micro($query, $version);
+}
+
 =head2 is_alp
 
 Check if distribution is ALP
@@ -310,9 +329,21 @@ Returns true if called on tumbleweed
 sub is_tumbleweed {
     # Tumbleweed and its stagings
     return 0 unless check_var('DISTRI', 'opensuse');
-    return 1 if get_var('VERSION') =~ /Tumbleweed/;
+    return 1 if get_var('VERSION') =~ /Tumbleweed|Slowroll/;
     return 1 if is_gnome_next;
     return get_var('VERSION') =~ /^Staging:/;
+}
+
+=head2 is_slowroll
+
+Returns true if called on slowroll
+=cut
+
+sub is_slowroll {
+    # Slowroll and its stagings
+    return 0 unless check_var('DISTRI', 'opensuse');
+    return 1 if get_var('VERSION') =~ /Slowroll/;
+    # Staging has VERSION=Slowroll:Staging which is covered by the line above
 }
 
 =head2 is_leap
@@ -351,7 +382,6 @@ sub is_opensuse {
     return 1 if check_var('DISTRI', 'opensuse');
     return 1 if check_var('DISTRI', 'microos');
     return 1 if check_var('DISTRI', 'leap-micro');
-    return 1 if check_var('DISTRI', 'alp');
     return 0;
 }
 
@@ -416,7 +446,7 @@ Returns true if called on a real time system
 =cut
 
 sub is_rt {
-    return (check_var('SLE_PRODUCT', 'rt') || get_var('FLAVOR') =~ /rt/i);
+    return (check_var('SLE_PRODUCT', 'rt') || get_var('FLAVOR') =~ /-rt/i);
 }
 
 =head2 is_hpc
@@ -520,7 +550,7 @@ sub is_server {
     return 1 if is_sles4sap();
     return 1 if is_sles4migration();
     return 1 if get_var('FLAVOR', '') =~ /^Server/;
-    return 1 if get_var('PUBLIC_CLOUD');
+    return 1 if is_public_cloud();
     # If unified installer, we need to check SLE_PRODUCT
     return 0 if get_var('FLAVOR', '') !~ /^Installer-|^Online|^Full/;
     return check_var('SLE_PRODUCT', 'sles');
@@ -683,7 +713,7 @@ It parses the info from /etc/os-release file, which can reside in any physical h
 The file can also be placed anywhere as long as it can be reached somehow by its absolute file path,
 which should be passed in as the second argument os_release_file, for example, "/etc/os-release"
 At the same time, connection method to the entity in which the file reside should be passed in as the
-firt argument go_to_target, for example, "ssh root at name or ip address" or "way to download the file"
+first argument go_to_target, for example, "ssh root at name or ip address" or "way to download the file"
 For use only on locahost, no argument needs to be specified
 =cut
 
@@ -703,25 +733,19 @@ sub get_os_release {
 
 Identify running os without any dependencies parsing the I</etc/os-release>.
 
-=item C<distri_name>
+=over 4
 
-The expected distribution name to compare.
+=item C<distri_name> - The expected distribution name to compare.
 
-=item C<line>
+=item C<line> - The line we'll be parsing and checking.
 
-The line we'll be parsing and checking.
+=item C<go_to_target> - Command connecting to the SUT
 
-=item C<go_to_target>
-
-Command connecting to the SUT
-
-=item C<os_release_file>
-
-The full path to the Operating system identification file.
-Default to I</etc/os-release>.
+=item C<os_release_file> - The full path to the Operating system identification file. Default to I</etc/os-release>.
 
 Returns 1 (true) if the ID_LIKE variable contains C<distri_name>.
 
+=back
 =cut
 
 sub check_os_release {
@@ -732,6 +756,21 @@ sub check_os_release {
     $os_release_file //= '/etc/os-release';
     my $os_like_name = script_output("$go_to_target grep -e \"^$line\\b\" ${os_release_file} | cut -d'\"' -f2");
     return ($os_like_name =~ /$distri_name/i);
+}
+
+=head2 verify_os_version
+
+Returns 1 (true) if os release version matches the one passed as arguement.
+If no arguements are given, the function will compare the os release version
+in /etc/os-release file with "VERSION" var.
+
+=cut
+
+sub verify_os_version {
+    my ($version, $os_release_file) = @_;
+    $version //= get_var("VERSION");
+    $os_release_file //= '/etc/os-release';
+    return script_output("grep VERSION= $os_release_file | grep $version");
 }
 
 =head2 is_public_cloud
@@ -745,12 +784,13 @@ sub is_public_cloud {
 
 =head2 is_openstack
 
-Returns true if JEOS_OPENSTACK is set to 1
+Returns true if the tests loads Cloud image in OpenStack environment
+NO_CLOUD variable is set in order to test the image in QEMU
 
 =cut
 
 sub is_openstack {
-    return get_var('JEOS_OPENSTACK');
+    return get_var('FLAVOR', '') =~ /JeOS-for-OpenStack-Cloud.*/ && !get_var('NO_CLOUD');
 }
 
 =head2 is_leap_migration
@@ -770,6 +810,37 @@ Returns true if TUNNELED is set to 1
 sub is_tunneled {
     return get_var('TUNNELED', 0);
 }
+
+=head2 is_bootloader_grub2
+
+Returns true if the SUT uses GRUB2 as bootloader
+=cut
+
+sub is_bootloader_grub2 {
+    return get_var('BOOTLOADER', 'grub2') eq 'grub2';
+}
+
+=head2 is_bootloader_sdboot
+
+Returns true if the SUT uses systemd-boot as bootloader
+=cut
+
+sub is_bootloader_sdboot {
+    return get_var('BOOTLOADER', 'grub2') eq 'systemd-boot';
+}
+
+=head2 is_plasma6
+
+Returns true if the SUT uses Plasma 6.
+=cut
+
+sub is_plasma6 {
+    return 0 unless check_var('DESKTOP', 'kde');
+    return 1 if is_krypton_argon;
+    return 0 if is_leap("<16.0");
+    return 1;
+}
+
 
 =head2 has_test_issues
 
@@ -836,7 +907,7 @@ sub package_version_cmp {
 
 =head2 is_quarterly_iso
 
-Returns true if called in quaterly iso testing
+Returns true if called in quarterly iso testing
 =cut
 
 sub is_quarterly_iso {
@@ -891,5 +962,14 @@ sub php_version {
         $php_ver = '8';
     }
     ($php, $php_pkg, $php_ver);
+}
+
+=head2 is_community_jeos
+
+Returns true for tests using the images built by the "JeOS" package on OBS
+=cut
+
+sub is_community_jeos {
+    return (get_var('FLAVOR', '') =~ /JeOS-for-(AArch64|RISCV|RPi)/);
 }
 

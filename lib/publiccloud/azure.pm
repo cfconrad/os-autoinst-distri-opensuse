@@ -17,19 +17,41 @@ use mmapi 'get_current_job_id';
 use utils qw(script_output_retry);
 use publiccloud::azure_client;
 use publiccloud::ssh_interactive 'select_host_console';
+use Data::Dumper;
 
 has resource_group => 'openqa-upload';
 has container => 'sle-images';
 has image_gallery => 'test_image_gallery';
 has lease_id => undef;
-
-my $default_sku = 'gen2';
+has storage_region => 'westeurope';
 
 sub init {
     my ($self) = @_;
     $self->SUPER::init();
     $self->provider_client(publiccloud::azure_client->new());
     $self->provider_client->init();
+}
+
+=head2 az_arch
+    Provides architecture tag x64 or Arm64 compatible with Azure syntax, based on '*ARCH' job settings
+=cut
+
+sub az_arch {
+    return (get_var('PUBLIC_CLOUD_ARCH', get_required_var('ARCH'))) eq 'x86_64' ? 'x64' : 'Arm64';
+}
+
+=head2 az_sku
+    Centralized sku definition and default value, based on PUBLIC_CLOUD_AZURE_SKU
+
+    Call: az_sku(<default>);
+        when PUBLIC_CLOUD_AZURE_SKU undefined, the default from input is used:
+        when <default> is undefined too, hardcoded string used; i.e. az_sku(), default = 'gen2'; 
+=cut
+
+sub az_sku {
+    my ($self, $default) = @_;
+    $default //= "gen2";
+    return get_var('PUBLIC_CLOUD_AZURE_SKU', $default);
 }
 
 =head2 decode_azure_json
@@ -139,6 +161,17 @@ sub get_image_version {
         return undef;
     }
     record_info('IMG VER FOUND', "Found $image image version.");
+
+    my $regions = decode_azure_json($json)->{publishingProfile}->{targetRegions};
+    my @regions_list = map { lc($_->{name} =~ s/[-\s]//gr) } @$regions;
+    if (!grep(/^$self->{provider_client}->{region}$/, @regions_list)) {
+        record_info('REGION MISMATCH', 'The ' . $self->provider_client->region . ' is not listed in the targetRegions(' . join(',', @regions_list) . ') of this image version.');
+        return undef;
+    }
+    record_info('REGION OK', 'The ' . $self->provider_client->region . ' is listed in the targetRegions(' . join(',', @regions_list) . ') of this image version.');
+
+    die("Image version $image Found in failed state") if (decode_azure_json($json)->{provisioningState} eq "Failed");
+
     return $image;
 }
 
@@ -196,8 +229,8 @@ sub create_resources {
     assert_script_run('az group create --name ' . $self->resource_group . ' -l ' . $self->provider_client->region, $timeout);
 
     record_info('INFO', 'Create storage account ' . $storage_account);
-    assert_script_run('az storage account create --resource-group ' . $self->resource_group . ' -l '
-          . $self->provider_client->region . ' --name ' . $storage_account . ' --kind Storage --sku Standard_LRS', $timeout);
+    assert_script_run('az storage account create --resource-group ' . $self->resource_group . ' -l ' . $self->storage_region
+          . ' --name ' . $storage_account . ' --kind Storage --sku Standard_LRS', $timeout);
 
     record_info('INFO', 'Create storage container ' . $container);
     assert_script_run('az storage container create --account-name ' . $storage_account
@@ -222,13 +255,14 @@ sub generate_img_version {
     return "$build.$kiwi";
 }
 
-sub generate_tags {
+sub generate_image_tags {
     # Define tags
     my $job_id = get_current_job_id();
     my $openqa_url = get_var('OPENQA_URL', get_var('OPENQA_HOSTNAME'));
     $openqa_url =~ s@^https?://|/$@@gm;
     my $created_by = "$openqa_url/t$job_id";
     my $tags = "'openqa_created_by=$created_by' 'openqa_var_server=$openqa_url' 'openqa_var_job_id=$job_id'";
+    $tags .= " 'pcw_ignore=1'" if (check_var('PUBLIC_CLOUD_KEEP_IMG', '1'));
 
     return $tags;
 }
@@ -237,24 +271,27 @@ sub generate_tags {
 
     my $definition = $self->generate_azure_image_definition();
 
-Generated the Azure Image name from the job settings. If present, it takes the PUBLIC_CLOUD_AZURE_IMAGE_DEFINITION setting.
-If not present it generated the image definition name based on distri, version, flavor and SKU.
+Generates the Azure Image name from the job settings. 
+    If PUBLIC_CLOUD_AZURE_IMAGE_DEFINITION defined, its content is returned;
+    otherwise, image definition name based on distri, version, flavor and SKU returned.
 
-Note: Image definitions needs to be distinct names and can only serve one architecture!
+Note: Image definitions shall be distinct names and can only serve one architecture!
 
 Example: 'SLE-MICRO-5.4-BYOS-AZURE-X86_64-GEN2'
+
+    B<return> a string with the image full name distri-version-flavor-arch-sku
+
 =cut
 
 sub generate_azure_image_definition {
-    return get_var('PUBLIC_CLOUD_AZURE_IMAGE_DEFINITION') if (get_var('PUBLIC_CLOUD_AZURE_IMAGE_DEFINITION'));
+    my ($self) = @_;
+    my $def = get_var('PUBLIC_CLOUD_AZURE_IMAGE_DEFINITION');
+    return $def if ($def);
 
-    my $distri = get_required_var('DISTRI');
-    my $version = get_required_var('VERSION');
-    my $flavor = get_required_var('FLAVOR');
-    my $arch = (get_var('PUBLIC_CLOUD_ARCH', get_required_var('ARCH'))) eq 'x86_64' ? 'x64' : 'Arm64';
-    my $sku = get_var('PUBLIC_CLOUD_AZURE_SKU', $default_sku);
-    my $image = uc("$distri-$version-$flavor-$arch-$sku");
-    return $image;
+    my $image = $self->generate_basename();
+    my $sku = az_sku();
+
+    return uc("$image-$sku");
 }
 
 =head2 get_image_definition
@@ -264,7 +301,7 @@ returns the name of the found image definition or undef if not found
 
 sub get_image_definition {
     my ($self, $resource_group, $gallery) = @_;
-    my $name = generate_azure_image_definition();
+    my $name = $self->generate_azure_image_definition();
     record_info('get_image_definition', "Searching for image definition in gallery=$gallery under group=$resource_group with name=$name");
 
     my $definitions = script_output("az sig image-definition list --resource-group '$resource_group' --gallery-name '$gallery'");
@@ -346,7 +383,7 @@ sub upload_blob {
     my $img_name = $self->get_blob_name($file);
     my $container = $self->container;
     my $key = $self->get_storage_account_keys($storage_account);
-    my $tags = generate_tags();
+    my $tags = generate_image_tags();
     # Note: VM images need to be a page blob type
     assert_script_run('az storage blob upload --max-connections 4 --type page --overwrite --no-progress'
           . " --account-name '$storage_account' --account-key '$key' --container-name '$container'"
@@ -372,13 +409,14 @@ sub create_image_definition {
     my $images = script_output("az sig image-definition list -g '$resource_group' -r '$gallery'");
     record_info("img-defs", "Existing image definitions:\n$images");
 
-    my $sku = get_var("PUBLIC_CLOUD_AZURE_SKU", $default_sku);
-    my $gen = ($sku =~ "gen2" ? "V2" : "V1");
-    my $tags = generate_tags();
+    my $sku = az_sku();
 
-    my $arch = (get_var('PUBLIC_CLOUD_ARCH', get_required_var('ARCH'))) eq 'x86_64' ? 'x64' : 'Arm64';
+    my $gen = ($sku =~ "gen2" ? "V2" : "V1");
+    my $tags = generate_image_tags();
+
+    my $arch = az_arch();
     my $publisher = get_var("PUBLIC_CLOUD_AZURE_PUBLISHER", "qe-c");
-    my $offer = get_var("PUBLIC_CLOUD_AZURE_OFFER", get_var('DISTRI') . '-' . get_var('VERSION') . '-' . get_var('FLAVOR') . '-' . $arch);
+    my $offer = get_var("PUBLIC_CLOUD_AZURE_OFFER", $self->generate_basename());
 
     my $definition = $self->get_image_definition($resource_group, $gallery);
     if (defined $definition) {
@@ -388,7 +426,7 @@ sub create_image_definition {
         record_info("gen img-def", "Create image definitions:\n$definition");
         assert_script_run("az sig image-definition create --resource-group '$resource_group' --gallery-name '$gallery' " .
               "--gallery-image-definition '$definition' --os-type Linux --publisher '$publisher' --offer '$offer' --sku '$sku' " .
-              "--architecture '$arch' --hyper-v-generation '$gen' --os-state 'Generalized'", timeout => 300);
+              "--architecture '$arch' --hyper-v-generation '$gen' --os-state 'Generalized' --location " . $self->storage_region, timeout => 300);
     }
 }
 
@@ -403,22 +441,15 @@ sub create_image_version {
     my $subscription = $self->provider_client->subscription;
     my $sa_url = "/subscriptions/$subscription/resourceGroups/imageGroups/providers/Microsoft.Storage/storageAccounts/$storage_account";
 
-    ## For the Azure Compute Gallery, multiple target regions are supported.
-    # This is necessary, because the image version upload needs to happen once for all regions, for which we want to
-    # execute test runs. For reasons of being concise we re-use the existing variable PUBLIC_CLOUD_REGION, but here
-    # it can contain a comma-separated list of all regions, in which the uploaded image should be available
-    # The $self->region is not used here as it contains only the first region from the list.
-    my $target_regions = get_var("PUBLIC_CLOUD_REGION", "westeurope");
-    $target_regions =~ s/,/ /g;    # CLI expects spaces as separation, not commas
-
     my $definition = $self->get_image_definition($resource_group, $gallery);
     my $version = generate_img_version();
     my $os_vhd_uri = $self->get_blob_uri($file);
-    my $tags = generate_tags();
+    my $tags = generate_image_tags();
+    my $target_regions = ($self->provider_client->region !~ $self->storage_region) ? $self->provider_client->region . ' ' . $self->storage_region : $self->provider_client->region;
     # Note: Repetitive calls do not fail
-    assert_script_run("az sig image-version create --resource-group '$resource_group' --gallery-name '$gallery' " .
+    assert_script_run("az sig image-version create --debug --resource-group '$resource_group' --gallery-name '$gallery' " .
           "--gallery-image-definition '$definition' --gallery-image-version '$version' --os-vhd-storage-account '$sa_url' " .
-          "--os-vhd-uri $os_vhd_uri --target-regions '$target_regions'", timeout => 60 * 30);
+          "--os-vhd-uri $os_vhd_uri --target-regions $target_regions --location " . $self->storage_region, timeout => 60 * 30);
 }
 
 =head2 upload_img
@@ -604,13 +635,14 @@ sub cleanup {
     my ($self, $args) = @_;
     select_host_console(force => 1);
 
-    my $id = $args->{my_instance}->{instance_id};
+    $self->get_image_version() if (get_var('PUBLIC_CLOUD_BUILD'));
 
-    script_run("az vm boot-diagnostics get-boot-log --ids $id | jq -r '.' > bootlog.txt", timeout => 120, die_on_timeout => 0);
-    upload_logs("bootlog.txt", failok => 1);
-
+    if (!check_var('PUBLIC_CLOUD_SLES4SAP', 1) && defined($args->{my_instance}->{instance_id})) {
+        my $id = $args->{my_instance}->{instance_id};
+        script_run("az vm boot-diagnostics get-boot-log --ids $id | jq -r '.' > bootlog.txt", timeout => 120, die_on_timeout => 0);
+        upload_logs("bootlog.txt", failok => 1);
+    }
     $self->SUPER::cleanup();
-    $self->provider_client->cleanup();
 }
 
 1;

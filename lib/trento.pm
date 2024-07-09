@@ -105,7 +105,7 @@ constant values for Trento tests
 =head2 Methods
 =cut
 
-=hean3 clone_trento_deployment
+=head3 clone_trento_deployment
 
 Clone gitlab.suse.de/qa-css/trento
 
@@ -237,6 +237,7 @@ sub get_resource_group {
 =head3 cluster_config
 
 Create a variable map and prepare the qe-sap-deployment using it
+
 =over 3
 
 =item B<PROVIDER> - CloudProvider name
@@ -267,8 +268,12 @@ sub cluster_config {
 
     $variables{HANA_ACCOUNT} = get_required_var("TRENTO_QESAPDEPLOY_HANA_ACCOUNT");
     $variables{HANA_CONTAINER} = get_required_var("TRENTO_QESAPDEPLOY_HANA_CONTAINER");
-    if (get_var("TRENTO_QESAPDEPLOY_HANA_TOKEN")) {
-        $variables{HANA_TOKEN} = get_required_var("TRENTO_QESAPDEPLOY_HANA_TOKEN");
+    if (get_var("TRENTO_QESAPDEPLOY_HANA_KEYNAME")) {
+        $variables{HANA_TOKEN} = qesap_az_create_sas_token(storage => get_required_var('TRENTO_QESAPDEPLOY_HANA_ACCOUNT'),
+            container => (split("/", get_required_var('TRENTO_QESAPDEPLOY_HANA_CONTAINER')))[0],
+            keyname => get_required_var('TRENTO_QESAPDEPLOY_HANA_KEYNAME'),
+            lifetime => 30);
+        record_info('TOKEN', $variables{HANA_TOKEN});
         # escape needed by 'sed'
         # but not implemented in file_content_replace() yet poo#120690
         $variables{HANA_TOKEN} =~ s/\&/\\\&/g;
@@ -433,9 +438,17 @@ Deploy a SAP Landscape using a previously configured qe-sap-deployment
 =cut
 
 sub cluster_deploy {
-    my @ret = qesap_execute(cmd => 'terraform', verbose => 1, timeout => bmwqemu::scale_timeout(1800));
+    my @ret = qesap_execute(
+        cmd => 'terraform',
+        verbose => 1,
+        timeout => bmwqemu::scale_timeout(1800),
+        logname => 'terraform.log.txt');
     die "'qesap.py terraform' return: $ret[0]" if ($ret[0]);
-    @ret = qesap_execute(cmd => 'ansible', verbose => 1, timeout => bmwqemu::scale_timeout(3600));
+    @ret = qesap_execute(
+        cmd => 'ansible',
+        verbose => 1,
+        timeout => bmwqemu::scale_timeout(3600),
+        logname => 'ansible.log.txt');
     die "'qesap.py ansible' return: $ret[0]" if ($ret[0]);
     my $inventory = qesap_get_inventory(provider => get_required_var('PUBLIC_CLOUD_PROVIDER'));
     upload_logs($inventory);
@@ -447,9 +460,17 @@ Destroy the qe-sap-deployment SAP Landscape
 =cut
 
 sub cluster_destroy {
-    my @ret = qesap_execute(cmd => 'ansible', cmd_options => '-d', verbose => 1, timeout => bmwqemu::scale_timeout(300));
+    my @ret = qesap_execute(
+        cmd => 'ansible', cmd_options => '-d',
+        verbose => 1,
+        timeout => bmwqemu::scale_timeout(300),
+        logname => 'ansible_destroy.log.txt');
     die "'qesap.py ansible -d' return: $ret[0]" if ($ret[0]);
-    @ret = qesap_execute(cmd => 'terraform', cmd_options => '-d', verbose => 1, timeout => bmwqemu::scale_timeout(3600));
+    @ret = qesap_execute(
+        cmd => 'terraform', cmd_options => '-d',
+        verbose => 1,
+        timeout => bmwqemu::scale_timeout(3600),
+        logname => 'terraform_destroy.log.txt');
     die "'qesap.py terraform -d' return: $ret[0]" if ($ret[0]);
 }
 
@@ -859,6 +880,7 @@ sub cluster_wait_status {
 =head3 cluster_wait_status_by_regex
 
 Remotely run 'SAPHanaSR-showAttr' in a loop on $host, wait output that matches regular expression
+
 =over 3
 
 =item B<HOST> - Ansible name or filter for the remote host where to run 'SAPHanaSR-showAttr'
@@ -1082,7 +1104,10 @@ sub cypress_configs {
       ' -f Premium' .
       ' -n %s' .
       ' --trento-version %s',
-      $machine_ip, get_trento_password(), qesap_get_nodes_number(), get_required_var('TRENTO_VERSION');
+      $machine_ip,
+      get_trento_password(),
+      qesap_get_nodes_number(provider => get_required_var('PUBLIC_CLOUD_PROVIDER')),
+      get_required_var('TRENTO_VERSION');
     if (get_var('TRENTO_AGENT_RPM')) {
         my $cypress_env_cmd .= ' -a ' . get_var('TRENTO_AGENT_RPM');
     }

@@ -19,7 +19,7 @@
   <report>
     <errors>
       <show t="boolean">true</show>
-      <timeout t="integer">20</timeout>
+      <timeout t="integer">0</timeout>
       <log t="boolean">true</log>
     </errors>
     <messages>
@@ -39,7 +39,7 @@
     </yesno_messages>
   </report>
   <bootloader>
-    <loader_type>grub2</loader_type>
+    <loader_type>default</loader_type>
     <global>
       <activate>true</activate>
       <boot_mbr>true</boot_mbr>
@@ -127,7 +127,6 @@
 	<service>virtnetworkd</service>
 	<service>virtnodedevd</service>
 	<service>virtsecretd</service>
-	<service>virtproxyd</service>
 	<service>virtnwfilterd</service>
       </enable>
     </services>

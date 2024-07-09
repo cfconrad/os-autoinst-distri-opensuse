@@ -256,9 +256,9 @@ sub start_add_system_extensions_or_modules {
 }
 
 sub start_kernel_dump {
+    ensure_installed 'kdump';
     search('dump');
     assert_and_click 'yast2_control-kernel-kdump';
-    assert_and_click 'yast2_control-install-kdump';
     assert_screen 'yast2_control-center_kernel-kdump-configuration', timeout => 180;
     send_key 'alt-o';    # Press ok
     assert_screen 'yast2-control-center-ui', timeout => 60;
@@ -294,6 +294,10 @@ sub start_wake_on_lan {
 sub start_directory_server {
     search 'directory server';
     assert_and_click 'yast2_control-center_authentication-server';
+    if (check_screen('deprecated_info', 60)) {
+        record_info('Deprecated Info', 'The tool is deprecated.');
+        send_key 'alt-o';
+    }
     do {
         assert_screen [
             qw(yast2_control-center-authentication-server_install yast2_control-center-authentication-server_configuration yast2_control-center-authentication-server_empty_first_page)

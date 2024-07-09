@@ -109,9 +109,6 @@
       <pattern>fips</pattern>
       <pattern>ofed</pattern>
       <pattern>sap_server</pattern>
-      <pattern>wsl_base</pattern>
-      <pattern>wsl_gui</pattern>
-      <pattern>wsl_systemd</pattern>
     </patterns>
   </software>
   <networking>
@@ -157,7 +154,7 @@
       </password_settings>
       <shell>/bin/bash</shell>
       <uid>1000</uid>
-      <user_password>nots3cr3t</user_password>
+      <user_password>{{PASSWORD}}</user_password>
       <username>bernhard</username>
     </user>
     <user>
@@ -175,7 +172,7 @@
       </password_settings>
       <shell>/bin/bash</shell>
       <uid>0</uid>
-      <user_password>nots3cr3t</user_password>
+      <user_password>{{PASSWORD}}</user_password>
       <username>root</username>
     </user>
   </users>

@@ -44,8 +44,7 @@ sub gpg_test {
     # Generating key pair
     if ($gpg_ver ge 2.1) {
         # Preparing a config file for gpg --batch option
-        assert_script_run(
-            "echo \"\$(cat <<EOF
+        my $egg_data = <<EOF;
 Key-Type: RSA
 Key-Length: $key_size
 Subkey-Type: RSA
@@ -54,8 +53,7 @@ Name-Real: $username
 Name-Email: $email
 Expire-Date: 0
 EOF
-            )\" > $egg_file"
-        );
+        write_sut_file($egg_file, $egg_data);
         assert_script_run("cat $egg_file");
 
         # Kill gpg-agent service when executing gpg2 command in case gpg-agent
@@ -151,7 +149,7 @@ EOF
     assert_script_run("gpg2 -u $email --verify --verbose $tfile_asc");
 
     # cleanup
-    assert_script_run("rm -f ~/.gnupg/gpg-agent.conf ; gpg-connect-agent reloadagent /bye") if $gpg_ver ge 2.1;
+    assert_script_run("gpgconf --kill all") if $gpg_ver ge 2.1;
     # Restore
     assert_script_run("rm -rf $tfile.* $egg_file");
     assert_script_run("rm -rf .gnupg && gpg -K");    # Regenerate default ~/.gnupg
@@ -183,6 +181,8 @@ sub run {
         libgcrypt20 => '1.9.0',
         'libgcrypt20-hmac' => '1.9.0'
     };
+    delete $pkg_list->{'libgcrypt20-hmac'} if is_sle('15-SP6+');
+
     if (is_public_cloud() && check_var('BETA', '1')) {
         if (zypper_call("in " . join(' ', keys %$pkg_list), exitcode => [0, 4]) == '4') {
             record_info("Aborting", "The repositories are behind Public Cloud image. See bsc#1199312");

@@ -9,8 +9,9 @@ use strict;
 use warnings FATAL => 'all';
 use base 'sles4sap_publiccloud_basetest';
 use testapi;
-use publiccloud::utils;
 use sles4sap_publiccloud;
+use publiccloud::utils;
+use hacluster qw($crm_mon_cmd);
 use serial_terminal 'select_serial_terminal';
 
 sub test_flags {
@@ -19,24 +20,25 @@ sub test_flags {
 
 sub run {
     my ($self, $run_args) = @_;
-    $self->{network_peering_present} = 1 if ($run_args->{network_peering_present});
-    $self->{instances} = $run_args->{instances};
+
+    # Needed to have peering and ansible state propagated in post_fail_hook
+    $self->import_context($run_args);
 
     select_serial_terminal;
     my $test_name = $self->{name};
     my $takeover_action = $run_args->{hana_test_definitions}{$test_name}{action};
     my $site_name = $run_args->{hana_test_definitions}{$test_name}{site_name};
     my $target_site = $run_args->{$site_name};
-    my $sbd_delay;
     die("Target site '$site_name' data is missing. This might indicate deployment issue.")
       unless $target_site;
+    my $sbd_delay;
 
     # Switch to control to target site (currently PROMOTED)
     $self->{my_instance} = $target_site;
 
     # Check initial cluster status
-    $self->run_cmd(cmd => 'zypper -n in ClusterTools2');
-    $self->run_cmd(cmd => 'cs_wait_for_idle --sleep 5');
+    $self->run_cmd(cmd => 'zypper -n in ClusterTools2', timeout => 300);
+    $self->wait_for_idle(timeout => 240);
     my $cluster_status = $self->run_cmd(cmd => 'crm status');
     record_info('Cluster status', $cluster_status);
     die(uc($site_name) . " '$target_site->{instance_id}' is NOT in MASTER mode.") if
@@ -46,16 +48,24 @@ sub run {
     );
 
     # SBD delay related setup in case of crash OS to prevent cluster starting too quickly after reboot
-    $self->setup_sbd_delay() if $takeover_action eq 'crash';
+    $self->setup_sbd_delay_publiccloud() if $takeover_action eq 'crash';
     # Calculate SBD delay sleep time
     $sbd_delay = $self->sbd_delay_formula if $takeover_action eq 'crash';
+
+    # SBD delay related setup for 'stop' to fix sporadic 'takeover failed to complete' issue on EC2
+    if ($takeover_action eq 'stop' and check_var('PUBLIC_CLOUD_PROVIDER', 'EC2')) {
+        $self->setup_sbd_delay_publiccloud();
+        $sbd_delay = $self->sbd_delay_formula();
+    }
 
     # Stop/kill/crash HANA DB and wait till SSH is again available with pacemaker running.
     $self->stop_hana(method => $takeover_action);
     $self->{my_instance}->wait_for_ssh(username => 'cloudadmin');
 
     # SBD delay is active only after reboot
-    if ($takeover_action eq 'crash' and $sbd_delay != 0) {
+    if (($takeover_action eq 'crash' and $sbd_delay != 0) ||
+        # Add SBD delay for 'stop' to fix sporadic 'takeover failed to complete' issue on EC2
+        ($takeover_action eq 'stop' and check_var('PUBLIC_CLOUD_PROVIDER', 'EC2'))) {
         record_info('SBD SLEEP', "Waiting $sbd_delay sec for SBD delay timeout.");
         # test needs to wait a little more than sbd delay
         sleep($sbd_delay + 30);
@@ -66,10 +76,18 @@ sub run {
     $self->check_takeover;
 
     record_info('Replication', join(' ', ('Enabling replication on', ucfirst($site_name), '(DEMOTED)')));
-    $self->enable_replication();
-
+    $self->enable_replication(site_name => $site_name);
     record_info(ucfirst($site_name) . ' start');
+
     $self->cleanup_resource();
+    $self->wait_for_cluster(wait_time => 60, max_retries => 10);
+    die "Required hana resource is NOT running on $self->{my_instance}, aborting" unless $self->is_hana_resource_running();
+    $self->display_full_status();
+    if ($self->get_promoted_hostname() eq $target_site->{instance_id}) {
+        die(uc($site_name) . " '$target_site->{instance_id}' is in MASTER mode, when it shouldn't be.");
+    } else {
+        record_info("MASTER CHECK", "'$target_site->{instance_id}' is NOT master, as expected");
+    }
 
     record_info('Done', 'Test finished');
 }

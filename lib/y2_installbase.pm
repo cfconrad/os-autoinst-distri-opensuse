@@ -166,10 +166,19 @@ Performs steps needed to go from the "pattern selection" screen to
 
 sub go_to_search_packages {
     my ($self) = @_;
-    send_key 'alt-d';    # details button
-    assert_screen 'packages-manager-detail';
-    assert_and_click 'packages-search-tab';
-    assert_and_click 'packages-search-field-selected';
+    if (check_var('VIDEOMODE', 'text')) {
+        assert_screen 'patterns-list-selected';
+        wait_screen_change { send_key 'alt-f' };
+        for (1 .. 4) { send_key 'down'; }
+        send_key 'ret';
+        assert_screen 'pattern_selector';
+    }
+    else {
+        send_key 'alt-d';    # details button
+        assert_screen 'packages-manager-detail';
+        assert_and_click 'packages-search-tab';
+        assert_and_click 'packages-search-field-selected';
+    }
 }
 
 =head2 move_down
@@ -228,10 +237,17 @@ C<$package_name>
 sub search_package {
     my ($self, $package_name) = @_;
     assert_and_click 'packages-search-field-selected';
-    wait_screen_change { send_key 'ctrl-a' };
-    wait_screen_change { send_key 'delete' };
-    type_string_slow "$package_name";
-    send_key 'alt-s';    # search button
+    if (check_var('VIDEOMODE', 'text')) {
+        wait_screen_change { send_key 'alt-p' };
+        type_string_slow "$package_name";
+        send_key 'ret';    # search
+    }
+    else {
+        wait_screen_change { send_key 'ctrl-a' };
+        wait_screen_change { send_key 'delete' };
+        type_string_slow "$package_name";
+        send_key 'alt-s';    # search button
+    }
 }
 
 =head2 select_all_patterns_by_menu
@@ -432,8 +448,9 @@ sub toggle_package {
 }
 
 sub use_wicked {
+    # Config DHCP for all interfaces except br0 and bring them up
     script_run "cd /proc/sys/net/ipv4/conf";
-    script_run("for i in *[0-9]; do echo BOOTPROTO=dhcp > /etc/sysconfig/network/ifcfg-\$i; wicked --debug all ifup \$i; done", 600);
+    script_run("for i in *[0-9]; do [ \$i != 'br0' ] && echo BOOTPROTO=dhcp > /etc/sysconfig/network/ifcfg-\$i; wicked --debug all ifup \$i; done", 600);
     save_screenshot;
 }
 
@@ -592,6 +609,20 @@ sub deal_with_dependency_issues {
     if (check_screen 'manual-intervention', 30) {
         $self->deal_with_dependency_issues();
     }
+}
+
+sub is_sles_in_gm_phase {
+    return !get_var('BETA');
+}
+
+sub is_sles_in_rc_phase {
+    my $is_RC = !script_run('grep -r RC /README.BETA');
+    return $is_RC;
+}
+
+sub is_sles_in_rc_or_gm_phase {
+    my ($self) = @_;
+    return $self->is_sles_in_rc_phase || $self->is_sles_in_gm_phase;
 }
 
 sub save_remote_upload_y2logs {

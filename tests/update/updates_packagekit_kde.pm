@@ -14,10 +14,12 @@ use utils;
 use testapi;
 use x11utils qw(ensure_unlocked_desktop turn_off_kde_screensaver);
 use power_action_utils qw(power_action);
+use serial_terminal 'select_serial_terminal';
 
 # Update with Plasma applet for software updates using PackageKit
 sub run {
     my ($self) = @_;
+    my $counter = 0;
     select_console 'x11', await_console => 0;
     ensure_unlocked_desktop;
     turn_off_kde_screensaver;
@@ -26,17 +28,30 @@ sub run {
     if (match_has_tag 'updates_available-tray') {
         # First update package manager, then packages, then bsc#992773 (2x)
         while (1) {
-            assert_screen_change {
-                assert_and_click_until_screen_change("updates_available-tray");
-            };
-            assert_screen_change {
-                assert_and_click_until_screen_change('updates_click-install', 10, 5);
-            };
+            $counter++;
+            assert_and_click('updates_available-tray');
+            if (check_screen('updates_not_installed') && $counter >= 2) {
+                select_serial_terminal;
+                quit_packagekit;
+                zypper_call('up');
+                systemctl 'unmask packagekit.service';
+                select_console 'x11', await_console => 0;
+                last;
+            }
+            assert_screen_change { assert_and_click('updates_click-install'); };
+            assert_screen [qw(updates_click-install pkit_installing_state)];
+            # Discover needs an additional confirmation
+            if (match_has_tag 'updates_click-install') {
+                click_lastmatch;
+                assert_screen('pkit_installing_state');
+            }
 
             # Wait until installation is done.
             my $start_time = time;
             my $timeout = 3600 * get_var('TIMEOUT_SCALE', 1);
             do {
+                # wait if pkit is installing updates, no need to check status every second
+                sleep 60 if match_has_tag('pkit_installing_state');
                 # Check for needles matching the end of the update installation.
                 die "Installing updates took over " . ($timeout / 3600) . " hour(s)." if (time - $start_time > $timeout);
                 assert_screen \@updates_installed_tags, 3600;
@@ -47,7 +62,7 @@ sub run {
             # the assert_screen, record a soft failure
             wait_still_screen;
             if (match_has_tag('updates_none')) {
-                if (check_screen 'updates_none', 30) {
+                if (check_screen 'updates_none', 10) {
                     last;
                 }
                 else {
@@ -64,12 +79,14 @@ sub run {
             # Check, if there are more updates available
             elsif (match_has_tag('updates_available-tray')) {
                 # Look again
-                if (check_screen 'updates_none', 30) {
+                if (check_screen 'updates_none', 10) {
                     # There were no updates but the tray icon persisted.
                     record_soft_failure 'boo#1041112';
                     last;
                 }
-                elsif (check_screen 'updates_available-tray', 30) {
+                elsif (check_screen 'updates_available-tray', 10) {
+                    # close updates window if it's open e.g. installation failed
+                    assert_and_click('updates_available-tray') if check_screen('updates_click-install');
                     # There were updates. Do the update again
                     next;
                 }
@@ -79,14 +96,13 @@ sub run {
             }
         }
         # Close tray updater
-        send_key("alt-f4");
+        send_key_until_needlematch('generic-desktop', 'alt-f4', 3, 5);
     }
 
     if (check_screen "updates_installed-restart") {
-        assert_screen_change {
-            assert_and_click_until_screen_change "plasma-updates_installed-restart"
-        }
-        power_action 'reboot', {observe => 1};
+        assert_and_click 'plasma-updates_installed-restart';
+        wait_still_screen;
+        power_action 'reboot', observe => 1, keepconsole => 1;
         $self->wait_boot;
     }
 }

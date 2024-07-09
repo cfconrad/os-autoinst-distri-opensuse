@@ -116,10 +116,9 @@ sub investigate_yast2_failure {
     );
     # Hash with known errors which we don't want to track in each postfail hook
     my %y2log_known_errors = (
+        "<3>.*Can't find YCP client component clone_proposal" => 'bsc#1218700',
+        "<3>.*84 Factory receive nil name" => 'bsc#1218700',
         "<3>.*QueryWidget failed.*RichText.*VScrollValue" => 'bsc#1167248',
-        "<3>.*Solverrun finished with an ERROR" => 'bsc#1170322',
-        "<3>.*3 packages failed.*badlist" => 'bsc#1170322',
-        "<3>.*Unknown option.*MultiSelectionBox widget" => 'bsc#1170431',
         "<3>.*XML.*Argument.*to Read.*is nil" => 'bsc#1170432',
         "<3>.*no[t]? mount" => 'bsc#1092088',    # Detect not mounted partition
         "<3>.*lib/cheetah.rb" => 'bsc#1153749',
@@ -128,13 +127,14 @@ sub investigate_yast2_failure {
         # Adding reference to trello, detect those in single scenario
         # (build97.1) regressions
         # found https://openqa.suse.de/tests/3646274#step/logs_from_installation_system/412
-        "<3>.*SCR::Dir\\(\\) failed" => 'bsc#1158186',
-        "<3>.*Unknown desktop file: installation" => 'bsc#1158186',
-        "<3>.*Bad options for module: virtio_net" => 'bsc#1158186',
-        "<3>.*Wrong value for path ." => 'bsc#1158186',
-        "<3>.*setOptions:Empty map" => 'bsc#1158186',
-        "<3>.*Unmounting media failed" => 'bsc#1158186',
-        "<3>.*No base product has been found" => 'bsc#1158186',
+        "<3>.*SCR::Dir\\(\\) failed" => 'bsc#1158186 -> WONTFIX',
+        "<3>.*Unknown desktop file: installation" => 'bsc#1158186 -> WONTFIX',
+        "<3>.*Bad options for module: virtio_net" => 'bsc#1158186 -> WONTFIX',
+        "<3>.*Wrong value for path ." => 'bsc#1158186 -> WONTFIX',
+        "<3>.*setOptions:Empty map" => 'bsc#1158186 -> WONTFIX',
+        "<3>.*Unmounting media failed" => 'bsc#1158186 -> WONTFIX',
+        "<3>.*No base product has been found" => 'bsc#1158186 -> WONTFIX',
+        "<3>.*SystemCmd.cc\\(step_fork_and_exec\\)" => 'bsc#1219294 -> WONTFIX',
         "<3>.*Error output: dracut:" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
         "<3>.*Reading install.inf" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
         "<3>.*shellcommand" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
@@ -206,6 +206,7 @@ sub investigate_yast2_failure {
         "<3>.*Could not import key.*Subprocess failed" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
         "<3>.*baseproduct symlink is dangling or missing" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
         "<3>.*falling back to @\\{DEFAULT_HOME_PATH\\}" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
+        "<3>.*open for json file '/etc/libstorage/udev-filters.json' failed" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
         # libzypp errors
         "<3>.*The requested URL returned error" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
         "<3>.*Not adding cache" => 'https://trello.com/c/5qTQZKH3/2918-sp2-logs-cleanup',
@@ -235,10 +236,10 @@ sub investigate_yast2_failure {
     my $detected_errors_detailed = '';
     for my $y2log_error (keys %y2log_errors) {
         if (my $y2log_error_result = script_output("$cmd_prefix -m 20 -C 5 -E \"$y2log_error\" $cmd_postfix")) {
-            # Save detected error to indetify if have new regressions
+            # Save detected error to identify if there are new regressions
             push @detected_errors, $y2log_error;
             if (my $bug = $y2log_errors{$y2log_error}) {
-                record_info('Softfail', "$bug\n\nDetails:\n$y2log_error_result", result => 'softfail');
+                record_info('Softfail', "$bug\n\nDetails:\n$y2log_error_result", result => 'softfail') unless ($bug =~ m/WONTFIX|trello/);
                 next;
             }
             $detected_errors_detailed .= "$y2log_error_result\n\n$delimiter\n\n";
@@ -385,7 +386,7 @@ sub wait_grub {
     push @tags, 'grub2';
     push @tags, 'boot-live-' . get_var('DESKTOP') if get_var('LIVETEST');    # LIVETEST won't to do installation and no grub2 menu show up
     push @tags, 'bootloader' if get_var('OFW');
-    push @tags, 'encrypted-disk-password-prompt-grub' if get_var('ENCRYPT');
+    push @tags, 'encrypted-disk-password-prompt-grub', 'encrypted-disk-password-prompt' if get_var('ENCRYPT');
     if (get_var('ONLINE_MIGRATION')) {
         push @tags, 'migration-source-system-grub2';
     }
@@ -434,7 +435,7 @@ sub wait_grub {
       if (is_aarch64_uefi_boot_hdd
         && !is_jeos
         && !$in_grub
-        && (!(isotovideo::get_version() >= 12 && get_var('UEFI_PFLASH_VARS')) || get_var('ONLINE_MIGRATION') || get_var('UPGRADE') || get_var('ZDUP')));
+        && (!(isotovideo::get_version() >= 12 && get_var('UEFI_PFLASH_VARS')) || get_var('ONLINE_MIGRATION') || get_var('UPGRADE') || get_var('ZDUP') || (get_var('LIVE_UPGRADE') && get_var('PATCH_BEFORE_MIGRATION'))));
     assert_screen(\@tags, $bootloader_time);
     if (match_has_tag("bootloader-shim-import-prompt")) {
         send_key "down";
@@ -456,9 +457,9 @@ sub wait_grub {
     elsif (match_has_tag('inst-bootmenu')) {
         $self->wait_grub_to_boot_on_local_disk;
     }
-    elsif (match_has_tag('encrypted-disk-password-prompt-grub')) {
+    elsif (match_has_tag('encrypted-disk-password-prompt-grub') || match_has_tag('encrypted-disk-password-prompt')) {
         # unlock encrypted disk before grub
-        workaround_type_encrypted_passphrase;
+        unlock_bootloader;
         assert_screen("grub2", timeout => ((is_pvm) ? 300 : 90));
     }
     mutex_wait 'support_server_ready' if get_var('USE_SUPPORT_SERVER');
@@ -474,7 +475,8 @@ When bootloader appears, make sure to boot from local disk when it is on aarch64
 sub wait_grub_to_boot_on_local_disk {
     # assuming the cursor is on 'installation' by default and 'boot from
     # harddisk' is above
-    send_key_until_needlematch 'inst-bootmenu-boot-harddisk', 'up';
+    my $switch_key = (is_opensuse && get_var('LIVECD')) ? 'down' : 'up';
+    send_key_until_needlematch 'inst-bootmenu-boot-harddisk', "$switch_key";
     boot_local_disk;
     my @tags = qw(grub2 tianocore-mainmenu);
     push @tags, 'encrypted-disk-password-prompt' if (get_var('ENCRYPT'));
@@ -502,7 +504,7 @@ sub wait_grub_to_boot_on_local_disk {
 
     # We need to wait more for aarch64's tianocore-mainmenu and for qemu ppc64le
     if ((is_aarch64) || (is_ppc64le && is_qemu)) {
-        assert_screen(\@tags, 30);
+        assert_screen(\@tags, 90);
     } else {
         assert_screen(\@tags, 15);
     }
@@ -511,7 +513,7 @@ sub wait_grub_to_boot_on_local_disk {
         check_screen('encrypted-disk-password-prompt', 10);
     }
     if (match_has_tag('encrypted-disk-password-prompt')) {
-        workaround_type_encrypted_passphrase;
+        unlock_bootloader;
         assert_screen('grub2');
     }
 }
@@ -520,6 +522,7 @@ sub reconnect_s390 {
     my (%args) = @_;
     my $ready_time = $args{ready_time};
     my $textmode = $args{textmode};
+    my $enable_root_ssh = $args{enable_root_ssh} // 0;
     return undef unless is_s390x;
     my $login_ready = get_login_message();
     if (is_backend_s390x) {
@@ -541,7 +544,7 @@ sub reconnect_s390 {
     else {
         my $worker_hostname = get_required_var('WORKER_HOSTNAME');
         my $virsh_guest = get_required_var('VIRSH_GUEST');
-        workaround_type_encrypted_passphrase if get_var('S390_ZKVM');
+        unlock_bootloader if get_var('S390_ZKVM');
 
         select_console('svirt');
         save_svirt_pty;
@@ -550,9 +553,15 @@ sub reconnect_s390 {
         grub_select;
 
         type_line_svirt '', expect => $login_ready, timeout => $ready_time + 100, fail_message => 'Could not find login prompt';
-        type_line_svirt "root", expect => 'Password';
+        type_line_svirt "root", expect => qr/Passwor[dt]/;
         type_line_svirt "$testapi::password";
         type_line_svirt "systemctl is-active network", expect => 'active';
+        if ($enable_root_ssh eq 1) {
+            record_info('Enable root ssh login');
+            type_line_svirt "mkdir -p /etc/ssh/sshd_config.d";
+            type_line_svirt "echo 'PermitRootLogin yes' \\> /etc/ssh/sshd_config.d/root.conf";
+            type_line_svirt "systemctl restart sshd";
+        }
         type_line_svirt 'systemctl is-active sshd', expect => 'active';
 
         # make sure we can reach the SSH server in the SUT, try up to 1 min (12 * 5s)
@@ -651,15 +660,18 @@ sub grub_select {
     elsif (!get_var('S390_ZKVM')) {
         # confirm default choice
         send_key 'ret';
-        if (get_var('USE_SUPPORT_SERVER') && is_aarch64 && is_opensuse)
-        {
-            # On remote installations of openSUSE distris on aarch64, first key
-            # press doesn't always reach the SUT, so introducing the workaround
-            wait_still_screen;
-            if (check_screen('grub2')) {
-                record_info 'WARN', 'Return key did not reach the system, re-trying';
-                send_key 'ret';
-            }
+    }
+
+    if (((is_ppc64le && is_qemu) || (!get_var('S390_ZKVM') && is_aarch64 && is_opensuse)) && get_var('USE_SUPPORT_SERVER')) {
+        # First key press doesn't always reach the SUT on all the remote installations.
+        # It happens on some specific machine types:
+        # - on aarch64 using openSUSE distris
+        # - on ppc64le at second boot in short time
+        # so introducing the workaround
+        wait_still_screen;
+        if (check_screen('grub2')) {
+            record_info 'WARN', 'Return key did not reach the system, re-trying';
+            send_key 'ret';
         }
     }
 }
@@ -668,14 +680,14 @@ sub handle_grub {
     my ($self, %args) = @_;
     my $bootloader_time = $args{bootloader_time};
     my $in_grub = $args{in_grub};
-    my $linux_boot_entry = $args{linux_boot_entry} // (is_sle('15+') ? 15 : 14);
-    $linux_boot_entry = $linux_boot_entry - 1 if is_aarch64;    # poo#100500
 
     # On Xen PV and svirt we don't see a Grub menu
     # If KEEP_GRUB_TIMEOUT is defined it means that GRUB menu will appear only for one second
     return if (check_var('VIRSH_VMM_FAMILY', 'xen') && check_var('VIRSH_VMM_TYPE', 'linux') && is_svirt || check_var('KEEP_GRUB_TIMEOUT', '1'));
     $self->wait_grub(bootloader_time => $bootloader_time, in_grub => $in_grub);
     if (my $boot_params = get_var('EXTRABOOTPARAMS_BOOT_LOCAL')) {
+        my $linux_boot_entry = get_var('EXTRABOOTPARAMS_LINE_OFFSET') // (is_sle('15+') ? 15 : 14);
+        $linux_boot_entry -= 1 if is_aarch64 && !get_var('EXTRABOOTPARAMS_LINE_OFFSET');    # poo#100500
         wait_screen_change { send_key 'e' };
         for (1 .. $linux_boot_entry) { send_key 'down' }
         wait_screen_change { send_key 'end' };
@@ -854,6 +866,7 @@ sub wait_boot {
     my $textmode = $args{textmode};
     my $ready_time = $args{ready_time} // ((check_var('VIRSH_VMM_FAMILY', 'hyperv') || is_ipmi) ? 500 : 300);
     my $in_grub = $args{in_grub} // 0;
+    my $enable_root_ssh = $args{enable_root_ssh} // 0;
 
     die "wait_boot: got undefined class" unless $self;
     # used to register a post fail hook being active while we are waiting for
@@ -869,7 +882,7 @@ sub wait_boot {
     # Reset the consoles after the reboot: there is no user logged in anywhere
     reset_consoles;
     select_console('sol', await_console => 0) if is_ipmi;
-    if (reconnect_s390(textmode => $textmode, ready_time => $ready_time)) {
+    if (reconnect_s390(textmode => $textmode, ready_time => $ready_time, enable_root_ssh => $enable_root_ssh)) {
     }
     elsif (get_var('USE_SUPPORT_SERVER') && get_var('USE_SUPPORT_SERVER_PXE_CUSTOMKERNEL')) {
         # A supportserver client to reboot via PXE after an initial installation.
@@ -884,7 +897,7 @@ sub wait_boot {
     # When no bounce back on power KVM, we need skip bootloader process and go ahead when 'displaymanager' matched.
     elsif (get_var('OFW') && (check_screen('displaymanager', 5))) {
     }
-    else {
+    elsif (is_bootloader_grub2) {
         assert_screen([qw(virttest-pxe-menu qa-net-selection prague-pxe-menu pxe-menu)], 600) if (uses_qa_net_hardware() || get_var("PXEBOOT"));
         $self->handle_grub(bootloader_time => $bootloader_time, in_grub => $in_grub);
         # part of soft failure bsc#1118456
@@ -896,11 +909,19 @@ sub wait_boot {
                 send_key 'ret';
             }
         }
+    } elsif (is_bootloader_sdboot) {
+        assert_screen 'systemd-boot', 300;
+        save_screenshot;    # Show what's selected for booting
+        send_key('ret');
+    } else {
+        die 'Unknown bootloader';
     }
     reconnect_xen if check_var('VIRSH_VMM_FAMILY', 'xen');
 
-    # on s390x svirt encryption is unlocked with workaround_type_encrypted_passphrase before here
-    unlock_if_encrypted unless get_var('S390_ZKVM');
+    # on s390x svirt encryption is unlocked with unlock_bootloader before here
+    if (need_unlock_after_bootloader) {
+        unlock_if_encrypted unless get_var('S390_ZKVM');
+    }
 
     $self->wait_boot_past_bootloader(%args);
     $self->{in_wait_boot} = 0;
@@ -1027,7 +1048,7 @@ sub post_fail_hook {
 
 sub test_flags {
     # no_rollback is needed for ssh-tunnel and fatal must be explicitly defined
-    return get_var('PUBLIC_CLOUD') ? {no_rollback => 1, fatal => 0} : {};
+    return is_public_cloud() ? {no_rollback => 1, fatal => 0} : {};
 }
 
 1;

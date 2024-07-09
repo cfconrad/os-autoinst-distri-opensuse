@@ -1,4 +1,4 @@
-# Copyright 2015-2021 SUSE LLC
+# Copyright 2015-2024 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 package containers::common;
@@ -11,14 +11,17 @@ use testapi;
 use registration;
 use version_utils;
 use utils qw(zypper_call systemctl file_content_replace script_retry script_output_retry);
-use containers::utils qw(can_build_sle_base registry_url container_ip container_route);
-use transactional qw(trup_call check_reboot_changes);
+use containers::utils qw(registry_url container_ip container_route);
+use transactional qw(trup_call check_reboot_changes process_reboot);
+use bootloader_setup 'add_grub_cmdline_settings';
+use serial_terminal 'select_serial_terminal';
+use power_action_utils 'power_action';
 use Mojo::JSON;
 
 our @EXPORT = qw(is_unreleased_sle install_podman_when_needed install_docker_when_needed install_containerd_when_needed
-  test_container_runtime test_container_image scc_apply_docker_image_credentials scc_restore_docker_image_credentials
-  install_buildah_when_needed test_rpm_db_backend activate_containers_module check_containers_connectivity
-  test_search_registry);
+  test_container_runtime test_container_image
+  install_buildah_when_needed activate_containers_module check_containers_connectivity
+  switch_cgroup_version install_packages);
 
 sub is_unreleased_sle {
     # If "SCC_URL" is set, it means we are in not-released SLE host and it points to proxy SCC url
@@ -51,7 +54,7 @@ sub install_podman_when_needed {
         } else {
             # We may run openSUSE with DISTRI=sle and opensuse doesn't have SUSEConnect
             activate_containers_module if $host_os =~ 'sle';
-            push(@pkgs, 'podman-cni-config') if is_jeos();
+            push(@pkgs, 'podman-cni-config') if is_jeos() && is_sle('<=15-SP2');    # 1217509#c8
             push(@pkgs, 'apparmor-parser') if is_leap("=15.1");    # bsc#1123387
             zypper_call "in @pkgs";
         }
@@ -85,7 +88,7 @@ sub install_docker_when_needed {
                 activate_containers_module;
 
                 # Temporarly enable LTSS product on LTSS systems where it is not present
-                if (get_var('SCC_REGCODE_LTSS') && script_run('test -f /etc/products.d/SLES-LTSS.prod') != 0) {
+                if (get_var('SCC_REGCODE_LTSS') && script_run('test -f /etc/products.d/SLES-LTSS.prod') != 0 && !main_common::is_updates_tests) {
                     add_suseconnect_product('SLES-LTSS', undef, undef, '-r ' . get_var('SCC_REGCODE_LTSS'), 150);
                     $ltss_needed = 1;
                 }
@@ -99,25 +102,19 @@ sub install_docker_when_needed {
                 systemctl 'try-restart firewalld';
             }
 
-            remove_suseconnect_product('SLES-LTSS') if $ltss_needed;
+            remove_suseconnect_product('SLES-LTSS') if $ltss_needed && !main_common::is_updates_tests;
         }
     }
+
+    # Disable docker's own rate-limit in the service file (3 restarts in 60s)
+    # Our tests might restart the docker service more frequently than that
+    assert_script_run 'mkdir -p /etc/systemd/system/docker.service.d';
+    assert_script_run 'echo -e "[Service]\nStartLimitInterval=0s\n" > /etc/systemd/system/docker.service.d/limits.conf';
 
     # docker daemon can be started
     systemctl('enable docker');
     systemctl('is-enabled docker');
-    # docker start, but taking bsc#1187479 into account. Please remove softfailure handling, once bsc#1187479 is solved.
-    if (systemctl('start docker', timeout => 180, ignore_failure => 1) != 0) {
-        # Check for docker start timeout, bsc#1187479
-        if (script_run('journalctl -e | grep "timeout waiting for containerd to start"') == 0) {
-            # Retry one more time
-            record_soft_failure("bsc#1187479 - docker start infrequently times out waiting for containerd");
-            sleep(120);    # give background services time to complete to prevent another failure
-            systemctl('start docker');
-        } else {
-            die "docker start failed";
-        }
-    }
+    systemctl('start docker', timeout => 180);
     systemctl('is-active docker');
     systemctl('status docker', timeout => 120);
     record_info('docker', script_output('docker info'));
@@ -140,10 +137,7 @@ sub install_buildah_when_needed {
             zypper_call('in buildah', timeout => 300);
         }
     }
-    if ((script_output 'buildah info') =~ m/Failed to decode the keys.+ostree_repo/) {
-        assert_script_run "sed -i 's/ostree_repo/#ostree_repo/' /etc/containers/storage.conf";
-        record_soft_failure 'bsc#1189893 - Failed to decode the keys [\"storage.options.ostree_repo\"] from \"/etc/containers/storage.conf\"';
-    }
+    assert_script_run "! buildah info | grep Failed";
     record_info('buildah', script_output('buildah info'));
 }
 
@@ -158,95 +152,12 @@ sub install_containerd_when_needed {
     record_info('containerd', script_output('containerd -h'));
 }
 
-sub test_container_runtime {
-    my $runc = shift;
-    die "You must define the runtime!" unless $runc;
-
-    # Installation of runtime
-    record_info 'Test #1', 'Test: Installation';
-    if (script_run("which $runc") != 0) {
-        if (is_transactional) {
-            select_console 'root-console';
-            trup_call("pkg install $runc");
-            check_reboot_changes;
-        } else {
-            zypper_call("in $runc");
-        }
-    } else {
-        record_info('INFO', "$runc is already installed on the system.");
-    }
-    record_info("$runc", script_output("$runc -v"));
-
-    # create the OCI specification and verify that the template has been created
-    record_info 'Test #2', 'Test: OCI Specification';
-    assert_script_run("$runc spec");
-    assert_script_run('ls -l config.json');
-    script_run('cp config.json config.json.backup');
-
-    # Modify the configuration to run the container in background
-    assert_script_run("sed -i -e '/\"terminal\":/ s/: .*/: false,/' config.json");
-    assert_script_run("sed -i -e 's/\"sh\"/\"echo\", \"Kalimera\"/' config.json");
-
-    # Run (create, start, and delete) the container after it exits
-    record_info 'Test #3', 'Test: Use the run command';
-    assert_script_run("$runc run test1 | grep Kalimera");
-
-    # Restore the default configuration
-    assert_script_run('mv config.json.backup config.json');
-
-    assert_script_run("sed -i -e '/\"terminal\":/ s/: .*/: false,/' config.json");
-    assert_script_run("sed -i -e 's/\"sh\"/\"sleep\", \"120\"/' config.json");
-
-    # Container Lifecycle
-    record_info 'Test #4', 'Test: Create a container';
-    assert_script_run("$runc create test2");
-    assert_script_run("$runc state test2 | grep status | grep created");
-    record_info 'Test #5', 'Test: List containers';
-    assert_script_run("$runc list | grep test2");
-    record_info 'Test #6', 'Test: Start a container';
-    assert_script_run("$runc start test2");
-    assert_script_run("$runc state test2 | grep running");
-    record_info 'Test #7', 'Test: Pause a container';
-    assert_script_run("$runc pause test2");
-    assert_script_run("$runc state test2 | grep paused");
-    record_info 'Test #8', 'Test: Resume a container';
-    assert_script_run("$runc resume test2");
-    assert_script_run("$runc state test2 | grep running");
-    record_info 'Test #9', 'Test: Stop a container';
-    assert_script_run("$runc kill test2 KILL");
-    sleep 30;
-    assert_script_run("$runc state test2 | grep stopped");
-    record_info 'Test #10', 'Test: Delete a container';
-    assert_script_run("$runc delete test2");
-    assert_script_run("! $runc state test2");
-
-    # remove the configuration file
-    assert_script_run("rm config.json");
-}
-
-sub test_search_registry {
-    my $engine = shift;
-    my @registries = qw(docker.io);
-    push @registries, qw(registry.opensuse.org registry.suse.com) if ($engine eq 'podman');
-
-    foreach my $rlink (@registries) {
-        record_info("URL", "Scanning: $rlink");
-        my $start = time;
-        assert_script_run(sprintf('%s --log-level=debug search %s/busybox --format="{{.Name}}"', $engine, $rlink), timeout => 200);
-        my $duration = time - $start;
-        record_info('Response', "Registry $rlink responded in $duration seconds");
-        if ($duration > 60) {
-            record_info('Softfail', 'Searching registry.suse.com is too slow (sdsc#SD-106252 https://sd.suse.com/servicedesk/customer/portal/1/SD-106252)');
-        }
-    }
-}
-
 # Test a given image. Takes the image and container runtime (docker or podman) as arguments
 sub test_container_image {
     my %args = @_;
     my $image = $args{image};
     my $runtime = $args{runtime};
-    my $logfile = "/var/tmp/container_logs";
+    my $logfile = "/var/tmp/container_logs.txt";
 
     die 'Argument $image not provided!' unless $image;
     die 'Argument $runtime not provided!' unless $runtime;
@@ -276,60 +187,73 @@ sub test_container_image {
     assert_script_run "rm -f $logfile";
 }
 
-sub scc_apply_docker_image_credentials {
-    my $regcode = get_var 'SCC_DOCKER_IMAGE';
-    assert_script_run "cp /etc/zypp/credentials.d/SCCcredentials{,.bak}";
-    assert_script_run "echo -ne \"$regcode\" > /etc/zypp/credentials.d/SCCcredentials";
-}
-
-sub scc_restore_docker_image_credentials {
-    assert_script_run "cp /etc/zypp/credentials.d/SCCcredentials{.bak,}" if (is_sle() && get_var('SCC_DOCKER_IMAGE'));
-}
-
-sub test_rpm_db_backend {
-    my %args = @_;
-    my $image = $args{image};
-    my $runtime = $args{runtime};
-
-    die 'Argument $image not provided!' unless $image;
-    die 'Argument $runtime not provided!' unless $runtime;
-
-    my ($running_version, $sp, $host_distri) = get_os_release("$runtime run $image");
-    # TW and SLE 15-SP3+ uses rpm-ndb in the image
-    if ($host_distri eq 'opensuse-tumbleweed' || ($host_distri eq 'sles' && check_version('>=15-SP3', "$running_version-SP$sp", qr/\d{2}(?:-sp\d)?/))) {
-        validate_script_output "$runtime run $image rpm --eval %_db_backend", sub { m/ndb/ };
-    }
-}
-
 sub check_containers_connectivity {
     my $runtime = shift;
     record_info "connectivity", "Checking that containers can connect to the host, to each other and outside of the host";
     my $container_name = 'sut_container';
+    my $image = "registry.opensuse.org/opensuse/busybox:latest";
 
-    # Run container in the background (sleep for 30d because infinite is not supported by sleep in busybox)
-    script_retry "$runtime pull " . registry_url('alpine'), retry => 3, delay => 120;
-    assert_script_run "$runtime run -id --rm --name $container_name -p 1234:1234 " . registry_url('alpine') . " sleep 30d";
+    script_retry "$runtime pull $image", retry => 3, delay => 120;
+    assert_script_run "$runtime run -id --rm --name $container_name -p 1234:1234 $image sleep infinity";
     my $container_ip = container_ip $container_name, $runtime;
+
+    my $_4 = is_sle("<15") ? "" : "-4";
 
     # Connectivity to host check
     my $container_route = container_route($container_name, $runtime);
-    assert_script_run "ping -c3 " . $container_route;
-    assert_script_run "$runtime run --rm " . registry_url('alpine') . " ping -c3 " . $container_route;
+    assert_script_run "ping $_4 -c3 " . $container_route;
+    assert_script_run "$runtime run --rm --cap-add=CAP_NET_RAW $image ping -4 -c3 " . $container_route;
 
     # Cross-container connectivity check
-    assert_script_run "ping -c3 " . $container_ip;
-    assert_script_run "$runtime run --rm " . registry_url('alpine') . " ping -c3 " . $container_ip;
+    assert_script_run "ping $_4 -c3 " . $container_ip;
+    assert_script_run "$runtime run --rm  --cap-add=CAP_NET_RAW $image ping -4 -c3 " . $container_ip;
 
     # Outside IP connectivity check
-    script_retry "ping -c3 8.8.8.8", retry => 3, delay => 120;
-    script_retry "$runtime run --rm " . registry_url('alpine') . " ping -c3 8.8.8.8", retry => 3, delay => 120;
+    script_retry "ping $_4 -c3 8.8.8.8", retry => 3, delay => 120;
+    script_retry "$runtime run --rm --cap-add=CAP_NET_RAW $image ping -4 -c3 8.8.8.8", retry => 3, delay => 120;
 
     # Outside IP+DNS connectivity check
-    script_retry "ping -c3 google.com", retry => 3, delay => 120;
-    script_retry "$runtime run --rm " . registry_url('alpine') . " ping -c3 google.com", retry => 3, delay => 120;
+    script_retry "ping $_4 -c3 google.com", retry => 3, delay => 120;
+    script_retry "$runtime run --rm --cap-add=CAP_NET_RAW $image ping -4 -c3 google.com", retry => 3, delay => 120;
 
     # Kill the container running on background
     assert_script_run "$runtime kill $container_name";
+}
+
+sub switch_cgroup_version {
+    my ($self, $version) = @_;
+
+    my $setting = ($version == 1) ? 0 : 1;
+
+    my $rc = script_run("ls /sys/fs/cgroup/cgroup.controllers");
+    return if ($version == 2 && $rc == 0 || $version == 1 && $rc != 0);
+
+    record_info "cgroup v$version", "Switching to cgroup v$version";
+    if (is_transactional) {
+        add_grub_cmdline_settings("systemd.unified_cgroup_hierarchy=$setting", update_grub => 0);
+        assert_script_run('transactional-update grub.cfg');
+        process_reboot(trigger => 1);
+    } else {
+        add_grub_cmdline_settings("systemd.unified_cgroup_hierarchy=$setting", update_grub => 1);
+        power_action('reboot', textmode => 1);
+        $self->wait_boot(bootloader_time => 360);
+    }
+    select_serial_terminal;
+
+    validate_script_output("cat /proc/cmdline", sub { m/systemd\.unified_cgroup_hierarchy=$setting/ });
+}
+
+sub install_packages {
+    my @pkgs = @_;
+    # skip if already installed:
+    unless (script_run("rpm -q @pkgs") == 0) {
+        if (is_transactional) {
+            trup_call("pkg install @pkgs");
+            check_reboot_changes;
+        } else {
+            zypper_call("in @pkgs");
+        }
+    }
 }
 
 1;

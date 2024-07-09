@@ -1,7 +1,7 @@
 # SUSE's openQA tests
 #
 # Copyright 2009-2013 Bernhard M. Wiedemann
-# Copyright 2012-2021 SUSE LLC
+# Copyright 2012-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: docker-distribution-registry | distribution-registry
@@ -12,7 +12,7 @@
 # - images can be searched
 # - images can be pulled
 # - images can be deleted
-# Maintainer: qac team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'containers::basetest';
 use testapi;
@@ -48,7 +48,7 @@ sub registry_push_pull {
     if (script_run($engine->runtime . " images | grep '$image'") == 0) {
         assert_script_run $engine->runtime . " image rm -f $image", 90;
     } else {
-        record_soft_failure("Known issue - containers/podman#10685: podman image rm --force also untags other images (3.2.0 regression)");
+        die("rm --force untags other images");
     }
     assert_script_run "! " . $engine->runtime . " images | grep '$image'", 60;
     assert_script_run "! " . $engine->runtime . " images | grep 'localhost:5000/$image'", 60;
@@ -86,14 +86,14 @@ sub run {
 
     # Run docker tests
     my $docker = $self->containers_factory('docker');
-    my $tumbleweed = 'registry.opensuse.org/opensuse/tumbleweed';
-    registry_push_pull(image => $tumbleweed, runtime => $docker);
+    my $image = 'registry.opensuse.org/opensuse/busybox';
+    registry_push_pull(image => $image, runtime => $docker);
     $docker->cleanup_system_host();
 
     # Run podman tests
     if (is_leap('15.1+') || is_tumbleweed || is_sle("15-sp1+")) {
         my $podman = $self->containers_factory('podman');
-        registry_push_pull(image => $tumbleweed, runtime => $podman);
+        registry_push_pull(image => $image, runtime => $podman);
         $podman->cleanup_system_host();
     }
 }

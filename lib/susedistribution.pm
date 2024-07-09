@@ -3,6 +3,7 @@ use base 'distribution';
 use serial_terminal ();
 use strict;
 use warnings;
+use Sys::Hostname qw(hostname);
 use Utils::Architectures;
 use utils qw(
   disable_serial_getty
@@ -15,13 +16,14 @@ use utils qw(
   type_string_very_slow
   zypper_call
 );
-use version_utils qw(is_hyperv_in_gui is_sle is_leap is_svirt_except_s390x is_tumbleweed is_opensuse);
+use version_utils qw(is_hyperv_in_gui is_sle is_leap is_svirt_except_s390x is_tumbleweed is_opensuse is_hyperv is_plasma6 is_public_cloud);
 use x11utils qw(desktop_runner_hotkey ensure_unlocked_desktop x11_start_program_xterm);
 use Utils::Backends;
 
 use backend::svirt qw(SERIAL_TERMINAL_DEFAULT_DEVICE SERIAL_TERMINAL_DEFAULT_PORT SERIAL_USER_TERMINAL_DEFAULT_DEVICE SERIAL_USER_TERMINAL_DEFAULT_PORT);
 
 use Cwd;
+use Socket;
 use autotest 'query_isotovideo';
 use isotovideo;
 
@@ -61,17 +63,17 @@ sub handle_password_prompt {
     my ($console) = @_;
     $console //= '';
 
-    return if (get_var("LIVETEST") || get_var('LIVECD')) && (get_var('VERSION') !~ /agama/);
+    return if (get_var("LIVETEST") || (get_var('LIVECD') && !get_var('PATCH_BEFORE_MIGRATION'))) && (get_var('VERSION') !~ /agama/);
     if (is_serial_terminal()) {
         wait_serial(qr/Password:\s*$/i, timeout => 30);
     } else {
         assert_screen("password-prompt", 60);
     }
     if ($console eq 'hyperv-intermediary') {
-        type_string get_required_var('VIRSH_GUEST_PASSWORD');
+        type_password get_required_var('VIRSH_GUEST_PASSWORD');
     }
     elsif ($console eq 'svirt') {
-        type_string(get_required_var(check_var('VIRSH_VMM_FAMILY', 'hyperv') ? 'HYPERV_PASSWORD' : 'VIRSH_PASSWORD'));
+        type_password get_required_var(check_var('VIRSH_VMM_FAMILY', 'hyperv') ? 'HYPERV_PASSWORD' : 'VIRSH_PASSWORD');
     }
     else {
         type_password;
@@ -197,6 +199,9 @@ sub init_desktop_runner {
     my ($program, $timeout) = @_;
     $timeout //= 30;
     my $hotkey = desktop_runner_hotkey;
+
+    # Force krunner to run single words as shell command (see also kde#477794)
+    $program .= ' ;' if (is_plasma6 && $program !~ /\s/);
 
     send_key($hotkey);
 
@@ -562,11 +567,17 @@ sub init_consoles {
         if (is_backend_s390x) {
             # expand the S390 params
             my $s390_params = get_var("S390_NETWORK_PARAMS");
-            my $s390_host = get_required_var('S390_HOST');
-            $s390_params =~ s,\@S390_HOST\@,$s390_host,g;
+            my $s390_guest_fqdn = get_required_var("ZVM_GUEST");
+            my ($s390_guest_hostname) = $s390_guest_fqdn =~ /(.*?)\..*$/;
+            my $s390_guest_subnetmask = get_required_var("ZVM_GUEST_SUBNETMASK");
+            my $packed_ip = gethostbyname($s390_guest_fqdn);
+            die "Failed to get host by name for '$s390_guest_fqdn' (on " . hostname . ")" unless $packed_ip;
+            my $s390_guest_ip = inet_ntoa($packed_ip);
+            $s390_params .= " HostIP=${s390_guest_ip}/${s390_guest_subnetmask}";
+            $s390_params .= " Hostname=${s390_guest_hostname}";
             set_var("S390_NETWORK_PARAMS", $s390_params);
 
-            ($hostname) = $s390_params =~ /Hostname=(\S+)/;
+            $hostname = $s390_guest_fqdn;
         }
 
         # adds serial console for s390x zVM
@@ -897,6 +908,7 @@ sub activate_console {
     elsif ($console eq 'svirt' || $console eq 'hyperv-intermediary') {
         my $os_type = (check_var('VIRSH_VMM_FAMILY', 'hyperv') && $console eq 'svirt') ? 'windows' : 'linux';
         handle_password_prompt($console);
+        assert_screen('text-logged-in-root', 60) unless is_hyperv;
         $self->set_standard_prompt('root', os_type => $os_type, skip_set_standard_prompt => $args{skip_set_standard_prompt});
         save_svirt_pty;
     }
@@ -920,7 +932,7 @@ sub activate_console {
     # Both consoles and shells should be prevented from blanking
     if ((($type eq 'console') or ($type =~ /shell/)) and (get_var('BACKEND', '') =~ /qemu|svirt/)) {
         # On s390x 'setterm' binary is not present as there's no linux console
-        unless (is_s390x || get_var('PUBLIC_CLOUD')) {
+        unless (is_s390x || is_public_cloud()) {
             # Disable console screensaver
             $self->script_run('setterm -blank 0') unless $args{skip_setterm};
         }
@@ -929,7 +941,7 @@ sub activate_console {
         die "Console '$console' activated in TUNNEL mode activated but tunnel(s) are not yet initialized, use the 'tunnel' console and call 'setup_ssh_tunnels' first" unless get_var('_SSH_TUNNELS_INITIALIZED');
         # The verbose output is visible only at the tunnel-console - it doesn't interfere with tests as it isn't piped to /dev/sshserial
         $self->script_run('ssh -E /var/tmp/ssh_sut.log -vt sut', 0);
-        ensure_user($user) unless (get_var('PUBLIC_CLOUD'));
+        ensure_user($user) unless (is_public_cloud());
     }
     set_var('CONSOLE_JUST_ACTIVATED', 1);
 }

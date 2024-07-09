@@ -17,10 +17,9 @@ use utils 'arrays_subset';
 use testapi;
 
 sub run {
+    my ($self) = @_;
     my %softfail_modules_data = (
-        PackageHub => "bsc#1202416 - packagehub cannot work at sles15sp5",
-        "sle-module-NVIDIA-compute" => "bsc#1204611 - no sle-module-NVIDIA-compute in 15sp5",
-        "sle-module-certifications" => "bsc#1204612 - no sle-module-certifications in 15sp5",
+        "sle-module-certifications" => "bsc#1214197 - no sle-module-certifications in 15sp6"
     );
 
     my @softfail_modules = keys %softfail_modules_data;
@@ -40,8 +39,12 @@ sub run {
         }
         else {
             foreach (@diff) {
-                # Hack prefix string "BUG#0#BUG" for workaround CI check of record_soft_failure
-                record_soft_failure("BUG#0#BUG:" . $softfail_modules_data{$_});
+                select_console 'install-shell';
+                my $error_msg = 'no sle-module-certifications in 15sp6';
+                die $error_msg if $self->is_sles_in_rc_or_gm_phase();
+                record_info('bsc#1214197', $error_msg);
+                reset_consoles;
+                select_console 'installation';
             }
         }
     }

@@ -18,6 +18,13 @@
         <version>{{VERSION}}</version>
         <arch>{{ARCH}}</arch>
       </addon>
+      <addon t="map">
+        <arch>{{ARCH}}</arch>
+        <name>sle-module-python3</name>
+        <reg_code/>
+        <release_type>nil</release_type>
+        <version>{{VERSION}}</version>
+      </addon>
     </addons>
   </suse_register>
   <bootloader>
@@ -185,7 +192,7 @@
     <user>
       <fullname>Bernhard M. Wiedemann</fullname>
       <encrypted config:type="boolean">false</encrypted>
-      <user_password>nots3cr3t</user_password>
+      <user_password>{{PASSWORD}}</user_password>
       <username>bernhard</username>
     </user>
     <user>
@@ -203,7 +210,7 @@
       </password_settings>
       <shell>/bin/bash</shell>
       <uid>0</uid>
-      <user_password>nots3cr3t</user_password>
+      <user_password>{{PASSWORD}}</user_password>
       <username>root</username>
     </user>
     <user>
@@ -219,7 +226,7 @@
         <warn/>
       </password_settings>
       <shell>/bin/bash</shell>
-      <user_password>nots3cr3t</user_password>
+      <user_password>{{PASSWORD}}</user_password>
       <username>testusr</username>
     </user>
   </users>

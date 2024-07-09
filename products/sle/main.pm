@@ -29,6 +29,7 @@ BEGIN {
 }
 use utils;
 use main_common;
+use main_ltp_loader 'load_kernel_tests';
 use main_pods;
 use known_bugs;
 use YuiRestClient;
@@ -479,6 +480,7 @@ sub load_online_migration_tests {
     if (is_sle && (get_var('FLAVOR') =~ /Migration/) && (get_var('SCC_ADDONS') !~ /ha/) && !is_sles4sap && (is_upgrade || get_var('MEDIA_UPGRADE'))) {
         loadtest "console/check_os_release";
         loadtest "console/check_system_info";
+        loadtest "console/verify_lock_package" if (get_var("LOCK_PACKAGE"));
     }
 }
 
@@ -559,7 +561,7 @@ sub load_default_tests {
 }
 
 sub load_default_autoyast_tests {
-    loadtest "autoyast/prepare_profile" if get_var "AUTOYAST_PREPARE_PROFILE";
+    loadtest "autoyast/prepare_profile";
     load_patching_tests if get_var('PATCH');
     load_boot_tests;
     load_autoyast_tests;
@@ -778,25 +780,19 @@ elsif (get_var('XFSTESTS')) {
         get_var('ASSET_CHANGE_KERNEL_RPM')) {
         loadtest 'kernel/change_kernel';
     }
+    if (get_var('KOTD_REPO')) {
+        loadtest 'kernel/update_kernel';
+    }
     prepare_target;
-    if (is_pvm || check_var('ARCH', 's390x')) {
+    if (check_var('XFSTESTS_INSTALL', 1) || check_var('XFSTESTS', 'installation') || is_pvm || check_var('ARCH', 's390x')) {
         loadtest 'xfstests/install';
         unless (check_var('NO_KDUMP', '1')) {
             loadtest 'xfstests/enable_kdump';
         }
-        loadtest 'xfstests/partition';
-        loadtest 'xfstests/run';
-        loadtest 'xfstests/generate_report';
-    }
-    else {
+        if (get_var('XFSTEST_KLP')) {
+            loadtest 'kernel/install_klp_product';
+        }
         if (check_var('XFSTESTS', 'installation')) {
-            loadtest 'xfstests/install';
-            unless (check_var('NO_KDUMP', '1')) {
-                loadtest 'xfstests/enable_kdump';
-            }
-            if (get_var('XFSTEST_KLP')) {
-                loadtest 'kernel/install_klp_product';
-            }
             loadtest 'shutdown/shutdown';
         }
         else {
@@ -804,6 +800,11 @@ elsif (get_var('XFSTESTS')) {
             loadtest 'xfstests/run';
             loadtest 'xfstests/generate_report';
         }
+    }
+    else {
+        loadtest 'xfstests/partition';
+        loadtest 'xfstests/run';
+        loadtest 'xfstests/generate_report';
     }
 }
 elsif (get_var("BTRFS_PROGS")) {
@@ -861,8 +862,10 @@ elsif (get_var("VIRT_AUTOTEST")) {
         loadtest "virt_autotest/login_console";
         loadtest "virt_autotest/install_package";
         loadtest "virt_autotest/update_package";
-        loadtest "virt_autotest/reset_partition";
-        loadtest "virt_autotest/reboot_and_wait_up_normal" if (!get_var('AUTOYAST') && get_var('REPO_0_TO_INSTALL'));
+        # Skip reset_partition for s390x due to there just be 42Gib disk space for each s390x LPAR
+        loadtest "virt_autotest/reset_partition" if (!is_s390x);
+        # Skip reboot_and_wait_up_normal for s390x due to new changes from svirt backend for power_action_utils::power_action (see poo#151786)
+        loadtest "virt_autotest/reboot_and_wait_up_normal" if (!get_var('AUTOYAST') && get_var('REPO_0_TO_INSTALL') && (!is_s390x));
         loadtest "virt_autotest/download_guest_assets" if get_var("SKIP_GUEST_INSTALL") && is_x86_64;
     }
     if (get_var("VIRT_PRJ1_GUEST_INSTALL")) {
@@ -1180,17 +1183,12 @@ else {
             if (is_sle && (get_var('FLAVOR') =~ /Migration/) && (get_var('SCC_ADDONS') !~ /ha/) && !is_sles4sap && (is_upgrade || get_var('MEDIA_UPGRADE'))) {
                 loadtest "console/check_os_release";
                 loadtest "console/check_system_info";
+                loadtest "console/verify_lock_package" if (get_var("LOCK_PACKAGE"));
             }
         }
     }
     elsif (get_var("BOOT_HDD_IMAGE") && !is_jeos) {
         boot_hdd_image;
-        if (get_var("ADDONS")) {
-            loadtest "installation/addon_products_yast2";
-        }
-        if (get_var('SCC_ADDONS') && !get_var('SLENKINS_NODE') && !get_var('PUBLIC_CLOUD')) {
-            loadtest "installation/addon_products_via_SCC_yast2";
-        }
         if (get_var("ISCSI_SERVER")) {
             set_var('INSTALLONLY', 1);
             loadtest "iscsi/iscsi_server";
@@ -1219,7 +1217,7 @@ else {
     }
     elsif (get_var("FADUMP")) {
         prepare_target();
-        loadtest "console/kdump_and_crash";
+        loadtest "kernel/kdump";
     }
     else {
         if (get_var('BOOT_EXISTING_S390')) {

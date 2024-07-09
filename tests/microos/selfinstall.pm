@@ -10,18 +10,20 @@ use Mojo::Base qw(consoletest);
 use testapi;
 use microos "microos_login";
 use Utils::Architectures qw(is_aarch64);
-use version_utils qw(is_sle_micro is_leap_micro);
+use version_utils qw(is_leap_micro is_sle_micro);
+use utils;
+use Utils::Backends qw(is_ipmi);
+use ipmi_backend_utils qw(ipmitool);
 
 sub run {
     my ($self) = @_;
+
     assert_screen 'selfinstall-screen', 180;
     send_key 'down' unless check_screen 'selfinstall-select-drive';
     assert_screen 'selfinstall-select-drive';
     send_key 'ret';
     assert_screen 'slem-selfinstall-overwrite-drive';
     send_key 'ret';
-    # Use firmware boot manager of aarch64 to boot HDD
-    $self->handle_uefi_boot_disk_workaround if is_aarch64;
 
     my $no_cd;
     # workaround failed *kexec* execution on UEFI with SecureBoot
@@ -32,10 +34,24 @@ sub run {
         $no_cd = 1;
     }
 
-    wait_serial('reboot: Restarting system', 240) or die "SelfInstall image has not rebooted as expected";
-    eject_cd() unless $no_cd;
+    # Before combustion 1.2, a reboot is necessary for firstboot configuration
+    if (is_leap_micro('<6.0') || is_sle_micro('<6.0')) {
+        wait_serial('reboot: Restarting system', 240) or die "SelfInstall image has not rebooted as expected";
+        # Avoid booting into selfinstall again
+        eject_cd() unless $no_cd;
+        microos_login;
+    } else {
+        microos_login;
+        # The installed system is definitely up now, so the CD can be ejected
+        eject_cd() unless ($no_cd || is_usb_boot);
+    }
 
-    microos_login;
+    # Remove usb boot entry and empty usb disks to ensure installed system boots from hard disk
+    if (is_ipmi and is_uefi_boot and is_usb_boot) {
+        remove_efiboot_entry(boot_entry => 'OpenQA-added-UEFI-USB-BOOT');
+        empty_usb_disks;
+        ipmitool("chassis bootdev disk options=persistent,efiboot") for (0 .. 2);
+    }
 }
 
 sub test_flags {

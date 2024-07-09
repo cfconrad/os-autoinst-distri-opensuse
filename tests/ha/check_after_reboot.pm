@@ -74,7 +74,7 @@ sub run {
     systemctl 'list-units | grep iscsi', timeout => $default_timeout;
 
     if ((!defined $node_to_fence && check_var('HA_CLUSTER_INIT', 'yes')) || (defined $node_to_fence && get_hostname eq "$node_to_fence")) {
-        my $sbd_delay = calculate_sbd_start_delay;
+        my $sbd_delay = setup_sbd_delay();
         record_info("SBD delay $sbd_delay sec", "Calculated SBD start delay: $sbd_delay");
         # test should wait longer that startup delay set therefore adding 15s
         sleep $sbd_delay + 15;
@@ -93,6 +93,8 @@ sub run {
         my $get_uuid_cmd = 'for bd in $(grep ^DEVICE ' . $mdadm_conf . '); do [[ "$bd" == "DEVICE" ]] && continue; ';
         $get_uuid_cmd .= 'blkid -o export "$bd" | sed -n -e s/[\-:]//g -e /^UUID=/s/^UUID=//p; done | sort -u';
         my $uuid = script_output $get_uuid_cmd;
+        # filter out the noise in the output of openQA script_output API
+        $uuid =~ s/(^\[.*$)|(\n)//mg;
         $uuid = join(':', substr($uuid, 0, 8), substr($uuid, 8, 8), substr($uuid, 16, 8), substr($uuid, 24));
         die 'MD RAID devices have different UUIDs!' if ($uuid =~ /\n/);
         my $mdadm_uuid = script_output "sed -r -n -e '/ARRAY/s/.*UUID=([0-9a-z:]+).*/\\1/p' $mdadm_conf";

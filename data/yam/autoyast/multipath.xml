@@ -23,6 +23,13 @@ pre init scripts feature. See poo#20818.
         <version>{{VERSION}}</version>
         <arch>{{ARCH}}</arch>
       </addon>
+      <addon t="map">
+        <arch>{{ARCH}}</arch>
+        <name>sle-module-python3</name>
+        <reg_code/>
+        <release_type>nil</release_type>
+        <version>{{VERSION}}</version>
+      </addon>
     </addons>
   </suse_register>
   <general>
@@ -233,7 +240,7 @@ pre init scripts feature. See poo#20818.
           <partition_id config:type="integer">6878</partition_id>
           <partition_nr config:type="integer">1</partition_nr>
           <resize config:type="boolean">false</resize>
-          <size>256M</size>
+          <size>300M</size>
         </partition>
         <partition>
           <create config:type="boolean">true</create>
@@ -250,7 +257,7 @@ pre init scripts feature. See poo#20818.
       </partitions>
       <type config:type="symbol">CT_DISK</type>
       <use>all</use>
-  </drive>
+    </drive>
     <drive>
       <device>/dev/system</device>
       <initialize config:type="boolean">true</initialize>
@@ -534,7 +541,7 @@ pre init scripts feature. See poo#20818.
       <gid>100</gid>
       <shell>/bin/bash</shell>
       <uid>1000</uid>
-      <user_password>nots3cr3t</user_password>
+      <user_password>{{PASSWORD}}</user_password>
       <username>bernhard</username>
     </user>
   </users>

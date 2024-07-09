@@ -50,6 +50,15 @@
         <arch>{{ARCH}}</arch>
       </addon>
       % }
+      % if ($is_ltss) {
+      <addon config:type="map">
+        <arch>{{ARCH}}</arch>
+        <name>SLE_HPC-LTSS</name>
+        <reg_code>{{SCC_REGCODE_LTSS}}</reg_code>
+        <release_type>nil</release_type>
+        <version>{{VERSION}}</version>
+      </addon>
+      % }
     </addons>
   </suse_register>
   <bootloader>
@@ -116,12 +125,12 @@
     <user>
       <fullname>Bernhard M. Wiedemann</fullname>
       <encrypted config:type="boolean">false</encrypted>
-      <user_password>nots3cr3t</user_password>
+      <user_password>{{PASSWORD}}</user_password>
       <username>bernhard</username>
     </user>
     <user>
       <encrypted config:type="boolean">false</encrypted>
-      <user_password>nots3cr3t</user_password>
+      <user_password>{{PASSWORD}}</user_password>
       <username>root</username>
     </user>
   </users>

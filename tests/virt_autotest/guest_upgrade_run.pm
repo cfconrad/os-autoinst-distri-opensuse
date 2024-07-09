@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2016 SUSE LLC
+# Copyright 2016-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: This test verifies whether on host installed with specific product, the guests can successfully upgrade to the target upgrade product.
@@ -15,6 +15,7 @@ use base "virt_autotest_base";
 use virt_utils;
 use testapi;
 use Utils::Architectures;
+use virt_autotest::utils;
 
 sub get_script_run {
     #NOTE:Found that s390x arch used with the svirt backend
@@ -44,6 +45,15 @@ sub get_script_run {
     my $guest_list = get_required_var("GUEST_LIST");
 
     $pre_test_cmd = "$pre_test_cmd -p $product_upgrade -r $product_upgrade_repo -g \"$guest_list\"";
+    my ($guest_regcode, $guest_regcode_ltss) = get_guest_regcode;
+    my $do_registration = check_var('GUEST_SCC_REGISTER', 'installation') ? "true" : "false";
+    my $registration_server = get_var('SCC_URL', 'https://scc.suse.com');
+    my $registration_code = get_var('SCC_REGCODE', 'INVALID_REGCODE');
+    $pre_test_cmd .= " -o \"$guest_regcode\"";
+    $pre_test_cmd .= " -O \"$guest_regcode_ltss\"";
+    $pre_test_cmd .= " -e $do_registration";
+    $pre_test_cmd .= " -s $registration_server";
+    $pre_test_cmd .= " -c $registration_code";
     if (is_s390x) {
         $pre_test_cmd .= " 2>&1 | tee /tmp/s390x_guest_upgrade_test.log";
     } else {
@@ -52,6 +62,7 @@ sub get_script_run {
     if (get_var("SKIP_GUEST_INSTALL") && is_x86_64) {
         $pre_test_cmd .= " -k $vm_xml_dir";
     }
+
     return $pre_test_cmd;
 }
 
@@ -132,8 +143,7 @@ sub run {
     if (is_s390x) {
         #upload s390x_guest_upgrade_test.log
         upload_asset("/tmp/s390x_guest_upgrade_test.log", 1, 1);
-        #ues die_on_timeout=> 0 as workaround for s390x test during call script_run, refer to poo#106765
-        script_run "rm -rf /tmp/s390x_guest_upgrade_test.log", die_on_timeout => 0;
+        lpar_cmd("rm -rf /tmp/s390x_guest_upgrade_test.log");
     }
 
 }
@@ -146,8 +156,7 @@ sub post_fail_hook {
     if (is_s390x) {
         #upload s390x_guest_upgrade_test.log
         upload_asset("/tmp/s390x_guest_upgrade_test.log", 1, 1);
-        #ues die_on_timeout=> 0 as workaround for s390x test during call script_run, refer to poo#106765
-        script_run "rm -rf /tmp/s390x_guest_upgrade_test.log", die_on_timeout => 0;
+        lpar_cmd("rm -rf /tmp/s390x_guest_upgrade_test.log");
     }
 }
 

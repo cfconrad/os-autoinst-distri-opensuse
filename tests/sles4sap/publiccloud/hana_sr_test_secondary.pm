@@ -12,8 +12,8 @@
 use strict;
 use warnings FATAL => 'all';
 use base 'sles4sap_publiccloud_basetest';
-use sles4sap_publiccloud;
 use testapi;
+use sles4sap_publiccloud;
 use serial_terminal 'select_serial_terminal';
 use Time::HiRes 'sleep';
 
@@ -23,13 +23,16 @@ sub test_flags {
 
 sub run {
     my ($self, $run_args) = @_;
-    $self->{network_peering_present} = 1 if ($run_args->{network_peering_present});
-    $self->{instances} = $run_args->{instances};
-    croak('site_b is missing or undefined in run_args') if (!$run_args->{site_b});
+
+    # Needed to have peering and ansible state propagated in post_fail_hook
+    $self->import_context($run_args);
+
+    my @hana_sites = get_hana_site_names();
+    croak("$hana_sites[1] is missing or undefined in run_args") if (!$run_args->{$hana_sites[1]});
 
     my $hana_start_timeout = bmwqemu::scale_timeout(600);
     # $site_b = $instance of secondary instance located in $run_args->{$instances}
-    my $site_b = $run_args->{site_b};
+    my $site_b = $run_args->{$hana_sites[1]};
     my $sbd_delay;
     select_serial_terminal;
 
@@ -48,7 +51,7 @@ sub run {
 
     if (($db_action eq 'crash')) {
         # SBD delay related setup in case of crash OS to prevent cluster starting too quickly after reboot
-        $self->setup_sbd_delay();
+        $self->setup_sbd_delay_publiccloud();
         record_info('Crash DB', "Crashing OS on Site B ('$site_b->{instance_id}')");
     }
     else {
@@ -82,6 +85,11 @@ sub run {
     # Check if DB started as primary
     die("Site B '$site_b->{instance_id}' did NOT start in replication mode.")
       if $self->get_promoted_hostname() eq $site_b->{instance_id};
+
+    # Cleanup the resource and check cluster
+    $self->cleanup_resource();
+    $self->wait_for_cluster(wait_time => 60, max_retries => 10);
+    $self->display_full_status();
 
     record_info("Done", "Test finished");
 }

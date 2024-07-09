@@ -15,7 +15,7 @@ use utils;
 use testapi;
 use bmwqemu;
 use ipmi_backend_utils;
-use version_utils qw(is_upgrade is_tumbleweed);
+use version_utils qw(is_upgrade is_tumbleweed is_sle is_leap);
 use bootloader_setup 'prepare_disks';
 use Utils::Architectures;
 use virt_autotest::utils qw(is_kvm_host is_xen_host);
@@ -47,12 +47,12 @@ sub poweron_host {
 
 sub set_pxe_boot {
     while (1) {
-        my $stdout = ipmitool('chassis bootparam get 5');
-        last if $stdout =~ m/Force PXE/;
         diag "setting boot device to pxe";
         my $options = get_var('IPXE_UEFI') ? 'options=efiboot' : '';
         ipmitool("chassis bootdev pxe ${options}");
         sleep(3);
+        my $stdout = ipmitool('chassis bootparam get 5');
+        last if $stdout =~ m/Force PXE/s;
     }
 }
 
@@ -60,7 +60,7 @@ sub set_bootscript {
     my $host = get_required_var('SUT_IP');
     my $arch = get_required_var('ARCH');
     my $autoyast = get_var('AUTOYAST', '');
-    my $regurl = get_var('SCC_URL', '');
+    my $regurl = get_var('VIRT_AUTOTEST') ? get_var('HOST_SCC_URL', '') : get_var('SCC_URL', '');
     my $console = get_var('IPXE_CONSOLE', '');
     my $mirror_http = get_required_var('MIRROR_HTTP');
 
@@ -89,40 +89,40 @@ sub set_bootscript {
     }
 
     my $cmdline_extra;
-    $cmdline_extra .= " regurl=$regurl " if $regurl;
+    $cmdline_extra .= " regurl=$regurl " if ($regurl and !is_usb_boot);
     $cmdline_extra .= " console=$console " if $console;
+    $cmdline_extra .= " root=/dev/ram0 initrd=initrd " if (check_var('IPXE_UEFI', '1'));
+    $cmdline_extra .= " textmode=1 " if get_var('IPXE_UEFI') or check_var('VIDEOMODE', 'text');
+    $cmdline_extra .= " self_update=0 " if (check_var("INSTALLER_NO_SELF_UPDATE", 1));
 
-    # Support passing both EXTRA_PXE_CMDLINE to bootscripts
+    # Support passing EXTRA_PXE_CMDLINE to bootscripts
     $cmdline_extra .= get_var('EXTRA_PXE_CMDLINE') . ' ' if get_var('EXTRA_PXE_CMDLINE');
-    $cmdline_extra .= " root=/dev/ram0 initrd=initrd textmode=1" if check_var('IPXE_UEFI', '1');
 
     if ($autoyast ne '') {
         $cmdline_extra .= " autoyast=$autoyast sshd=1 sshpassword=$testapi::password ";
     } else {
-        if (check_var('VIDEOMODE', 'text')) {
-            $cmdline_extra .= " ssh=1 sshpassword=$testapi::password ";    # trigger ssh-text installation
-        }
-        else {
-            $cmdline_extra .= " vnc=1 VNCPassword=$testapi::password ";    # trigger default VNC installation
-        }
+        $cmdline_extra .= " ssh=1 sshpassword=$testapi::password ";
+        $cmdline_extra .= " vnc=1 VNCPassword=$testapi::password " unless check_var('VIDEOMODE', 'text');
     }
     $cmdline_extra .= " plymouth.enable=0 ";
 
-    # Extra options for virtualization tests with ipmi backend
-    if (get_var('VIRT_AUTOTEST') || get_var('HANA_PERF')) {
-        $cmdline_extra .= " video=1024x768 vt.color=0x07 " if check_var('VIDEOMODE', 'text');
-        # Support either IPXE_CONSOLE=ttyS1,115200 or SERIALDEV=ttyS1
-        my $serial_dev;
-        if (get_var('IPXE_CONSOLE')) {
-            get_var('IPXE_CONSOLE') =~ /^(\w+)/;
-            $serial_dev = $1;
-        }
-        else {
-            $serial_dev = get_var('SERIALDEV', 'ttyS1');
-            $cmdline_extra .= " console=$serial_dev,115200 ";
-        }
-        $cmdline_extra .= " Y2DEBUG=1 linuxrc.log=/dev/$serial_dev linuxrc.core=/dev/$serial_dev linuxrc.debug=4,trace reboot_timeout=0";
+    $cmdline_extra .= " video=1024x768 vt.color=0x07 " if check_var('VIDEOMODE', 'text');
+    # Support either IPXE_CONSOLE=ttyS1,115200 or SERIALDEV=ttyS1
+    my $serial_dev;
+    if (get_var('IPXE_CONSOLE')) {
+        get_var('IPXE_CONSOLE') =~ /^(\w+)/;
+        $serial_dev = $1;
     }
+    else {
+        $serial_dev = get_var('SERIALDEV', 'ttyS1');
+        $cmdline_extra .= " console=$serial_dev,115200 ";
+    }
+
+    # Extra options for virtualization tests with ipmi backend
+    $cmdline_extra .= " Y2DEBUG=1 linuxrc.log=/dev/$serial_dev linuxrc.core=/dev/$serial_dev linuxrc.debug=4,trace ";
+    $cmdline_extra .= " reboot_timeout=" . get_var('REBOOT_TIMEOUT', 0) . ' '
+      unless (is_leap('<15.2') || is_sle('<15-SP2'));
+    $cmdline_extra .= get_var('EXTRABOOTPARAMS', '');
 
     my $bootscript = <<"END_BOOTSCRIPT";
 #!ipxe
@@ -176,7 +176,25 @@ sub run {
 
     poweroff_host;
 
-    #virtualization tests use a static ipxe configuration file in O3
+    # Note:
+    # SLE Micro 6.0 Self-Install image does not directly support pxe boot.
+    # To install it on bare metal machine, firstly bring up a minimum system via ipxe
+    # with this function(eg sle15sp5 gm). But we do not need to finish installation,
+    # booting to sshd-server-started is enough, at which we will have a ssh console
+    # to do latter steps.
+    # Then dd the Self-Install iso to a USB device.
+    # And then boot from the USB, and finish installation with the Self-Install iso.
+    # For more details, refer to poo#151498.
+    # To achieve the first step, in testsuite settings,
+    # - set `IPXE_UEFI`: SLE Micro 6.0+ only officially support uefi boot
+    # - set `USB_BOOT`: a flag to indicate this USB installation method,
+    #                   which stops further installation
+    # - set `MIRROR_HTTP`: the repository to bring up a minimum system(eg sle15sp5 gm)
+    # - do NOT set `AUTOYAST`
+
+    die "Can't set AUTOYAST for usb boot!" if (get_var('AUTOYAST', '') && is_usb_boot);
+
+    # virtualization tests use a static ipxe configuration file in O3
     set_bootscript unless get_var('IPXE_STATIC');
 
     set_pxe_boot;
@@ -186,10 +204,10 @@ sub run {
     select_console 'sol', await_console => 0;
 
     # Print screenshots for ipxe boot process
-    if (get_var('VIRT_AUTOTEST') || get_var('HANA_PERF')) {
+    if (get_var('VIRT_AUTOTEST')) {
         #it is static menu and choose the TW entry to start installation
         enter_o3_ipxe_boot_entry if get_var('IPXE_STATIC');
-        assert_screen([qw(load-linux-kernel load-initrd)], 240);
+        check_screen([qw(load-linux-kernel load-initrd)], 240);
         # Loading initrd spend much time(fg. 10-15 minutes to Beijing SUT)
         # Downloading from O3 became much more quick, some needles may not be caught.
         check_screen([qw(start-tw-install start-sle-install network-config-created)], 60);
@@ -209,12 +227,7 @@ sub run {
     }
 
     # when we don't use autoyast, we need to also load the right test modules to perform the remote installation
-    if (get_var('AUTOYAST')) {
-        # make sure to wait for a while befor changing the boot device again, in order to not change it too early
-        sleep 120;
-        set_bootscript_hdd if get_var('IPXE_UEFI');
-    }
-    else {
+    unless (get_var('AUTOYAST')) {
         my $ssh_vnc_wait_time = 1500;
         #for virtualization test, 9 minutes is enough to load installation system, 75 minutes is too long
         $ssh_vnc_wait_time = 180 if get_var('VIRT_AUTOTEST');
@@ -223,25 +236,46 @@ sub run {
         if (check_screen(\@tags, $ssh_vnc_wait_time)) {
             save_screenshot;
             sleep 2;
+            return if is_usb_boot;
             prepare_disks if (!is_upgrade && !get_var('KEEP_DISKS'));
         }
-        save_screenshot;
+        else {
+            save_screenshot;
+            die "Do not catch needle with tag $ssh_vnc_tag!" if is_usb_boot;
+        }
 
-        set_bootscript_hdd if get_var('IPXE_UEFI');
+        set_bootscript_hdd if get_var('IPXE_SET_HDD_BOOTSCRIPT');
 
         unless (get_var('HOST_INSTALL_AUTOYAST')) {
             select_console 'installation';
             save_screenshot;
-            if (check_var('VIDEOMODE', 'ssh-x') or is_tumbleweed) {
-                enter_cmd_slow("yast.ssh");
-            }
-            elsif (check_var('VIDEOMODE', 'text')) {
+            #It was 'enter_cmd_slow('DISPLAY= yast.ssh') for SLE;'
+            #Removing 'DIAPLAY= ' for SLE15SP6 because it resulted in SCC registration failure(bsc#1218798).
+            if (check_var('VIDEOMODE', 'text') and is_sle('<=15-SP5')) {
                 enter_cmd_slow('DISPLAY= yast.ssh');
+            }
+            elsif (check_var('VIDEOMODE', 'text') or check_var('VIDEOMODE', 'ssh-x')) {
+                enter_cmd_slow("yast.ssh");
             }
             save_screenshot;
             wait_still_screen;
         }
     }
+    elsif (get_var('IPXE_SET_HDD_BOOTSCRIPT')) {
+        # make sure to wait for a while befor changing the boot device again, in order to not change it too early
+        sleep get_var('PXE_BOOT_TIME', 120);
+        set_bootscript_hdd;
+    }
 }
 
 1;
+
+=head1 Configuration
+
+=head2 PXE_BOOT_TIME
+
+The time in seconds that the worker takes from power-on to starting execution
+of the PXE script or menu. Default is 120s. Setting the variable too high is
+safer than too low.
+
+=cut

@@ -18,24 +18,23 @@ use version_utils qw(is_transactional);
 use Utils::Systemd;
 use Utils::Backends 'use_ssh_serial_console';
 use Utils::Logging qw(save_and_upload_log save_and_upload_systemd_unit_log);
+use virt_autotest::kubevirt_utils;
 
 sub run {
     my ($self) = shift;
 
-    if (get_required_var('WITH_HOST_INSTALL')) {
-        my $sut_ip = get_required_var('SUT_IP');
-
-        set_var('AGENT_IP', $sut_ip);
-        bmwqemu::save_vars();
+    if (check_var('RUN_TEST_ONLY', 0)) {
+        use_ssh_serial_console;
 
         # Synchronize the server & agent node before setup
         barrier_wait('kubevirt_test_setup');
 
-        my $server_ip = $self->get_var_from_parent("SERVER_IP");
+        my $server_ip = $self->get_var_from_parent("SUT_IP");
         record_info('Server IP', $server_ip);
 
         $self->rke2_agent_setup($server_ip);
     } else {
+        reset_consoles;
         select_console 'sol', await_console => 0;
         use_ssh_serial_console;
     }
@@ -51,6 +50,9 @@ sub rke2_agent_setup {
         disable_and_stop_service('apparmor.service');
         disable_and_stop_service('firewalld.service');
     }
+    # Enable NTP service
+    systemctl('enable --now chronyd', timeout => 180);
+
     $self->setup_passwordless_ssh_login($server_ip);
 
     # rebootmgr has to be turned off as prerequisity for this to work
@@ -60,6 +62,8 @@ sub rke2_agent_setup {
 
     transactional::process_reboot(trigger => 1) if (is_transactional);
     record_info('Installed certificates packages', script_output('rpm -qa | grep certificates'));
+    # Set kernel hostname to avoid x509 server connection issue
+    assert_script_run('hostnamectl set-hostname $(uname -n)');
 
     # Install kubevirt packages complete
     barrier_wait('kubevirt_packages_install_complete');
@@ -82,10 +86,21 @@ sub rke2_agent_setup {
     barrier_wait('rke2_server_start_ready');
 
     # Configure rke2-agent service
+    my $server_hostname = script_output("ssh root\@$server_ip uname -n");
     my $server_node_token = script_output("ssh root\@$server_ip cat /var/lib/rancher/rke2/server/node-token");
     assert_script_run('mkdir -p /etc/rancher/rke2/');
-    assert_script_run("echo 'server: https://$server_ip:9345' > /etc/rancher/rke2/config.yaml");
-    assert_script_run("echo 'token: $server_node_token' >> /etc/rancher/rke2/config.yaml");
+    assert_script_run("cat > /etc/rancher/rke2/config.yaml <<__END
+server: https://$server_hostname:9345
+token: $server_node_token
+kubelet-arg:
+  - cpu-manager-policy=static
+  - kube-reserved=cpu=500m
+  - system-reserved=cpu=500m
+__END
+(exit \$?)");
+
+    # Setup cnv-bridge containernetworking plugin
+    $self->install_cni_plugins();
 
     # Enable rke2-agent service
     systemctl('enable --now rke2-agent.service', timeout => 180);
@@ -103,6 +118,11 @@ sub rke2_agent_setup {
 
     # Wait for restarting rke2-server service complete
     barrier_wait('rke2_server_restart_complete');
+
+    # Workaround for bsc#1217658
+    my $config_toml_tmpl = 'config.toml.tmpl';
+    assert_script_run("curl " . data_url("virt_autotest/kubevirt_tests/$config_toml_tmpl") . " -o $config_toml_tmpl");
+    assert_script_run("cp $config_toml_tmpl /var/lib/rancher/rke2/agent/etc/containerd/$config_toml_tmpl");
 
     # Restart RKE2 service and check the service is active well after restart
     systemctl('restart rke2-agent.service', timeout => 180);
@@ -132,6 +152,10 @@ sub rke2_agent_setup {
 
     script_retry('! kubectl get nodes | grep NotReady', retry => 14, delay => 20, timeout => 300);
     assert_script_run('kubectl get nodes');
+
+    # bsc#1210856
+    assert_script_run("mkdir -p /var/provision/kubevirt.io/tests && mount -t tmpfs tmpfs /var/provision/kubevirt.io/tests");
+    assert_script_run("echo 'tmpfs /var/provision/kubevirt.io/tests tmpfs rw 0 0' >> /etc/fstab");
 }
 
 sub check_service_status {
