@@ -1,47 +1,52 @@
 #!/bin/bash
-#
-# VLAN on physical interface
-#
-#  - eth1 is not created or deleted by wicked on shutdown
-#
-# setup:
-#
-#    eth1    <-l-    eth1.11
-#
 
-. ../../lib/common_pre.sh
 
-eth0="${eth0:-eth0}"
-eth0_ip4="${eth0_ip4:-198.18.0.1/24}"
+nicA="${nicA:?Missing "nicA" parameter, this should be set to the first physical ethernet adapter (e.g. nicA=eth1)}"
+nicA_ip4="${nicA_ip4:-198.18.10.10/24}"
 
-vlan0_id="${vlan0_id:-10}"
-vlan0_ip4="${vlan0_ip4:-198.18.2.1/24}"
-vlan0="${vlan0:-$eth0.$vlan0_id}"
+vlanA_id="${vlanA_id:-10}"
+vlanA_ip4="${vlanA_ip4:-198.18.11.10/24}"
+vlanA="${vlanA:-$nicA.$vlanA_id}"
+
+test_description()
+{
+	cat - <<-EOT
+
+	VLAN on physical interface
+
+	 - $nicB is not created or deleted by wicked on shutdown
+
+	setup:
+
+	   $nicB    <-l-    $vlanA
+
+	EOT
+}
 
 step0()
 {
 	bold "=== $step -- Setup configuration"
 
-	cat >"${dir}/ifcfg-${eth0}" <<-EOF
+	cat >"${dir}/ifcfg-${nicA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		ZONE=trusted
-		${eth0_ip4:+IPADDR='${eth0_ip4}'}
+		${nicA_ip4:+IPADDR='${nicA_ip4}'}
 	EOF
 
-	cat >"${dir}/ifcfg-${vlan0}" <<-EOF
+	cat >"${dir}/ifcfg-${vlanA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		ZONE=trusted
-		${vlan0_ip4:+IPADDR='${vlan0_ip4}'}
-		ETHERDEVICE='${eth0}'
-		VLAN_ID='${vlan0_id}'
+		${vlanA_ip4:+IPADDR='${vlanA_ip4}'}
+		ETHERDEVICE='${nicA}'
+		VLAN_ID='${vlanA_id}'
 	EOF
 
    	{
 		sed -E '1d;2d;/^([^#])/d;/^$/d' $BASH_SOURCE
 		echo ""
-		for dev in "$eth0" "$vlan0" ; do
+		for dev in "$nicA" "$vlanA" ; do
 			echo "== ${dir}/ifcfg-${dev} =="
 			cat "${dir}/ifcfg-${dev}"
 			echo ""
@@ -52,16 +57,16 @@ step0()
 
 step1()
 {
-	bold "=== step $step: ifup ${eth0}"
+	bold "=== step $step: ifup ${nicA}"
 
-	echo "# wicked $wdebug ifup $cfg ${eth0}"
-	wicked $wdebug ifup $cfg ${eth0}
+	echo "# wicked $wdebug ifup $cfg ${nicA}"
+	wicked $wdebug ifup $cfg ${nicA}
 	echo ""
 
-	print_device_status "$eth0" "$vlan0"
+	print_device_status "$nicA" "$vlanA"
 
-	check_device_is_up "$eth0"
-	check_device_is_down "$vlan0"
+	check_device_is_up "$nicA"
+	check_device_is_down "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -69,52 +74,51 @@ step1()
 
 step2()
 {
-	bold "=== step $step: ifdown ${eth0}"
+	bold "=== step $step: ifdown ${nicA}"
 
-	echo "# wicked $wdebug ifdown $eth0"
-	wicked $wdebug ifdown $eth0
+	echo "# wicked $wdebug ifdown $nicA"
+	wicked $wdebug ifdown $nicA
 	echo ""
 
-	print_device_status "$eth0" "$vlan0"
+	print_device_status "$nicA" "$vlanA"
 
-	check_device_is_down "$eth0"
-	check_device_is_down "$vlan0"
+	check_device_is_down "$nicA"
+	check_device_is_down "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
 }
-ifdown_eth0=step2
 
 step3()
 {
-	bold "=== step $step: ifup ${vlan0}"
+	bold "=== step $step: ifup ${vlanA}"
 
-	echo "# wicked $wdebug ifup $cfg ${vlan0}"
-	wicked $wdebug ifup $cfg ${vlan0}
+	echo "# wicked $wdebug ifup $cfg ${vlanA}"
+	wicked $wdebug ifup $cfg ${vlanA}
 	echo ""
 
-	print_device_status "$eth0" "$vlan0"
+	print_device_status "$nicA" "$vlanA"
 
-	check_device_is_up "$eth0"
-	check_device_is_up "$vlan0"
+	check_device_is_up "$nicA"
+	check_device_is_up "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
 }
-ifup_vlan0=step3
+ifup_vlanA=step3
 
 step4()
 {
-	bold "=== step $step: ifdown ${eth0}"
+	bold "=== step $step: ifdown ${nicA}"
 
-	echo "# wicked $wdebug ifdown $eth0"
-	wicked $wdebug ifdown $eth0
+	echo "# wicked $wdebug ifdown $nicA"
+	wicked $wdebug ifdown $nicA
 	echo ""
 
-	print_device_status "$eth0" "$vlan0"
+	print_device_status "$nicA" "$vlanA"
 
-	check_device_is_down "$eth0"
-	check_device_is_down "$vlan0"
+	check_device_is_down "$nicA"
+	check_device_is_down "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -122,21 +126,21 @@ step4()
 
 step5()
 {
-    $ifup_vlan0
+    $ifup_vlanA
 }
 
 step6()
 {
-	bold "=== step $step: ifdown ${vlan0}"
+	bold "=== step $step: ifdown ${vlanA}"
 
-	echo "# wicked $wdebug ifdown $vlan0"
-	wicked $wdebug ifdown $vlan0
+	echo "# wicked $wdebug ifdown $vlanA"
+	wicked $wdebug ifdown $vlanA
 	echo ""
 
-	print_device_status "$eth0" "$vlan0"
+	print_device_status "$nicA" "$vlanA"
 
-	check_device_is_up "$eth0"
-	check_device_is_down "$vlan0"
+	check_device_is_up "$nicA"
+	check_device_is_down "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -146,7 +150,7 @@ step99()
 {
 	bold "=== step $step: cleanup"
 
-	for dev in "$vlan0" "$eth0"; do
+	for dev in "$vlanA" "$nicA"; do
 		echo "# wicked $wdebug ifdown $dev"
 		wicked $wdebug ifdown $dev
 		rm -rf "${dir}/ifcfg-${dev}"

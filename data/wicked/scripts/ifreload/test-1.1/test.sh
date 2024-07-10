@@ -1,82 +1,88 @@
 #!/bin/bash
 #
-# And/remove ports from Bridge and use wicked ifreload to apply
-#
-# setup:
-#
-#    dummy0,dummy1,tap0 -m-> br0
-#
 
-. ../../lib/common_pre.sh
 
-br0=${br0:-br0}
-dummy0=${dummy0:-dummy0}
-dummy1=${dummy1:-dummy1}
-tap0=${tap0:-tap0}
+bridgeA=${bridgeA:-bridgeA}
+dummyA=${dummyA:-dummyA}
+dummyB=${dummyB:-dummyB}
+tapA=${tapA:-tapA}
 
+
+test_description()
+{
+	cat - <<-EOT
+
+	And/remove ports from Bridge and use wicked ifreload to apply"
+
+	setup:
+
+	   $dummyA,$dummyB,$tapA -m-> $bridgeA
+
+	EOT
+}
 
 step0()
 {
 	bold "=== $step -- Setup configuration"
 	echo ""
 
-	cat >"${dir}/ifcfg-$dummy0" <<-EOF
+	cat >"${dir}/ifcfg-$dummyA" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='none'
+		DUMMY=yes
 	EOF
 
-	cat >"${dir}/ifcfg-$dummy1" <<-EOF
+	cat >"${dir}/ifcfg-$dummyB" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='none'
+		DUMMY=yes
 	EOF
 
-	cat >"${dir}/ifcfg-$br0" <<-EOF
+	cat >"${dir}/ifcfg-$bridgeA" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		BRIDGE='yes'
-		BRIDGE_PORTS='$dummy0'
+		BRIDGE_PORTS='$dummyA'
 	EOF
 
 	print_test_description
-	log_device_config "$dummy0" "$dummy1" "$br0"
-
-	modprobe -qs dummy
-	modprobe -qs tap
+	log_device_config "$dummyA" "$dummyB" "$bridgeA"
 }
 
 step1()
 {
-	bold "=== $step: ifup $br0 { $dummy0 + $tap0 }"
+	bold "=== $step: ifup $bridgeA { $dummyA + $tapA }"
 
 	echo "wicked $wdebug ifup $cfg all"
 	wicked $wdebug ifup $cfg all
 	echo ""
 
-	print_device_status "$br0" "$dummy0"
-	check_device_is_up "$br0" "$dummy0"
+	print_device_status "$bridgeA" "$dummyA"
+	check_device_is_up "$bridgeA" "$dummyA"
 	echo ""
 
-	echo "ip tuntap add $tap0 mode tap"
-	ip tuntap add $tap0 mode tap
-	echo "ip link set master $br0 up dev $tap0"
-	ip link set master $br0 up dev $tap0
+	echo "ip tuntap add $tapA mode tap"
+	ip tuntap add $tapA mode tap
+	echo "ip link set master $bridgeA up dev $tapA"
+	ip link set master $bridgeA up dev $tapA
 	echo ""
 
-	print_device_status "$dummy0" "$dummy1" "$tap0"
+	print_device_status "$dummyA" "$dummyB" "$tapA"
 
-	check_device_has_port "$br0" "$dummy0" "$tap0"
-	check_device_has_not_port "$br0" "$dummy1"
+	check_device_has_port "$bridgeA" "$dummyA" "$tapA"
+	check_device_has_not_port "$bridgeA" "$dummyB"
 	echo ""
 
-	if wicked ifstatus $cfg $tap0 | grep -qs compat:suse ; then
-		echo "ERROR: $tap0 has received generated config"
-		((err))
+	if wicked ifstatus $cfg $tapA | grep -qs compat:suse ; then
+		red "ERROR: $tapA has received generated config"
+		((err++))
 	fi
+	check_policy_not_exists tapA
 }
 
 step2()
 {
-	bold "=== $step: ifup $br0 { $dummy0 + $tap0 } again"
+	bold "=== $step: ifup $bridgeA { $dummyA + $tapA } again"
 
 	echo "wicked $wdebug ifup $cfg all"
 	wicked $wdebug ifup $cfg all
@@ -84,29 +90,30 @@ step2()
 
 	print_device_status all
 
-	check_device_has_port "$br0" "$dummy0" "$tap0"
-	check_device_has_not_port "$br0" "$dummy1"
+	check_device_has_port "$bridgeA" "$dummyA" "$tapA"
+	check_device_has_not_port "$bridgeA" "$dummyB"
 	echo ""
 
-	if wicked ifstatus $cfg $tap0 | grep -qs compat:suse ; then
-		echo "ERROR: $tap0 has received generated config"
-		((err))
+	if wicked ifstatus $cfg $tapA | grep -qs compat:suse ; then
+		red "ERROR: $tapA has received generated config"
+		((err++))
 	fi
+	check_policy_not_exists tapA
 }
 
 step3()
 {
-	bold "=== $step: ifreload $br0 { $dummy1 + $tap0 }"
+	bold "=== $step: ifreload $bridgeA { $dummyB + $tapA }"
 
-	# change bridge to use $dummy1 instead + ifreload
-	cat >"${dir}/ifcfg-$br0" <<-EOF
+	# change bridge to use $dummyB instead + ifreload
+	cat >"${dir}/ifcfg-$bridgeA" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		BRIDGE='yes'
-		BRIDGE_PORTS='$dummy1'
+		BRIDGE_PORTS='$dummyB'
 	EOF
 
-	log_device_config "$dummy0" "$dummy1" "$br0"
+	log_device_config "$dummyA" "$dummyB" "$bridgeA"
 
 
 	echo "wicked ifreload --dry-run $cfg all"
@@ -118,40 +125,69 @@ step3()
 
 	print_device_status all
 
-	check_device_has_port "$br0" "$dummy1" "$tap0"
-	check_device_has_not_port "$br0" "$dummy0"
+	check_device_has_port "$bridgeA" "$dummyB" "$tapA"
+	check_device_has_not_port "$bridgeA" "$dummyA"
 	echo ""
 
-	if wicked ifstatus $cfg $tap0 | grep -qs compat:suse ; then
-		echo "ERROR: $tap0 has received generated config"
-		((err))
+	if wicked ifstatus $cfg $tapA | grep -qs compat:suse ; then
+		red "ERROR: $tapA has received generated config"
+		((err++))
 	fi
+	check_policy_not_exists tapA
+}
+
+step4()
+{
+	bold "=== $step: ifreload $bridgeA { $dummyA + $dummyB + $tapA }"
+
+	# change bridge to use $dummyB instead + ifreload
+	cat >"${dir}/ifcfg-$bridgeA" <<-EOF
+		STARTMODE='auto'
+		BOOTPROTO='static'
+		BRIDGE='yes'
+		BRIDGE_PORTS='$dummyA $dummyB'
+	EOF
+
+	log_device_config "$dummyA" "$dummyB" "$bridgeA"
+
+
+	echo "wicked ifreload --dry-run $cfg all"
+	wicked ifreload --dry-run $cfg all
+	echo ""
+	echo "wicked $wdebug ifreload $cfg all"
+	wicked $wdebug ifreload $cfg all
+	echo ""
+
+	print_device_status all
+
+	check_device_has_port "$bridgeA" "$dummyA" "$dummyB" "$tapA"
+	echo ""
+
+	if wicked ifstatus $cfg $tapA | grep -qs compat:suse ; then
+		red "ERROR: $tapA has received generated config"
+		((err++))
+	fi
+	check_policy_not_exists tapA
 }
 
 step99()
 {
 	bold "=== $step: cleanup"
 
-	echo "ip link delete $tap0"
-	ip link delete $tap0
-	echo "rmmod tap &>/dev/null"
-	rmmod tap &>/dev/null
+	echo "ip link delete $tapA"
+	ip link delete $tapA
+
+	echo "wicked $wdebug ifdown "$bridgeA" "$dummyA" "$dummyB" "$tapA""
+	wicked $wdebug ifdown "$bridgeA" "$dummyA" "$dummyB" "$tapA"
 	echo ""
 
-	echo "wicked $wdebug ifdown "$br0" "$dummy0" "$dummy1" "$tap0""
-	wicked $wdebug ifdown "$br0" "$dummy0" "$dummy1" "$tap0"
-	echo ""
+	rm -f "${dir}/ifcfg-$dummyA"
+	rm -f "${dir}/ifcfg-$dummyB"
+	rm -f "${dir}/ifcfg-$bridgeA"
 
-	rm -f "${dir}/ifcfg-$dummy0"
-	rm -f "${dir}/ifcfg-$dummy1"
-	rm -f "${dir}/ifcfg-$br0"
-
-	check_policy_not_exists "$dummy0"
-	check_policy_not_exists "$dummy1"
-	check_device_is_down "$br0"
-
-	echo "rmmod dummy"
-	rmmod dummy
+	check_policy_not_exists "$dummyA"
+	check_policy_not_exists "$dummyB"
+	check_device_is_down "$bridgeA"
 }
 
 . ../../lib/common.sh

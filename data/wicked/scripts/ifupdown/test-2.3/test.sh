@@ -1,74 +1,79 @@
 #!/bin/bash
-#
-# VLAN on Bond of physical interfaces
-#
-# setup:
-#
-#    eth1,eth2   -m->    bond0   <-l-    bond0.11
-#                                <-l-    bond0.12
-#
 
-. ../../lib/common_pre.sh
 
-eth0="${eth0:-eth0}"
-eth1="${eth1:-eth1}"
+nicA="${nicA:?Missing "nicA" parameter, this should be set to the first physical ethernet adapter (e.g. nicA=eth1)}"
+nicB="${nicB:?Missing "nicB" parameter, this should be set to the first physical ethernet adapter (e.g. nicB=eth2)}"
 
-bond0="${bond0:-bond0}"
-bond0_ip4="${bond0_ip4:-198.18.10.10/24}"
+bondA="${bondA:-bondA}"
+bondA_ip4="${bondA_ip4:-198.18.10.10/24}"
 
-vlan0_id=11
-vlan0="${vlan0:-$bond0.$vlan0_id}"
-vlan0_ip4="${vlan0_ip4:-198.18.11.10/24}"
+vlanA_id=11
+vlanA="${vlanA:-$bondA.$vlanA_id}"
+vlanA_ip4="${vlanA_ip4:-198.18.11.10/24}"
 
-vlan1_id=12
-vlan1="${vlan1:-$bond0.$vlan1_id}"
-vlan1_ip4="${vlan1_ip4:-198.18.12.10/24}"
+vlanB_id=12
+vlanB="${vlanB:-$bondA.$vlanB_id}"
+vlanB_ip4="${vlanB_ip4:-198.18.12.10/24}"
+
+test_description()
+{
+	cat - <<-EOT
+
+	VLAN on Bond of physical interfaces
+
+	setup:
+
+	   $nicA,$nicB   -m->    $bondA   <-l-    $vlanA
+				          <-l-    $vlanB
+
+	EOT
+}
 
 step0()
 {
 	bold "=== $step -- Setup configuration"
 
-	cat >"${dir}/ifcfg-${eth0}" <<-EOF
+	cat >"${dir}/ifcfg-${nicA}" <<-EOF
 		STARTMODE='hotplug'
 		BOOTPROTO='none'
 	EOF
 
-	cat >"${dir}/ifcfg-${eth1}" <<-EOF
+	cat >"${dir}/ifcfg-${nicB}" <<-EOF
 		STARTMODE='hotplug'
 		BOOTPROTO='none'
 	EOF
 
-	cat >"${dir}/ifcfg-${bond0}" <<-EOF
+	cat >"${dir}/ifcfg-${bondA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		ZONE=trusted
-		${bond0_ip4:+IPADDR='${bond0_ip4}'}
+		${bondA_ip4:+IPADDR='${bondA_ip4}'}
 		BONDING_MASTER=yes
 		BONDING_MODULE_OPTS='mode=active-backup miimon=100'
-		BONDING_SLAVE_0="$eth0"
-		BONDING_SLAVE_1="$eth1"
+		BONDING_SLAVE_0="$nicA"
+		BONDING_SLAVE_1="$nicB"
 	EOF
 
-	cat >"${dir}/ifcfg-${vlan0}" <<-EOF
+	cat >"${dir}/ifcfg-${vlanA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
-		ETHERDEVICE='${bond0}'
-		VLAN_ID=${vlan0_id}
-		${vlan0_ip4:+IPADDR='${vlan0_ip4}'}
+		ETHERDEVICE='${bondA}'
+		VLAN_ID=${vlanA_id}
+		${vlanA_ip4:+IPADDR='${vlanA_ip4}'}
 	EOF
 
-	cat >"${dir}/ifcfg-${vlan1}" <<-EOF
+	cat >"${dir}/ifcfg-${vlanB}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
-		ETHERDEVICE='${bond0}'
-		VLAN_ID=${vlan1_id}
-		${vlan1_ip4:+IPADDR='${vlan1_ip4}'}
+		ETHERDEVICE='${bondA}'
+		VLAN_ID=${vlanB_id}
+		${vlanB_ip4:+IPADDR='${vlanB_ip4}'}
 	EOF
 
 	{
 		sed -E '1d;2d;/^([^#])/d;/^$/d' "$BASH_SOURCE"
 		echo ""
-		for dev in "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"; do
+		for dev in "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"; do
 			echo "== ${dir}/ifcfg-${dev} =="
 			cat "${dir}/ifcfg-${dev}"
 			echo ""
@@ -80,19 +85,19 @@ step0()
 
 step1()
 {
-	bold "=== step $step: ifup $eth0"
+	bold "=== step $step: ifup $nicA"
 
-	echo "# wicked $wdebug ifup $cfg $eth0"
-	wicked $wdebug ifup $cfg "$eth0"
+	echo "# wicked $wdebug ifup $cfg $nicA"
+	wicked $wdebug ifup $cfg "$nicA"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_up "$eth0"
-	check_device_is_down "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_up "$nicA"
+	check_device_is_down "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -100,19 +105,19 @@ step1()
 
 step2()
 {
-	bold "=== step $step: ifdown $eth0"
+	bold "=== step $step: ifdown $nicA"
 
-	echo "# wicked $wdebug ifdown $eth0"
-	wicked $wdebug ifdown "$eth0"
+	echo "# wicked $wdebug ifdown $nicA"
+	wicked $wdebug ifdown "$nicA"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_down "$eth0"
-	check_device_is_down "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_down "$nicA"
+	check_device_is_down "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -120,19 +125,19 @@ step2()
 
 step3()
 {
-	bold "=== step $step: ifdown $bond0"
+	bold "=== step $step: ifdown $bondA"
 
-	echo "# wicked $wdebug ifdown $bond0"
-	wicked $wdebug ifdown "$bond0"
+	echo "# wicked $wdebug ifdown $bondA"
+	wicked $wdebug ifdown "$bondA"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_down "$eth0"
-	check_device_is_down "$eth1"
-	check_device_is_down "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_down "$nicA"
+	check_device_is_down "$nicB"
+	check_device_is_down "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -141,19 +146,19 @@ ifdown_all=step3
 
 step4()
 {
-	bold "=== step $step: ifup $eth1"
+	bold "=== step $step: ifup $nicB"
 
-	echo "# wicked $wdebug ifup $cfg $eth1"
-	wicked $wdebug ifup $cfg "$eth1"
+	echo "# wicked $wdebug ifup $cfg $nicB"
+	wicked $wdebug ifup $cfg "$nicB"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_down "$eth0"
-	check_device_is_up "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_down "$nicA"
+	check_device_is_up "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -161,19 +166,19 @@ step4()
 
 step5()
 {
-	bold "=== step $step: ifdown $eth0"
+	bold "=== step $step: ifdown $nicA"
 
-	echo "# wicked $wdebug ifdown $eth0"
-	wicked $wdebug ifdown "$eth0"
+	echo "# wicked $wdebug ifdown $nicA"
+	wicked $wdebug ifdown "$nicA"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_down "$eth0"
-	check_device_is_down "$eth0"
-	check_device_is_up "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_down "$nicA"
+	check_device_is_down "$nicA"
+	check_device_is_up "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -186,19 +191,19 @@ step6()
 
 step7()
 {
-	bold "=== step $step: ifup $bond0"
+	bold "=== step $step: ifup $bondA"
 
-	echo "# wicked $wdebug ifup $cfg $bond0"
-	wicked $wdebug ifup $cfg "$bond0"
+	echo "# wicked $wdebug ifup $cfg $bondA"
+	wicked $wdebug ifup $cfg "$bondA"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_up "$eth0"
-	check_device_is_up "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_up "$nicA"
+	check_device_is_up "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -211,19 +216,19 @@ step8()
 
 step9()
 {
-	bold "=== step $step: ifup $vlan0"
+	bold "=== step $step: ifup $vlanA"
 
-	echo "# wicked $wdebug ifup $cfg $vlan0"
-	wicked $wdebug ifup $cfg "$vlan0"
+	echo "# wicked $wdebug ifup $cfg $vlanA"
+	wicked $wdebug ifup $cfg "$vlanA"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_up "$eth0"
-	check_device_is_up "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_up "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_up "$nicA"
+	check_device_is_up "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_up "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -231,19 +236,19 @@ step9()
 
 step10()
 {
-	bold "=== step $step: ifup $vlan1"
+	bold "=== step $step: ifup $vlanB"
 
-	echo "# wicked $wdebug ifup $cfg $vlan1"
-	wicked $wdebug ifup $cfg "$vlan1"
+	echo "# wicked $wdebug ifup $cfg $vlanB"
+	wicked $wdebug ifup $cfg "$vlanB"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_up "$eth0"
-	check_device_is_up "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_up "$vlan0"
-	check_device_is_up "$vlan1"
+	check_device_is_up "$nicA"
+	check_device_is_up "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_up "$vlanA"
+	check_device_is_up "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -251,19 +256,19 @@ step10()
 
 step11()
 {
-	bold "=== step $step: ifdown $eth0"
+	bold "=== step $step: ifdown $nicA"
 
-	echo "# wicked $wdebug ifdown $eth0"
-	wicked $wdebug ifdown "$eth0"
+	echo "# wicked $wdebug ifdown $nicA"
+	wicked $wdebug ifdown "$nicA"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_down "$eth0"
-	check_device_is_up "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_up "$vlan0"
-	check_device_is_up "$vlan1"
+	check_device_is_down "$nicA"
+	check_device_is_up "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_up "$vlanA"
+	check_device_is_up "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -271,19 +276,19 @@ step11()
 
 step12()
 {
-	bold "=== step $step: ifdown $vlan0"
+	bold "=== step $step: ifdown $vlanA"
 
-	echo "# wicked $wdebug ifdown $vlan0"
-	wicked $wdebug ifdown "$vlan0"
+	echo "# wicked $wdebug ifdown $vlanA"
+	wicked $wdebug ifdown "$vlanA"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_down "$eth0"
-	check_device_is_up "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_up "$vlan1"
+	check_device_is_down "$nicA"
+	check_device_is_up "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_up "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -291,19 +296,19 @@ step12()
 
 step13()
 {
-	bold "=== step $step: ifdown $vlan1"
+	bold "=== step $step: ifdown $vlanB"
 
-	echo "# wicked $wdebug ifdown $vlan1"
-	wicked $wdebug ifdown "$vlan1"
+	echo "# wicked $wdebug ifdown $vlanB"
+	wicked $wdebug ifdown "$vlanB"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_down "$eth0"
-	check_device_is_up "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_down "$nicA"
+	check_device_is_up "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -311,19 +316,19 @@ step13()
 
 step14()
 {
-	bold "=== step $step: ifdown $eth1"
+	bold "=== step $step: ifdown $nicB"
 
-	echo "# wicked $wdebug ifdown $eth1"
-	wicked $wdebug ifdown "$eth1"
+	echo "# wicked $wdebug ifdown $nicB"
+	wicked $wdebug ifdown "$nicB"
 	echo ""
 
-	print_device_status "$eth0" "$eth1" "$bond0" "$vlan0" "$vlan1"
+	print_device_status "$nicA" "$nicB" "$bondA" "$vlanA" "$vlanB"
 
-	check_device_is_down "$eth0"
-	check_device_is_down "$eth1"
-	check_device_is_up "$bond0"
-	check_device_is_down "$vlan0"
-	check_device_is_down "$vlan1"
+	check_device_is_down "$nicA"
+	check_device_is_down "$nicB"
+	check_device_is_up "$bondA"
+	check_device_is_down "$vlanA"
+	check_device_is_down "$vlanB"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -338,7 +343,7 @@ step99()
 {
 	bold "=== step $step: cleanup"
 
-	for dev in "$vlan1" "$vlan0" "$eth0" "$eth1" "$bond0"; do
+	for dev in "$vlanB" "$vlanA" "$nicA" "$nicB" "$bondA"; do
 		echo "# wicked $wdebug ifdown $dev"
 		wicked $wdebug ifdown $dev
 		rm -rf "${dir}/ifcfg-${dev}"

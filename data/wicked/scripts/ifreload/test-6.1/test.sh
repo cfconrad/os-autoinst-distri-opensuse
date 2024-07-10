@@ -1,35 +1,48 @@
 #!/bin/bash
 
-. ../../lib/common_pre.sh
 
-eth0=${eth0:-eth0}
-eth1=${eth1:-eth1}
-team0="${team0:-team0}"
-team_slaves="$eth0 $eth1"
+nicA="${nicA:?Missing "nicA" parameter, this should be set to the first physical ethernet adapter (e.g. nicA=eth1)}"
+nicB="${nicB:?Missing "nicB" parameter, this should be set to the first physical ethernet adapter (e.g. nicB=eth2)}"
+teamA="${teamA:-teamA}"
+team_slaves="$nicA $nicB"
 team_slave_ifcfg=no
 
-vlan0_id="${vlan0_id:-10}"
-vlan1_id="${vlan1_id:-20}"
-vlan0="${team0}.${vlan0_id}"
-vlan1="${team0}.${vlan1_id}"
-br0="${br0:-br0}"
-br1="${br1:-br1}"
+vlanA_id="${vlanA_id:-10}"
+vlanB_id="${vlanB_id:-20}"
+vlanA="${teamA}.${vlanA_id}"
+vlanB="${teamA}.${vlanB_id}"
+bridgeA="${bridgeA:-bridgeA}"
+bridgeB="${bridgeB:-bridgeB}"
 
 other_call="tuntap" # link or tuntap supported
 other_type="tap"
 : ${other0:="tap40"}
 : ${other1:="tap44"}
 
-all_interfaces="$eth0 $eth1 $team0 $vlan0 $vlan1 $br0 $br1 $other0 $other1"
+all_interfaces="$nicA $nicB $teamA $vlanA $vlanB $bridgeA $bridgeB $other0 $other1"
+
+test_description()
+{
+	cat - <<-EOT
+
+	Add and remove ports from team interface. Also use TAP devices which are not
+	configured within wicked.
+
+	setup:
+
+	    $nicA|$nicB  -m->   $teamA  <-l-  $vlanB  -m->  $bridgeB
+	                                -m->  $bridgeA
+	EOT
+}
 
 step0()
 {
 	bold "=== $step -- Setup configuration"
 
 	##
-	## setup team as br0 port
+	## setup team as bridgeA port
 	##
-	cat >"${dir}/ifcfg-${team0}" <<-EOF
+	cat >"${dir}/ifcfg-${teamA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='none'
 		TEAM_RUNNER='activebackup'
@@ -38,7 +51,7 @@ step0()
 	i=0
 	for slave in ${team_slaves} ; do
 		((i++))
-		cat >>"${dir}/ifcfg-${team0}" <<-EOF
+		cat >>"${dir}/ifcfg-${teamA}" <<-EOF
 			TEAM_PORT_DEVICE_${i}='$slave'
 		EOF
 	done
@@ -51,27 +64,27 @@ step0()
 		done
 	fi
 
-	cat >"${dir}/ifcfg-${vlan1}" <<-EOF
+	cat >"${dir}/ifcfg-${vlanB}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='none'
-		ETHERDEVICE='${team0}'
-		#VLAN_ID='${vlan1_id}'
+		ETHERDEVICE='${teamA}'
+		#VLAN_ID='${vlanB_id}'
 	EOF
 
-	# vlan1 is untagged pvid on team
-	cat >"${dir}/ifcfg-${br0}" <<-EOF
+	# vlanB is untagged pvid on team
+	cat >"${dir}/ifcfg-${bridgeA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		BRIDGE='yes'
-		BRIDGE_PORTS='${team0}'
+		BRIDGE_PORTS='${teamA}'
 	EOF
 
 	# vlan2 is a tagged vlan on team
-	cat >"${dir}/ifcfg-${br1}" <<-EOF
+	cat >"${dir}/ifcfg-${bridgeB}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		BRIDGE='yes'
-		BRIDGE_PORTS='${vlan1}'
+		BRIDGE_PORTS='${vlanB}'
 	EOF
 
 	print_test_description
@@ -80,7 +93,7 @@ step0()
 
 step1()
 {
-	bold "=== $step: ifreload ${br0} { ${team0} { ${team_slaves} } + ${other0} }, ${br1} { ${vlan1} + ${other1} }"
+	bold "=== $step: ifreload ${bridgeA} { ${teamA} { ${team_slaves} } + ${other0} }, ${bridgeB} { ${vlanB} + ${other1} }"
 
 	echo "wicked ifreload --dry-run $cfg all"
 	wicked ifreload --dry-run $cfg all
@@ -103,41 +116,41 @@ step1()
 	    ip tuntap add ${other1} mode ${other_type}
 	    ;;
 	esac
-	echo "ip link set master ${br0} up dev ${other0}"
-	ip link set master ${br0} up dev ${other0} || ((err++))
-	echo "ip link set master ${br1} up dev ${other1}"
-	ip link set master ${br1} up dev ${other1} || ((err++))
+	echo "ip link set master ${bridgeA} up dev ${other0}"
+	ip link set master ${bridgeA} up dev ${other0} || ((err++))
+	echo "ip link set master ${bridgeB} up dev ${other1}"
+	ip link set master ${bridgeB} up dev ${other1} || ((err++))
 
 	print_device_status all
 	print_bridges
 
-	check_device_has_port "$team0" ${team_slaves}
+	check_device_has_port "$teamA" ${team_slaves}
 
-	check_device_has_not_port "$br0" "$vlan0"
-	check_device_has_port "$br0" "$team0" "$other0"
-	check_device_has_port "$br1" "$vlan1" "$other1"
-	check_device_has_link "$vlan1" "$team0"
+	check_device_has_not_port "$bridgeA" "$vlanA"
+	check_device_has_port "$bridgeA" "$teamA" "$other0"
+	check_device_has_port "$bridgeB" "$vlanB" "$other1"
+	check_device_has_link "$vlanB" "$teamA"
 }
 
 step2()
 {
-	bold "=== $step: ifreload ${team0} { ${team_slaves} }, ${br0} { ${vlan0} + ${other0} }, ${br1} { ${vlan1} + ${other1} }"
+	bold "=== $step: ifreload ${teamA} { ${team_slaves} }, ${bridgeA} { ${vlanA} + ${other0} }, ${bridgeB} { ${vlanB} + ${other1} }"
 	#
-	## setup team vlan1 instead of team as br0 port
+	## setup team vlanB instead of team as bridgeA port
 	##
 
-	cat >"${dir}/ifcfg-${vlan0}" <<-EOF
+	cat >"${dir}/ifcfg-${vlanA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='none'
-		ETHERDEVICE='${team0}'
-		#VLAN_ID='${vlan0_id}'
+		ETHERDEVICE='${teamA}'
+		#VLAN_ID='${vlanA_id}'
 	EOF
 
-	cat >"${dir}/ifcfg-${br0}" <<-EOF
+	cat >"${dir}/ifcfg-${bridgeA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		BRIDGE='yes'
-		BRIDGE_PORTS='${vlan0}'
+		BRIDGE_PORTS='${vlanA}'
 	EOF
 
 	log_device_config $all_interfaces
@@ -152,22 +165,22 @@ step2()
 	print_device_status all
 	print_bridges
 
-	check_device_has_link "$vlan0" "$team0"
-	check_device_has_port "$team0" ${team_slaves}
-	check_device_has_not_port "$team0" "$br0"
-	check_device_has_port "$br0" "$vlan0" "$other0"
-	check_device_has_port "$br1" "$vlan1" "$other1"
-	check_device_has_link "$vlan1" "$team0"
+	check_device_has_link "$vlanA" "$teamA"
+	check_device_has_port "$teamA" ${team_slaves}
+	check_device_has_not_port "$teamA" "$bridgeA"
+	check_device_has_port "$bridgeA" "$vlanA" "$other0"
+	check_device_has_port "$bridgeB" "$vlanB" "$other1"
+	check_device_has_link "$vlanB" "$teamA"
 }
 
 step3()
 {
-	bold "=== $step: ifreload ${team0} { ${team_slaves} }, ${br0} { + ${other0} }, ${br1} { ${vlan1} + ${other1} }, ${vlan0}"
+	bold "=== $step: ifreload ${teamA} { ${team_slaves} }, ${bridgeA} { + ${other0} }, ${bridgeB} { ${vlanB} + ${other1} }, ${vlanA}"
 	##
-	## remove team vlan1 from br0 ports, but keep vlan1 ifcfg file
+	## remove team vlanB from bridgeA ports, but keep vlanB ifcfg file
 	##
 
-	cat >"${dir}/ifcfg-${br0}" <<-EOF
+	cat >"${dir}/ifcfg-${bridgeA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		BRIDGE='yes'
@@ -186,21 +199,21 @@ step3()
 	print_device_status all
 	print_bridges
 
-	check_device_has_port "$team0" ${team_slaves}
-	check_device_has_not_port "$br0" "$team0" "$vlan0"
-	check_device_has_port "$br0" "$other0"
-	check_device_has_port "$br1" "$vlan1" "$other1"
-	check_device_has_link "$vlan1" "$team0"
+	check_device_has_port "$teamA" ${team_slaves}
+	check_device_has_not_port "$bridgeA" "$teamA" "$vlanA"
+	check_device_has_port "$bridgeA" "$other0"
+	check_device_has_port "$bridgeB" "$vlanB" "$other1"
+	check_device_has_link "$vlanB" "$teamA"
 }
 
 step4()
 {
-	bold "=== $step: ifreload ${team0} { ${team_slaves} }, ${br0} { + ${other0} }, ${br1} { ${vlan1} + ${other1} }"
+	bold "=== $step: ifreload ${teamA} { ${team_slaves} }, ${bridgeA} { + ${other0} }, ${bridgeB} { ${vlanB} + ${other1} }"
 	##
-	## cleanup unenslaved team vlan1
+	## cleanup unenslaved team vlanB
 	##
 
-	rm -f "${dir}/ifcfg-${vlan0}"
+	rm -f "${dir}/ifcfg-${vlanA}"
 
 	log_device_config $all_interfaces
 
@@ -214,33 +227,33 @@ step4()
 	print_device_status all
 	print_bridges
 
-	check_device_has_port "$team0" ${team_slaves}
-	check_device_has_not_port "$br0" "$team0" "$vlan0"
-	check_device_has_port "$br0" "$other0"
-	check_device_has_port "$br1" "$vlan1" "$other1"
-	device_exists "$vlan0" && ((err++))
-	check_device_has_link "$vlan1" "$team0"
+	check_device_has_port "$teamA" ${team_slaves}
+	check_device_has_not_port "$bridgeA" "$teamA" "$vlanA"
+	check_device_has_port "$bridgeA" "$other0"
+	check_device_has_port "$bridgeB" "$vlanB" "$other1"
+	device_exists "$vlanA" && ((err++))
+	check_device_has_link "$vlanB" "$teamA"
 }
 
 step5()
 {
 	##
-	## create team vlan0 and enslave as br0 port again
+	## create team vlanA and enslave as bridgeA port again
 	##
-	bold "=== $step: ifreload ${team0} { ${team_slaves} }, ${br0} { ${vlan0} + ${other0} }, ${br1} { ${vlan1} + ${other1} }"
+	bold "=== $step: ifreload ${teamA} { ${team_slaves} }, ${bridgeA} { ${vlanA} + ${other0} }, ${bridgeB} { ${vlanB} + ${other1} }"
 
-	cat >"${dir}/ifcfg-${vlan0}" <<-EOF
+	cat >"${dir}/ifcfg-${vlanA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='none'
-		ETHERDEVICE='${team0}'
-		#VLAN_ID='${vlan0_id}'
+		ETHERDEVICE='${teamA}'
+		#VLAN_ID='${vlanA_id}'
 	EOF
 
-	cat >"${dir}/ifcfg-${br0}" <<-EOF
+	cat >"${dir}/ifcfg-${bridgeA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		BRIDGE='yes'
-		BRIDGE_PORTS='${vlan0}'
+		BRIDGE_PORTS='${vlanA}'
 	EOF
 
 	log_device_config $all_interfaces
@@ -255,27 +268,27 @@ step5()
 	print_device_status all
 	print_bridges
 
-	check_device_has_link "$vlan0" "$team0"
-	check_device_has_port "$team0" ${team_slaves}
-	check_device_has_not_port "$team0" "$br0"
-	check_device_has_port "$br0" "$vlan0" "$other0"
-	check_device_has_port "$br1" "$vlan1" "$other1"
-	check_device_has_link "$vlan1" "$team0"
+	check_device_has_link "$vlanA" "$teamA"
+	check_device_has_port "$teamA" ${team_slaves}
+	check_device_has_not_port "$teamA" "$bridgeA"
+	check_device_has_port "$bridgeA" "$vlanA" "$other0"
+	check_device_has_port "$bridgeB" "$vlanB" "$other1"
+	check_device_has_link "$vlanB" "$teamA"
 }
 
 step6()
 {
 	##
-	## replace team vlan0 br0 port with team and delete team vlan0 again
+	## replace team vlanA bridgeA port with team and delete team vlanA again
 	##
-	bold "=== $step: ifreload ${br0} { ${team0} { ${team_slaves} } + ${other0} }, ${br1} { ${vlan1} + ${other1} }"
+	bold "=== $step: ifreload ${bridgeA} { ${teamA} { ${team_slaves} } + ${other0} }, ${bridgeB} { ${vlanB} + ${other1} }"
 
-	rm -f "${dir}/ifcfg-${vlan0}"
-	cat >"${dir}/ifcfg-${br0}" <<-EOF
+	rm -f "${dir}/ifcfg-${vlanA}"
+	cat >"${dir}/ifcfg-${bridgeA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		BRIDGE='yes'
-		BRIDGE_PORTS='${team0}'
+		BRIDGE_PORTS='${teamA}'
 	EOF
 
 	log_device_config $all_interfaces
@@ -290,12 +303,12 @@ step6()
 	print_device_status all
 	print_bridges
 
-	check_device_has_port "$team0" ${team_slaves}
-	check_device_has_not_port "$br0" "$vlan0"
-	check_device_has_port "$br0" "$team0" "$other0"
-	check_device_has_port "$br1" "$vlan1" "$other1"
-	device_exists "$vlan0" && ((err++))
-	check_device_has_link "$vlan1" "$team0"
+	check_device_has_port "$teamA" ${team_slaves}
+	check_device_has_not_port "$bridgeA" "$vlanA"
+	check_device_has_port "$bridgeA" "$teamA" "$other0"
+	check_device_has_port "$bridgeB" "$vlanB" "$other1"
+	device_exists "$vlanA" && ((err++))
+	check_device_has_link "$vlanB" "$teamA"
 }
 
 step7()
@@ -303,9 +316,9 @@ step7()
 	##
 	## removal of first team slave from config (it is **not** a hotplugging test)
 	##
-	bold "=== $step: ifreload ${br0} { ${team0} { ${team_slaves#* } } + ${other0} }, ${br1} { ${vlan1} + ${other1} }"
+	bold "=== $step: ifreload ${bridgeA} { ${teamA} { ${team_slaves#* } } + ${other0} }, ${bridgeB} { ${vlanB} + ${other1} }"
 
-	cat >"${dir}/ifcfg-${team0}" <<-EOF
+	cat >"${dir}/ifcfg-${teamA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='none'
 		TEAM_RUNNER='activebackup'
@@ -314,7 +327,7 @@ step7()
 	i=0
 	for slave in ${team_slaves#* } ; do
 		((i++))
-		cat >>"${dir}/ifcfg-${team0}" <<-EOF
+		cat >>"${dir}/ifcfg-${teamA}" <<-EOF
 			TEAM_PORT_DEVICE_${i}='$slave'
 		EOF
 	done
@@ -348,15 +361,15 @@ step7()
 			test "x$s" = "x$slave" && enslaved=yes
 		done
 		if test $enslaved = yes ; then
-			check_device_has_port "$team0" "$slave"
+			check_device_has_port "$teamA" "$slave"
 		else
-			check_device_has_not_port "$team0" "$slave"
+			check_device_has_not_port "$teamA" "$slave"
 		fi
 	done
 
-	check_device_has_port "$br0" "$team0" "$other0"
-	check_device_has_port "$br1" "$vlan1" "$other1"
-	check_device_has_link "$vlan1" "$team0"
+	check_device_has_port "$bridgeA" "$teamA" "$other0"
+	check_device_has_port "$bridgeB" "$vlanB" "$other1"
+	check_device_has_link "$vlanB" "$teamA"
 }
 
 step8()
@@ -364,9 +377,9 @@ step8()
 	##
 	## re-add first team slave to config (it is **not** a hotplugging test)
 	##
-	bold "=== $step: ifreload ${br0} { ${team0} { ${team_slaves} } + ${other0} }, ${br1} { ${vlan1} + ${other1} }"
+	bold "=== $step: ifreload ${bridgeA} { ${teamA} { ${team_slaves} } + ${other0} }, ${bridgeB} { ${vlanB} + ${other1} }"
 
-	cat >"${dir}/ifcfg-${team0}" <<-EOF
+	cat >"${dir}/ifcfg-${teamA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='none'
 		TEAM_RUNNER='activebackup'
@@ -375,7 +388,7 @@ step8()
 	i=0
 	for slave in ${team_slaves} ; do
 		((i++))
-		cat >>"${dir}/ifcfg-${team0}" <<-EOF
+		cat >>"${dir}/ifcfg-${teamA}" <<-EOF
 			TEAM_PORT_DEVICE_${i}='$slave'
 		EOF
 	done
@@ -400,28 +413,28 @@ step8()
 	print_device_status all
 	print_bridges
 
-	check_device_has_port "$team0" ${team_slaves}
-	check_device_has_port "$br0" "$team0" "$other0"
-	check_device_has_port "$br1" "$vlan1" "$other1"
-	check_device_has_link "$vlan1" "$team0"
+	check_device_has_port "$teamA" ${team_slaves}
+	check_device_has_port "$bridgeA" "$teamA" "$other0"
+	check_device_has_port "$bridgeB" "$vlanB" "$other1"
+	check_device_has_link "$vlanB" "$teamA"
 }
 
 step99()
 {
 	bold "=== $step: cleanup"
 
-	echo "wicked ifdown ${br0} ${br1} ${vlan0} ${vlan1} ${team0} ${team_slaves} ${other0} ${other1}"
-	wicked ifdown ${br0} ${br1} ${vlan0} ${vlan1} ${team0} ${team_slaves} ${other0} ${other1}
+	echo "wicked ifdown ${bridgeA} ${bridgeB} ${vlanA} ${vlanB} ${teamA} ${team_slaves} ${other0} ${other1}"
+	wicked ifdown ${bridgeA} ${bridgeB} ${vlanA} ${vlanB} ${teamA} ${team_slaves} ${other0} ${other1}
 	echo ""
 
-	for dev in ${br0} ${br1} ${vlan0} ${vlan1} ${team0} ${other0} ${other1} ; do
+	for dev in ${bridgeA} ${bridgeB} ${vlanA} ${vlanB} ${teamA} ${other0} ${other1} ; do
 		ip link delete dev $dev
 	done
-	rm -f "${dir}/ifcfg-${br1}"
-	rm -f "${dir}/ifcfg-${br0}"
-	rm -f "${dir}/ifcfg-${vlan0}"
-	rm -f "${dir}/ifcfg-${vlan1}"
-	rm -f "${dir}/ifcfg-${team0}"
+	rm -f "${dir}/ifcfg-${bridgeB}"
+	rm -f "${dir}/ifcfg-${bridgeA}"
+	rm -f "${dir}/ifcfg-${vlanA}"
+	rm -f "${dir}/ifcfg-${vlanB}"
+	rm -f "${dir}/ifcfg-${teamA}"
 	for slave in ${team_slaves} ; do
 		rm -f "${dir}/ifcfg-${slave}"
 	done

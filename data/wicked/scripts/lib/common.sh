@@ -99,53 +99,80 @@ device_ifcfg_delete()
 
 print_test_description()
 {
-	sed -E '1d;2d;/^([^#])/d;/^$/d' $(caller | awk '{print $2}')
+	test_description;
 }
 
 log_device_config()
 {
+	out="${test_output_dir}/config-${step}/"
+	mkdir -p "$out"
+	ifc=()
+	if [ "$1" == "all" ]; then
+		for dev in "$dir"/ifcfg-*; do
+			ifc+=("${dev:6}")
+		done
+	else
+		for dev in "$@" ; do
+			local file="${dir}/ifcfg-${dev}"
+			[ "XXX$dev" == "XXX" ] && continue
+			[ ! -e "$file" ] && continue
+			ifc+=("${dev}")
+		done
+	fi
+
+	readarray -t ifc_uniq <<< "$(for a in "${ifc[@]}"; do echo "$a"; done | sort | uniq)"
+
    	{
-		if [ "$1" == "all" ]; then
-			for dev in "$dir"/ifcfg-*; do
-				echo "== $dev =="
-				cat "$dev"
-				echo ""
-			done
-		else
-			for dev in "$@" ; do
-				local file="${dir}/ifcfg-${dev}"
-				[ "XXX$dev" == "XXX" ] && continue
-				[ ! -e "$file" ] && continue
-				echo "== $file =="
-				cat "$file"
-				echo ""
-			done
-		fi
-	} > "config-step-${step}.cfg"
-	wicked show-config $cfg > "config-step-${step}.xml"
-	echo ""
+		for dev in "${ifc_uniq[@]}"; do
+			local file="${dir}/ifcfg-${dev}"
+			echo "== $file =="
+			cat "$file"
+			echo ""
+		done
+	} > "${out}config.cfg"
+
+	wicked show-config $cfg > "${out}show_config_all.xml"
+
 	if [ "$verbose" == "yes" ]; then
-		cat "config-step-${step}.cfg"
-		cat "config-step-${step}.xml"
+		cat "${out}config.cfg"
+		echo "==== ${out}show_config_all.xml ===="
+		cat "${out}show_config_all.xml"
+	fi
+
+	if [[ "$step" =~ ^step[0-9]+$ ]]; then
+		num="${step:4}"
+		num=$((num - 1))
+		test -d "log/config-step${num}/" &&
+			diff -urN "log/config-step${num}/" "${out}" > "log/config-${step}.diff"
 	fi
 }
+
 print_device_status()
 {
-	echo "# wicked ifstatus $cfg ""$*"
-	wicked ifstatus $cfg "$@"
-	echo ""
+	out="$test_output_dir/"
+	mkdir -p "$out"
+   	{
+		echo "# wicked ifstatus $cfg ""$*"
+		wicked ifstatus $cfg "$@"
+		echo ""
 
-	for dev in "$@"; do
-		if [ "$dev" == "all" ]; then
-			echo "# ip a s"
-			ip a s
-		else
-			echo "# ip a s dev $dev"
-			ip a s dev $dev
-		fi
-	done
-	echo ""
+		for dev in "$@"; do
+			if [ "$dev" == "all" ]; then
+				echo "# ip a s"
+				ip a s
+			else
+				echo "# ip a s dev $dev"
+				ip a s dev $dev
+			fi
+		done
+		echo ""
+	} > "${out}status-${step}.txt"
+
+	if [ "$verbose" == "yes" ]; then
+		cat "${out}status-${step}.txt"
+	fi
 }
+
 print_bridges()
 {
 	echo "Bridge          Ports"
@@ -164,6 +191,17 @@ check_device_exists()
 		((err++))
 	fi
 }
+
+check_device_not_exists()
+{
+    if ! device_exists "$1" ; then
+		echo "WORKS: device $1 does not exist"
+	else
+		red "ERROR: device $1 exists"
+		((err++))
+	fi
+}
+
 check_device_is_up()
 {
     if device_is_up "$1" ; then
@@ -183,20 +221,45 @@ check_device_is_down()
 	fi
 }
 
-
 check_device_has_port()
 {
 	local master=$1; shift
+	local count=0
+	local start_time
+
+	start_time="$(date "+%s")"
 
 	for dev in "$@"; do
-		if ! ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
-			red "ERROR: $dev is not port of $master"
-			((err++))
-		else
-			echo "WORKS: $dev is port of $master"
+		if ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
+			count=$((count + 1))
 		fi
-
 	done
+
+	if [ $count -eq 0 ]; then
+		red "ERROR: Missing any of $* as port of $master"
+		((err++))
+		return
+	fi
+
+	missing=""
+	while [ $(( "$(date "+%s")" - start_time )) -lt "$wait_for_ports" ]; do
+		missing=""
+		for dev in "$@"; do
+			if ! ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
+				[ -z "$missing" ] || missing="$missing "
+				missing="$missing$dev"
+			fi
+		done
+
+		if [ -z "$missing" ]; then
+			echo "WORKS: $* are ports of $master"
+			return;
+		fi
+		sleep 1;
+	done
+
+	red "ERROR: Missing $missing as port of $master"
+	((err++))
 }
 
 check_device_has_not_port()
@@ -218,7 +281,12 @@ check_device_has_link()
 	local dev=$1; shift
 	local link=$1; shift
 
-	ip a s dev "$dev" | grep -qs "$dev@$link" >& /dev/null
+	if ip a s dev "$dev" | grep -qs "$dev@$link" >& /dev/null; then
+		echo "WORKS: $dev is linked to $link"
+	else
+		red "ERROR: Missing link $link on for $dev"
+		((err++))
+	fi
 }
 check_device_has_compat_suse_config()
 {
@@ -286,6 +354,16 @@ check_policy_not_exists()
 	fi
 }
 
+check_vlan_id()
+{
+	if ip -d link show dev $1 | grep 'vlan protocol' | grep " id $2 " >/dev/null ; then
+		echo "WORKS: device $1 has VLAN_ID=$2 set"
+	else
+		red "ERROR: device $1 is not in VLAN $2"
+		((err++))
+	fi
+}
+
 
 
 color() {
@@ -323,34 +401,50 @@ print_result()
 
 print_help()
 {
-    echo " -p               Pause between each teststep"
-    echo " -d               Use debug output on wicked calls"
-    echo " -l | --list      List all steps"
-    echo " -s <func>        Run only the given step"
-    echo " --cfg-dir <dir>  Path to ifcfg files (Default: /etc/sysconfig/network)"
-    echo " --stop-on-err    Stop execution on first errounous step"
+	echo " -p | --pause         Pause between each teststep"
+	echo " -d | --debug         Use debug output on wicked calls"
+	echo " -l | --list          List all steps"
+	echo " -s | --step <func>   Run only the given step"
+	echo " --cfg-dir <dir>      Path to ifcfg files (Default: /etc/sysconfig/network)"
+	echo " --stop-on-err        Stop execution on first errounous step"
+	echo " --with-port-config   If there is a test which have a optional need for the"
+	echo "                      port config (e.g. a bridge port), then this port config"
+	echo "                      will be explicit created."
+	echo " --wait-for-ports     Used to specify the wait time, till all ports are"
+	echo "                      assigned to its parent. Usually it should be set to"
+	echo "                      WAIT_FOR_INTERFACES default is $wait_for_ports"
+	echo " --color              Force enable colored output."
+	echo " --verbose            Enable verbose output."
+	echo " --description        Prints the test description."
+	echo " -h | --help          Print this help."
 }
 
 wdebug='--log-level info --log-target syslog'
+wait_for_ports=$(source /etc/sysconfig/network/config 2>/dev/null; echo "${WAIT_FOR_INTERFACES:-30}")
 unset cprep
 unset only
 unset list
 unset use_colors
 unset stop_on_error
+unset with_port_config
 unset dir
 verbose="no"
+test_output_dir="log"
 [ "$(tput colors)" -ge 8 ] && use_colors=yes
 while test $# -gt 0 ; do
 	case "$1" in
-	-p) pause=yes ;;
-	-d) wdebug='--debug all --log-level debug2 --log-target syslog' ;;
-	-s) shift ; only="$1" ;;
+	-p|--pause) pause=yes ;;
+	-d|--debug) wdebug='--debug all --log-level debug2 --log-target syslog' ;;
+	-s|--step) shift ; only="$1" ;;
 	--cfg-dir) shift; dir="$1" ;;
 	-l|--list) list=yes;;
 	--stop-on-err*) stop_on_error=yes;;
+	--wait-for-ports) shift; wait_for_ports="$1" ;;
 	--color) use_colors=yes;;
 	--verbose) verbose=yes;;
-	-h) print_help; exit 0 ;;
+	--with-port-config) with_port_config=yes;;
+	--info|--description|--desc) test_description; exit 0;;
+	-h|--help) print_help; exit 0 ;;
 	-*) print_help; exit 2 ;;
 	*)  break ;;
 	esac

@@ -1,47 +1,51 @@
 #!/bin/bash
-#
-# VLAN on virtual interface
-#
-# setup:
-#
-#    dummy0    <-l-    dummy0.11
-#
-# TODO: change vlan0 default name to dummy0.10
 
-. ../../lib/common_pre.sh
 
-dummy0="${dummy0:-dummy0}"
-dummy0_ip4="${dummy0_ip4:-198.18.4.1/24}"
+dummyA="${dummyA:-dummyA}"
+dummyA_ip4="${dummyA_ip4:-198.18.10.10/24}"
 
-vlan0_id="${vlan0_id:-10}"
-#vlan0="${vlan0:-$dummy0.$vlan0_id}"
-vlan0="${vlan0:-vlan$vlan0_id}"
-vlan0_ip4="${vlan0_ip4:-198.18.2.1/24}"
+vlanA_id="${vlanA_id:-10}"
+#vlanA="${vlanA:-$dummyA.$vlanA_id}"
+vlanA="${vlanA:-vlan$vlanA_id}"
+vlanA_ip4="${vlanA_ip4:-198.18.11.10/24}"
+
+test_description()
+{
+	cat - <<-EOT
+
+	VLAN on virtual interface
+
+	setup:
+
+	   $dummyA    <-l-    $vlanA
+
+	EOT
+}
 
 step0()
 {
 	bold "=== $step -- Setup configuration"
 
-	cat >"${dir}/ifcfg-${dummy0}" <<-EOF
+	cat >"${dir}/ifcfg-${dummyA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		ZONE=trusted
-		${dummy0_ip4:+IPADDR='${dummy0_ip4}'}
+		${dummyA_ip4:+IPADDR='${dummyA_ip4}'}
 	EOF
 
-	cat >"${dir}/ifcfg-${vlan0}" <<-EOF
+	cat >"${dir}/ifcfg-${vlanA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		ZONE=trusted
-		${vlan0_ip4:+IPADDR='${vlan0_ip4}'}
-		ETHERDEVICE='${dummy0}'
-		VLAN_ID='${vlan0_id}'
+		${vlanA_ip4:+IPADDR='${vlanA_ip4}'}
+		ETHERDEVICE='${dummyA}'
+		VLAN_ID='${vlanA_id}'
 	EOF
 
 	{
 		sed -E '1d;2d;/^([^#])/d;/^$/d' $BASH_SOURCE
 		echo ""
-		for dev in "$dummy0" "$vlan0" ; do
+		for dev in "$dummyA" "$vlanA" ; do
 			echo "== ${dir}/ifcfg-${dev} =="
 			cat "${dir}/ifcfg-${dev}"
 			echo ""
@@ -52,16 +56,16 @@ step0()
 
 step1()
 {
-	bold "=== step $step: ifup ${dummy0}"
+	bold "=== step $step: ifup ${dummyA}"
 
-	echo "# wicked $wdebug ifup $cfg ${dummy0}"
-	wicked $wdebug ifup $cfg ${dummy0}
+	echo "# wicked $wdebug ifup $cfg ${dummyA}"
+	wicked $wdebug ifup $cfg ${dummyA}
 	echo ""
 
-	print_device_status "$vlan0" "$dummy0"
+	print_device_status "$vlanA" "$dummyA"
 
-	check_device_is_up "$dummy0"
-	check_device_is_down "$vlan0"
+	check_device_is_up "$dummyA"
+	check_device_is_down "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -69,16 +73,16 @@ step1()
 
 step2()
 {
-	bold "=== step $step: ifdown ${dummy0}"
+	bold "=== step $step: ifdown ${dummyA}"
 
-	echo "# wicked $wdebug ifdown $dummy0"
-	wicked $wdebug ifdown $dummy0
+	echo "# wicked $wdebug ifdown $dummyA"
+	wicked $wdebug ifdown $dummyA
 	echo ""
 
-	print_device_status "$vlan0" "$dummy0"
+	print_device_status "$vlanA" "$dummyA"
 
-	check_device_is_down "$dummy0"
-	check_device_is_down "$vlan0"
+	check_device_is_down "$dummyA"
+	check_device_is_down "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -86,16 +90,16 @@ step2()
 
 step3()
 {
-	bold "=== step $step: ifup ${vlan0}"
+	bold "=== step $step: ifup ${vlanA}"
 
-	echo "# wicked $wdebug ifup $cfg ${vlan0}"
-	wicked $wdebug ifup $cfg ${vlan0}
+	echo "# wicked $wdebug ifup $cfg ${vlanA}"
+	wicked $wdebug ifup $cfg ${vlanA}
 	echo ""
 
-	print_device_status "$vlan0" "$dummy0"
+	print_device_status "$vlanA" "$dummyA"
 
-	check_device_is_up "$dummy0"
-	check_device_is_up "$vlan0"
+	check_device_is_up "$dummyA"
+	check_device_is_up "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -104,16 +108,16 @@ ifup_vlan0=step3
 
 step4()
 {
-	bold "=== step $step: ifdown ${dummy0}"
+	bold "=== step $step: ifdown ${dummyA}"
 
-	echo "# wicked $wdebug ifdown $dummy0"
-	wicked $wdebug ifdown $dummy0
+	echo "# wicked $wdebug ifdown $dummyA"
+	wicked $wdebug ifdown $dummyA
 	echo ""
 
-	print_device_status "$vlan0" "$dummy0"
+	print_device_status "$vlanA" "$dummyA"
 
-	check_device_is_down "$dummy0"
-	check_device_is_down "$vlan0"
+	check_device_is_down "$dummyA"
+	check_device_is_down "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -126,16 +130,16 @@ step5()
 
 step6()
 {
-	bold "=== step $step: ifdown ${vlan0}"
+	bold "=== step $step: ifdown ${vlanA}"
 
-	echo "# wicked $wdebug ifdown $vlan0"
-	wicked $wdebug ifdown $vlan0
+	echo "# wicked $wdebug ifdown $vlanA"
+	wicked $wdebug ifdown $vlanA
 	echo ""
 
-	print_device_status "$vlan0" "$dummy0"
+	print_device_status "$vlanA" "$dummyA"
 
-	check_device_is_up "$dummy0"
-	check_device_is_down "$vlan0"
+	check_device_is_up "$dummyA"
+	check_device_is_down "$vlanA"
 
 	echo ""
 	echo "=== step $step: finished with $err errors"
@@ -145,7 +149,7 @@ step99()
 {
 	bold "=== step $step: cleanup"
 
-	for dev in "$vlan0" "$dummy0"; do
+	for dev in "$vlanA" "$dummyA"; do
 		echo "# wicked $wdebug ifdown $dev"
 		wicked $wdebug ifdown $dev
 		rm -rf "${dir}/ifcfg-${dev}"

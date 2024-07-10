@@ -21,11 +21,11 @@ sub run {
     }
     my $test = $1;
     $test =~ s/_/-/;
-    $test =~ s/_/./;
+    $test =~ s/_/./g;
 
     $self->get_from_data('wicked/scripts', '/tmp/');
     assert_script_run('cd /tmp/scripts/ifupdown/' . $test);
-    $self->run_test_shell_script($test, "time eth0=$ifc1 eth1=$ifc2 bash ./test.sh -d");
+    $self->run_test_shell_script($test, "time nicA=$ifc1 nicB=$ifc2 bash ./test.sh -d");
     $self->skip_check_logs_on_post_run();
 }
 
