@@ -26,10 +26,13 @@ step0()
 {
 	bold "=== $step -- Setup configuration"
 
+	print_test_description
+
 	cat >"${dir}/ifcfg-${dummyA}" <<-EOF
 		STARTMODE='auto'
 		BOOTPROTO='static'
 		ZONE=trusted
+		DUMMY=yes
 		${dummyA_ip4:+IPADDR='${dummyA_ip4}'}
 	EOF
 
