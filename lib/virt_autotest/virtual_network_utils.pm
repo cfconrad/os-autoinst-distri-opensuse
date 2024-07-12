@@ -116,6 +116,9 @@ sub test_network_interface {
         $target = script_output("dig +short libvirt.org");
         $target =~ /^[\d\.]+/ ? record_info("One more try succeed!") : die "Unable to test network connections!";
     }
+    else {
+        $target =~ s/\n.*//gm;
+    }
 
     record_info("Network test", "testing $mac");
     check_guest_ip("$guest", net => $net) if ((is_sle('>15') || is_alp) && ($isolated == 1) && get_var('VIRT_AUTOTEST'));
@@ -129,7 +132,7 @@ sub test_network_interface {
     script_retry("nmap $guest -PN -p ssh | grep open", delay => 30, retry => 6, timeout => 180);
     my $nic = script_output "ssh root\@$guest \"grep '$mac' /sys/class/net/*/address | cut -d'/' -f5 | head -n1\"";
     die "$mac not found in guest $guest" unless $nic;
-    if (check_var('TEST', 'qam-xen-networking') || check_var('TEST', 'qam-kvm-networking') || $is_sriov_test eq "true") {
+    if (check_var('TEST', 'qam-xen-install-and-features-test') || check_var('TEST', 'qam-kvm-install-and-features-test') || $is_sriov_test eq "true") {
         assert_script_run("ssh root\@$guest \"echo BOOTPROTO=\\'dhcp\\' > /etc/sysconfig/network/ifcfg-$nic\"");
 
         # Restart the network - the SSH connection may drop here, so no return code is checked.

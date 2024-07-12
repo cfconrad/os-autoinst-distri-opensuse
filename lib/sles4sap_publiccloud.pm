@@ -14,6 +14,7 @@ package sles4sap_publiccloud;
 
 use base 'publiccloud::basetest';
 use strict;
+use JSON;
 use warnings FATAL => 'all';
 use Exporter 'import';
 use Scalar::Util 'looks_like_number';
@@ -299,6 +300,37 @@ sub is_hana_resource_running {
     }
 }
 
+=head2 is_hana_node_up
+    is_hana_node_up($my_instance, [timeout => 900]);
+
+    Waits until 'is_system_running' returns successfully on the target instance.
+
+=over 2
+
+=item B<instance> - the instance the test needs to wait for
+
+=item B<timeout> - how much time to wait for before aborting
+
+=back  
+=cut
+
+sub wait_hana_node_up {
+    my ($instance, %args) = @_;
+    $args{timeout} //= 900;
+    my $start_time = time();
+    my $out;
+    while ((time() - $start_time) < $args{timeout}) {
+        $out = $instance->run_ssh_command(
+            cmd => "sudo systemctl is-system-running",
+            timeout => 5,
+            proceed_on_failure => 1);
+        return if ($out =~ m/running/);
+        record_info("WAIT_FOR_SYSTEM", "System state: $out");
+        sleep 10;
+    }
+    die "Timeout reached. is_system_running returns \"$out\"";
+}
+
 =head2 stop_hana
     stop_hana([timeout => $timeout, method => $method]);
 
@@ -346,7 +378,8 @@ sub stop_hana {
         record_info("Wait ssh disappear start");
         my $out = $self->{my_instance}->wait_for_ssh(timeout => 60, wait_stop => 1);
         record_info("Wait ssh disappear end", "out:" . ($out // 'undefined'));
-        sleep 10;
+        # wait for node to be ready
+        wait_hana_node_up($self->{my_instance}, timeout => 900);
         $out = $self->{my_instance}->wait_for_ssh(timeout => 900);
         record_info("Wait ssh is back again", "out:" . ($out // 'undefined'));
     }
@@ -793,7 +826,7 @@ sub delete_network_peering {
     Detects HANA/HA scenario from function arguments and returns a list of ansible playbooks to include
     in the "ansible: create:" section of config.yaml file.
 
-=over 3
+=over 7
 
 =item B<ha_enabled> - Enable the installation of HANA and the cluster configuration
 
@@ -806,9 +839,11 @@ sub delete_network_peering {
 
 =item B<ptf_files> - list of PTF files (optional)
 
-=item B<token> - SAS token to access the PTF files (optional)
+=item B<ptf_token> - SAS token to access the PTF files (optional)
 
-=item B<container> - name of the container for PTF files
+=item B<ptf_account> - name of the account for the ptf container
+
+=item B<ptf_container> - name of the container for PTF files
 
 =back
 =cut
@@ -837,9 +872,13 @@ sub create_playbook_section_list {
     }
 
     # Add playbook to download and install PTFs, if any
-    if ($args{ptf_files} && $args{token} && $args{container}) {
-        $args{token} =~ s/\\\&/\&/g;
-        push @playbook_list, "ptf_installation.yaml -e ptf_files=$args{ptf_files} -e sas_token=$args{token} -e container=$args{container} -e storage=" . get_required_var('HANA_ACCOUNT');
+    if ($args{ptf_files} && $args{ptf_token} && $args{ptf_container} && $args{ptf_account}) {
+        push @playbook_list, join(' ',
+            'ptf_installation.yaml',
+            "-e ptf_files=$args{ptf_files}",
+            "-e sas_token='$args{ptf_token}'",
+            "-e container=$args{ptf_container}",
+            "-e storage=$args{ptf_account}");
         push @playbook_list, "additional_fence_agent_tasks.yaml";
     }
 

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2023 SUSE LLC
+# Copyright 2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: wicked
@@ -16,17 +16,17 @@ sub run {
     my $ifc1 = $ctx->iface;
     my $ifc2 = $ctx->iface2;
 
-    if ( $self->{name} !~ m/t\d+_ifreload_(test_\d+_\d+)/) {
-        die ("Testname doesn't have expected format!");
+    if ($self->{name} !~ m/t\d+_ifreload_(test_\d+_\d+(_\d+)?)/) {
+        die("Testname doesn't have expected format!");
     }
     my $test = $1;
     $test =~ s/_/-/;
-    $test =~ s/_/./;
+    $test =~ s/_/./g;
 
     assert_script_run('systemctl start openvswitch');
     $self->get_from_data('wicked/scripts', '/tmp/');
     assert_script_run('cd /tmp/scripts/ifreload/' . $test);
-    $self->run_test_shell_script($test, "time eth0=$ifc1 eth1=$ifc2 bash ./test.sh -d");
+    $self->run_test_shell_script($test, "time nicA=$ifc1 nicB=$ifc2 bash ./test.sh -d");
     $self->skip_check_logs_on_post_run();
 }
 

@@ -162,6 +162,7 @@ subtest "[stop_hana] crash" => sub {
     my $sles4sap_publiccloud = Test::MockModule->new('sles4sap_publiccloud', no_auto => 1);
     $sles4sap_publiccloud->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
     $sles4sap_publiccloud->redefine(wait_for_sync => sub { return; });
+    $sles4sap_publiccloud->redefine(wait_hana_node_up => sub { return; });
 
     my $self = sles4sap_publiccloud->new();
     my $mock_pc = Test::MockObject->new();
@@ -621,6 +622,23 @@ subtest '[create_playbook_section_list] registration => suseconnect' => sub {
     set_var('USE_SAPCONF', undef);
     note("\n  -->  " . join("\n  -->  ", @$ansible_playbooks));
     ok((any { /.*use_suseconnect=true.*/ } @$ansible_playbooks), 'registration playbook is called with use_suseconnect=true when registration => suseconnect');
+};
+
+
+subtest '[create_playbook_section_list] ptf' => sub {
+    my $sles4sap_publiccloud = Test::MockModule->new('sles4sap_publiccloud', no_auto => 1);
+    $sles4sap_publiccloud->redefine(is_azure => sub { return 1 });
+    set_var('SCC_REGCODE_SLES4SAP', 'Magellano');
+    set_var('USE_SAPCONF', 'Colombo');
+    my $ansible_playbooks = create_playbook_section_list(
+        ptf_files => 'Marcantonio Colonna',
+        ptf_token => 'Seb4sti4n0Ven1er',
+        ptf_container => 'VettorPisani',
+        ptf_account => 'LorenzoMarcello');
+    set_var('SCC_REGCODE_SLES4SAP', undef);
+    set_var('USE_SAPCONF', undef);
+    note("\n  -->  " . join("\n  -->  ", @$ansible_playbooks));
+    ok((any { /ptf_installation\.yaml.*/ } @$ansible_playbooks), 'ptf_installation playbook');
 };
 
 

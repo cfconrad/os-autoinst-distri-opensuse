@@ -77,6 +77,9 @@ my @conflicting_packages = (
     'openmpi4-config', 'pmix-mca-params',
     'rmt-server-pubcloud',
     'systemtap-sdt-devel',
+    'kernel-firmware-nvidia-gspx-G06-cuda', 'nvidia-open-driver-G06-signed-cuda-kmp-default',
+    'nv-prefer-signed-open-driver', 'nvidia-open-driver-G06-signed-cuda-kmp-azure',
+    'nvidia-open-driver-G06-signed-cuda-kmp-64kb',
     'kernel-default-base', 'kernel-default-extra'
 );
 
@@ -331,6 +334,7 @@ sub run {
                 assert_script_run("snapper rollback $rollback_number");
                 reboot_and_login;
             }
+            disable_test_repositories($repos_count);
         }
 
         # Install released version of installable binaries.

@@ -121,7 +121,7 @@ EOT
     assert_script_run('wicked show-xml team0 | grep "<vlanid>100</vlanid>"');
 
     $vlanid = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get('/link_watch/vlanid');
-    die("Value of vlanid is incorrect -- expect:100 got:$vlanid") if $vlanid  != 100;
+    die("Value of vlanid is incorrect -- expect:100 got:$vlanid") if $vlanid != 100;
 
 
     # 3) Changed TEAM_LW_ARP_PING_VLANID
@@ -131,9 +131,9 @@ EOT
     assert_script_run('wicked show-xml team0 | grep "<vlanid>300</vlanid>"');
 
     $vlanid = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get('/link_watch/vlanid');
-    die("Value of vlanid is incorrect -- expect:300 got:$vlanid") if $vlanid  != 300;
+    die("Value of vlanid is incorrect -- expect:300 got:$vlanid") if $vlanid != 300;
 
-    # 4) Deleted TEAM_LINK_ARP_PING_VLANID 
+    # 4) Deleted TEAM_LINK_ARP_PING_VLANID
     assert_script_run("sed -i '/TEAM_LW_ARP_PING_VLANID/d' /etc/sysconfig/network/ifcfg-team0");
     $self->reload_cfg();
     assert_script_run('! (wicked show-config team0 | grep vlanid)');
@@ -169,7 +169,7 @@ EOT
 
     $self->wicked_command('ifup', 'team0');
 
-    # 1) Not set 
+    # 1) Not set
     assert_script_run("! (wicked show-config team0 | grep $type)");
     assert_script_run("! (wicked show-xml team0 | grep $type)");
     my $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get("/$type");
@@ -182,7 +182,7 @@ EOT
     validate_script_output('wicked show-xml team0', qr((?s)<$type>.*<count>4</count>.*</$type>));
     $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get("/$type/count");
     die("Unexpected value in $type/count (exp:4 got:$value") unless $value eq 4;
-   
+
     # 3) Set interval
     assert_script_run('echo TEAM_' . uc($type) . '_INTERVAL=500 >> /etc/sysconfig/network/ifcfg-team0');
     $self->reload_cfg();
@@ -190,14 +190,14 @@ EOT
     validate_script_output('wicked show-xml team0', qr((?s)<$type>.*<interval>500</interval>.*</$type>));
     $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get("/$type/interval");
     die("Unexpected value in $type/count (exp:500 got:$value") unless $value eq 500;
-    
+
     # 4) Delete count
     assert_script_run("sed -i '/TEAM_" . uc($type) . "_COUNT/d' /etc/sysconfig/network/ifcfg-team0");
     $self->reload_cfg();
     validate_script_output('wicked show-config team0', qr((?s)<$type>.*<interval>500</interval>.*</$type>));
-    validate_script_output('wicked show-config team0', sub { $_ !~ qr((?s)<$type>.*<count>.*</$type>)} );
+    validate_script_output('wicked show-config team0', sub { $_ !~ qr((?s)<$type>.*<count>.*</$type>) });
     validate_script_output('wicked show-xml team0', qr((?s)<$type>.*<interval>500</interval>.*</$type>));
-    validate_script_output('wicked show-xml team0', sub { $_ !~ qr((?s)<$type>.*<count>.*</$type>)} );
+    validate_script_output('wicked show-xml team0', sub { $_ !~ qr((?s)<$type>.*<count>.*</$type>) });
     $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get("/$type/interval");
     die("Unexpected value in $type/count (exp:500 got:$value") unless $value eq 500;
     $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get("/$type/count");
@@ -218,9 +218,9 @@ EOT
     # 6) Delete interval and keep only special default
     assert_script_run("sed -i '/TEAM_" . uc($type) . "_INTERVAL/d' /etc/sysconfig/network/ifcfg-team0");
     $self->reload_cfg();
-    validate_script_output('wicked show-config team0', sub { $_ !~ qr((?s)<$type>.*<interval>.*</$type>)});
-    validate_script_output('wicked show-config team0', sub { $_ !~ qr((?s)<$type>.*<count>1</count>.*</$type>)});
-    validate_script_output('wicked show-xml team0', sub { $_ !~ qr((?s)<$type>.*<interval>.*</$type>)});
+    validate_script_output('wicked show-config team0', sub { $_ !~ qr((?s)<$type>.*<interval>.*</$type>) });
+    validate_script_output('wicked show-config team0', sub { $_ !~ qr((?s)<$type>.*<count>1</count>.*</$type>) });
+    validate_script_output('wicked show-xml team0', sub { $_ !~ qr((?s)<$type>.*<interval>.*</$type>) });
     validate_script_output('wicked show-xml team0', qr((?s)<$type>.*<count>1</count>.*</$type>));
     $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get("/$type/interval");
     die("$type/interval should not be set ") if defined($value);
@@ -243,7 +243,7 @@ EOT
 sub check_cfg_debug_level()
 {
     my ($self) = @_;
-    
+
     record_info("debug_level");
 
     $self->write_default_cfg();
@@ -262,7 +262,7 @@ sub check_cfg_debug_level()
     assert_script_run("wicked show-xml team0 | grep '<debug_level>2</debug_level>'");
     $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get("/debug_level");
     die("Unexpected value in debug_level (exp:2 got:$value") unless $value eq 2;
-    
+
     # 3) Change TEAM_DEBUG_LEVEL
     assert_script_run("sed -i '/TEAM_DEBUG_LEVEL/cTEAM_DEBUG_LEVEL=3' /etc/sysconfig/network/ifcfg-team0");
     $self->reload_cfg();
@@ -270,15 +270,15 @@ sub check_cfg_debug_level()
     assert_script_run("wicked show-xml team0 | grep '<debug_level>3</debug_level>'");
     $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get("/debug_level");
     die("Unexpected value in debug_level (exp:2 got:$value") unless $value eq 3;
-    
+
     # 4) Delete TEAM_DEBUG_LEVEL
     assert_script_run("sed -i '/TEAM_DEBUG_LEVEL/d' /etc/sysconfig/network/ifcfg-team0");
     $self->reload_cfg();
     assert_script_run('! (wicked show-config team0 | grep debug_level)');
     assert_script_run('wicked show-xml team0 | grep "<debug_level>0</debug_level>"');
-    my $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get('/debug_level');
+    $value = Mojo::JSON::Pointer->new(decode_json(script_output('teamdctl team0 config dump actual')))->get('/debug_level');
     die("debug_level should not be set ") if defined($value);
-    
+
     # 5) ifdown team0
     $self->wicked_command('ifdown', 'all');
     assert_script_run('! teamdctl team0 config dump actual');
@@ -303,7 +303,7 @@ sub run {
     $self->check_cfg_burst_cfg('mcast_rejoin');
 
     $self->check_cfg_debug_level();
- }
+}
 
 sub test_flags {
     return {always_rollback => 1};
