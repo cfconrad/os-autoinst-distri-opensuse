@@ -79,7 +79,7 @@ has ifcfg_wlan_24 => sub { [
 
         WIRELESS_ESSID='{{ssid}}'
         WIRELESS_WPA_PSK='{{psk}}'
-        WIRELESS_FREQUENCY_LIST='2.4GHz,5220'
+        WIRELESS_FREQUENCY_LIST='2,4GHz'
         ),
         q(
         BOOTPROTO='dhcp'
@@ -87,7 +87,7 @@ has ifcfg_wlan_24 => sub { [
 
         WIRELESS_ESSID='{{ssid}}'
         WIRELESS_WPA_PSK='{{psk}}'
-        WIRELESS_FREQUENCY_LIST='2412,2.4GHz,5220'
+        WIRELESS_FREQUENCY_LIST='2.4GHz 5220'
         ),
         q(
         BOOTPROTO='dhcp'
@@ -95,7 +95,7 @@ has ifcfg_wlan_24 => sub { [
 
         WIRELESS_ESSID='{{ssid}}'
         WIRELESS_WPA_PSK='{{psk}}'
-        WIRELESS_FREQUENCY_LIST='2437,5220,2412'
+        WIRELESS_FREQUENCY_LIST='2412 2.4GHz 5220'
         ),
         q(
         BOOTPROTO='dhcp'
@@ -104,7 +104,7 @@ has ifcfg_wlan_24 => sub { [
         WIRELESS_ESSID='{{ssid}}'
         WIRELESS_WPA_PSK='{{psk}}'
         WIRELESS_FREQUENCY_LIST='2437 5220 2412'
-        )
+        ),
 ] };
 
 has ifcfg_wlan_5 => sub { [
@@ -130,7 +130,7 @@ has ifcfg_wlan_5 => sub { [
 
         WIRELESS_ESSID='{{ssid}}'
         WIRELESS_WPA_PSK='{{psk}}'
-        WIRELESS_FREQUENCY_LIST='5GHz,2437'
+        WIRELESS_FREQUENCY_LIST='5GHz 2437'
         ),
         q(
         BOOTPROTO='dhcp'
@@ -138,7 +138,7 @@ has ifcfg_wlan_5 => sub { [
 
         WIRELESS_ESSID='{{ssid}}'
         WIRELESS_WPA_PSK='{{psk}}'
-        WIRELESS_FREQUENCY_LIST='5180,5GHz,2437'
+        WIRELESS_FREQUENCY_LIST='5180 5GHz 2437'
         ),
         q(
         BOOTPROTO='dhcp'
@@ -146,15 +146,7 @@ has ifcfg_wlan_5 => sub { [
 
         WIRELESS_ESSID='{{ssid}}'
         WIRELESS_WPA_PSK='{{psk}}'
-        WIRELESS_FREQUENCY_LIST='5180,5220,2437'
-        ),
-        q(
-        BOOTPROTO='dhcp'
-        STARTMODE='auto'
-
-        WIRELESS_ESSID='{{ssid}}'
-        WIRELESS_WPA_PSK='{{psk}}'
-        WIRELESS_FREQUENCY_LIST='5220 2437 5180'
+        WIRELESS_FREQUENCY_LIST='5180 5220 2437'
         ),
 ] };
 
