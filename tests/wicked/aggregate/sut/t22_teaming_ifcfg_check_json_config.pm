@@ -5,8 +5,7 @@
 
 # Package: wicked teamd
 # Summary: Teaming, ifcfg - check link_watch_policy
-# Maintainer:
-#             Clemens Famulla-Conrad <cfamullaconrad@suse.de>
+# Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>
 
 use Mojo::Base 'wickedbase';
 use Mojo::JSON qw(decode_json);

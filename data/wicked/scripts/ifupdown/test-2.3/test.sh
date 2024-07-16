@@ -33,6 +33,8 @@ step0()
 {
 	bold "=== $step -- Setup configuration"
 
+	print_test_description
+
 	cat >"${dir}/ifcfg-${nicA}" <<-EOF
 		STARTMODE='hotplug'
 		BOOTPROTO='none'

@@ -242,7 +242,7 @@ check_device_has_port()
 	fi
 
 	missing=""
-	while [ $(( "$(date "+%s")" - start_time )) -lt "$wait_for_ports" ]; do
+	while [ $(( $(date "+%s") - start_time )) -lt "$wait_for_ports" ]; do
 		missing=""
 		for dev in "$@"; do
 			if ! ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
