@@ -28,8 +28,8 @@ has hostapd_conf => q(
     interface={{ref_ifc}}
     driver=nl80211
     country_code=DE
-    channel=0
-    freqlist=2412
+    channel=1
+    # freqlist=2412
     hw_mode=g
     ieee80211n=1
 
@@ -44,8 +44,8 @@ has hostapd_conf2 => q(
     interface={{ref_ifc2}}
     driver=nl80211
     country_code=DE
-    channel=0
-    freqlist=5180
+    channel=36
+    # freqlist=5180
     hw_mode=a
     ieee80211n=1
 
