@@ -160,14 +160,6 @@ sub run {
     return if ($self->skip_by_supported_key_mgmt());
     return if ($self->skip_by_wpa_supplicant_version());
 
-    if (!$self->hostapd_can_freqlist()) {
-        record_info('SKIP',
-            'Skip test, cause installed hostapd does not support freqlist',
-            result => 'softfail');
-        $self->result('skip');
-        return;
-    }
-
     $self->setup_ref();
 
     # setup ref2
