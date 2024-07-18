@@ -291,6 +291,13 @@ sub is_hostapd_supporting_key_mgmt {
     return $s !~ m/invalid key_mgmt/i;
 }
 
+sub hostapd_can_freqlist {
+    my ($self) = @_;
+    $self->write_cfg('/tmp/check_wep.conf', 'freqlist=2412');
+    my $s = script_output('hostapd /tmp/check_wep.conf', proceed_on_failure => 1);
+    return $s !~ m/unknown configuration item 'freqlist'/i;
+}
+
 sub is_wpa_supplicant_supporting_key_mgmt {
     my ($self, $key_mgmt) = @_;
     $self->write_cfg('/tmp/check_key_mgmt.conf', <<EOT);
@@ -384,16 +391,16 @@ sub assert_connection {
     my ($self, %args) = @_;
     $args{timeout} //= 0;
     $args{sleep} //= 1;
-    $args{ref_ifc} //= $self->ref_bss(bss => $args{bss}); 
-    $args{sut_ifc} //= $self->sut_ifc; 
+    $args{ref_ifc} //= $self->ref_bss(bss => $args{bss});
+    $args{sut_ifc} //= $self->sut_ifc;
     $args{ref_ip} //= $self->ref_ip(bss => $args{bss});
     $args{sut_ip} //= $self->sut_ip(bss => $args{bss});
     my $endtime = time() + $args{timeout};
 
     while (1) {
         eval {
-            assert_script_run('ping -c 1 -I ' . $args{sut_ifc} . ' ' . $args{ref_ip} );
-            $self->netns_exec('ping -c 1 -I ' . $args{ref_ifc} . ' ' . $args{sut_ip} );
+            assert_script_run('ping -c 1 -I ' . $args{sut_ifc} . ' ' . $args{ref_ip});
+            $self->netns_exec('ping -c 1 -I ' . $args{ref_ifc} . ' ' . $args{sut_ip});
         };
         return 1 unless ($@);    # no error
         die($@) if (time() > $endtime || $args{timeout} == 0);
