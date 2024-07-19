@@ -178,7 +178,7 @@ sub run {
 
         # Check
         $self->assert_sta_connected(ref_ifc => $self->ref_ifc());
-        $self->assert_connection(ref_ifc => $self->ref_ifc());
+        $self->assert_connection(ref_ifc => $self->ref_ifc(), timeout => $WAIT_SECONDS);
 
 
         $self->hostapd_kill();
@@ -195,7 +195,7 @@ sub run {
 
         # Check
         $self->assert_sta_connected(ref_ifc => $self->ref_ifc2());
-        $self->assert_connection(bss => 1, ref_ifc => $self->ref_ifc2());
+        $self->assert_connection(bss => 1, ref_ifc => $self->ref_ifc2(), timeout => $WAIT_SECONDS);
 
 
         $self->hostapd_kill();
