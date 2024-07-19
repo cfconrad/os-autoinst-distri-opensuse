@@ -291,13 +291,6 @@ sub is_hostapd_supporting_key_mgmt {
     return $s !~ m/invalid key_mgmt/i;
 }
 
-sub hostapd_can_freqlist {
-    my ($self) = @_;
-    $self->write_cfg('/tmp/check_wep.conf', 'freqlist=2412');
-    my $s = script_output('hostapd /tmp/check_wep.conf', proceed_on_failure => 1);
-    return $s !~ m/unknown configuration item 'freqlist'/i;
-}
-
 sub is_wpa_supplicant_supporting_key_mgmt {
     my ($self, $key_mgmt) = @_;
     $self->write_cfg('/tmp/check_key_mgmt.conf', <<EOT);

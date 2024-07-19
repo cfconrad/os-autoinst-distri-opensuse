@@ -160,14 +160,6 @@ sub run {
     return if ($self->skip_by_supported_key_mgmt());
     return if ($self->skip_by_wpa_supplicant_version());
 
-    if (!$self->hostapd_can_freqlist()) {
-        record_info('SKIP',
-            'Skip test, cause installed hostapd does not support freqlist',
-            result => 'softfail');
-        $self->result('skip');
-        return;
-    }
-
     $self->setup_ref();
 
     # setup ref2
@@ -186,7 +178,7 @@ sub run {
 
         # Check
         $self->assert_sta_connected(ref_ifc => $self->ref_ifc());
-        $self->assert_connection(ref_ifc => $self->ref_ifc());
+        $self->assert_connection(ref_ifc => $self->ref_ifc(), timeout => $WAIT_SECONDS);
 
 
         $self->hostapd_kill();
@@ -203,7 +195,7 @@ sub run {
 
         # Check
         $self->assert_sta_connected(ref_ifc => $self->ref_ifc2());
-        $self->assert_connection(bss => 1, ref_ifc => $self->ref_ifc2());
+        $self->assert_connection(bss => 1, ref_ifc => $self->ref_ifc2(), timeout => $WAIT_SECONDS);
 
 
         $self->hostapd_kill();
