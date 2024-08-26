@@ -46,6 +46,18 @@ device_is_up()
 {
 	LC_ALL=POSIX ip link show dev "$1" 2>/dev/null | grep -qs "[<,]UP[,>]"
 }
+
+device_has_ip()
+{
+	LC_ALL=POSIX ip addr show dev "$1" 2>/dev/null | \
+	grep -Eqs "(inet|inet6) ${2}"
+}
+
+device_lladdr()
+{
+	cat "/sys/class/net/${1}/address" 2>/dev/null
+}
+
 device_create()
 {
 	local name="$1" ; shift
@@ -221,6 +233,35 @@ check_device_is_down()
 	fi
 }
 
+check_device_has_ip()
+{
+	if device_has_ip "$1" "$2" ; then
+		echo "WORKS: IP ${2} is assigned to $1"
+	else
+		red "ERROR: IP ${2} is NOT assigned to $1"
+		((err++))
+	fi
+}
+
+check_device_has_lladdr()
+{
+	local ifname="$1" ; shift
+	local lla arg
+
+	lla=$(device_lladdr "$ifname")
+	if test "X$lla" != "X" -a $# -ge 0 ; then
+		for arg in "$@" ; do
+			test "X$lla" != "X$arg" && continue
+
+			echo "WORKS: device $ifname has expected lladdr $lla"
+			return 0
+		done
+	fi
+	red "ERROR: device $ifname has different lladdr $lla"
+	((err++))
+	return 1
+}
+
 check_device_has_port()
 {
 	local master=$1; shift
@@ -230,7 +271,7 @@ check_device_has_port()
 	start_time="$(date "+%s")"
 
 	for dev in "$@"; do
-		if ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
+		if ip a s dev $dev 2>/dev/null | grep -qs "master $master" ; then
 			count=$((count + 1))
 		fi
 	done
@@ -245,7 +286,7 @@ check_device_has_port()
 	while [ $(( $(date "+%s") - start_time )) -lt "$wait_for_ports" ]; do
 		missing=""
 		for dev in "$@"; do
-			if ! ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
+			if ! ip a s dev $dev 2>/dev/null | grep -qs "master $master" ; then
 				[ -z "$missing" ] || missing="$missing "
 				missing="$missing$dev"
 			fi
@@ -267,7 +308,7 @@ check_device_has_not_port()
 	local master=$1; shift
 
 	for dev in "$@"; do
-		if ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
+		if ip a s dev $dev 2>/dev/null | grep -qs "master $master" ; then
 			red "ERROR: $dev is port of $master"
 			((err++))
 		else
