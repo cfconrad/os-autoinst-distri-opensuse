@@ -178,6 +178,15 @@ sub prepare_sut {
 }
 
 sub prepare_packages {
+    if (get_var('WPA_SUPPLICANT_REPO')) {
+        zypper_ar(get_var('WPA_SUPPLICANT_REPO'),
+            priority => 10,
+            params => '-n wpa_supplicant_repo',
+            no_gpg_check => 1);
+        zypper_call('in --from wicked_repo --force -y wpa_supplicant');
+        record_info('WPA_SUPPLICANT', script_output(q(rpm -qi wpa_supplicant)));
+    }
+
     if (is_sle()) {
         set_var('QA_HEAD_REPO', 'http://download.suse.de/ibs/QA:/Head/' . generate_version('-')) unless (get_var('QA_HEAD_REPO'));
         add_qa_head_repo();
