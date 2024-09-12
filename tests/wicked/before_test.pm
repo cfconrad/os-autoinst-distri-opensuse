@@ -23,6 +23,17 @@ use mm_network;
 use power_action_utils 'power_action';
 use Mojo::Util 'trim';
 
+sub install_extra_pkgs() {
+    return 0 unless (get_var('WICKED_EXTRA_PKG'));
+
+    my ($repo, @pkgs) = split(/\s+/, get_var('WICKED_EXTRA_PKG'));
+
+    zypper_ar($repo, priority => 10, params => '-n wicked_extra_repo', no_gpg_check => 1);
+    zypper_call("in --from wicked_extra_repo --allow-vendor-change --allow-downgrade --force -y @pkgs");
+    record_info('EXTRA PKG', script_output("rpm -qi @pkgs"));
+    return 1;
+}
+
 sub run {
     my ($self, $ctx) = @_;
     select_serial_terminal;
@@ -194,6 +205,7 @@ EOT
         $package_list .= ' libteam-tools libteamdctl0 ' if check_var('WICKED', 'advanced') || check_var('WICKED', 'aggregate') || check_var('WICKED', 'startandstop');
         $package_list .= ' gcc' if check_var('WICKED', 'advanced');
         zypper_call('-q in ' . $package_list, timeout => 400);
+        $need_reboot = 1 if (install_extra_pkgs());
         $self->reset_wicked();
         $self->reboot() if $need_reboot;
         record_info('ps', script_output(q(ps -aux)));
