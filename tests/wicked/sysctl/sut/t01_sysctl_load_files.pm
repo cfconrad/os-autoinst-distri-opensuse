@@ -9,7 +9,7 @@
 #
 # Maintainer: cfamullaconrad@suse.com
 
-use Mojo::Base 'wickedbase';
+use Mojo::Base 'wicked::sysctl';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use autotest ();

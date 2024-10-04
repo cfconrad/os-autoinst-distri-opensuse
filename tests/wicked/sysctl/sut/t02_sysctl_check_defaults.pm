@@ -22,9 +22,109 @@ sub run {
 
     return if $self->skip_by_wicked_version('>=0.6.68');
 
-    my $allow_diff = {'net.ipv4.conf.' . $ctx->iface() . '.arp_notify' => 1};
+    my $iface = $ctx->iface();
 
-    $self->run_compare_test($ctx, $allow_diff);
+    $self->run_compare_test($iface, "");
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv4.conf.default.accept_redirects=1
+net.ipv4.conf.all.accept_redirects=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv4.conf.all.accept_redirects=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv4.conf.lo.accept_redirects=1
+net.ipv4.conf.$iface.accept_redirects=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv4.conf.all.arp_notify=1
+net.ipv4.conf.default.arp_notify=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv4.conf.all.forwarding=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv4.conf.$iface.forwarding=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.all.disable_ipv6=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.lo.disable_ipv6=1
+net.ipv6.conf.$iface.disable_ipv6=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=0
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.accept_dad=1
+net.ipv6.conf.all.accept_dad=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.accept_dad=0
+net.ipv6.conf.$iface.accept_dad=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.accept_ra=1
+net.ipv6.conf.all.accept_ra=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.accept_ra=0
+net.ipv6.conf.$iface.accept_ra=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.accept_redirects=0
+net.ipv6.conf.all.accept_redirects=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.accept_redirects=0
+net.ipv6.conf.$iface.accept_redirects=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.addr_gen_mode=1
+net.ipv6.conf.$iface.addr_gen_mode=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.autoconf=0
+net.ipv6.conf.all.autoconf=0
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.forwarding=1
+net.ipv6.conf.all.forwarding=1
+EOT
+
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.$iface.forwarding=1
+EOT
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.default.use_tempaddr=1
+net.ipv6.conf.all.use_tempaddr=1
+EOT
+    $self->run_compare_test($iface, <<EOT);
+net.ipv6.conf.$iface.use_tempaddr=1
+EOT
+
 }
 
 1;

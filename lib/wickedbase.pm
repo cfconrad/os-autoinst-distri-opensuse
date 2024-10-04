@@ -1233,7 +1233,7 @@ sub reboot {
     my ($self) = @_;
     $self->check_logs();
     $self->{reboot_counter}++;
-
+    record_info('REBOOT ' . $self->{reboot_counter});
     $self->upload_wicked_logs('post_reboot' . $self->{reboot_counter});
 
     serial_terminal::reboot();
