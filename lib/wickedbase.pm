@@ -203,7 +203,7 @@ sub valgrind_cmd {
 
     valgrind_enable()
 
-Modify all systemd service units, to enable valgrind for all binarys which where 
+Modify all systemd service units, to enable valgrind for all binarys which where
 specified via WICKED_VALGRIND.
 
 =cut
@@ -694,7 +694,7 @@ sub upload_wicked_logs {
   do_barrier_create(<barrier_postfix> [, <test_name>] )
 
 Create a barier which can be later used to syncronize the wicked tests for SUT and REF.
-This function can be called statically. In this case the C<test_name> parameter is 
+This function can be called statically. In this case the C<test_name> parameter is
 mandatory.
 
 =cut
@@ -1232,6 +1232,10 @@ sub get_container {
 sub reboot {
     my ($self) = @_;
     $self->check_logs();
+    $self->{reboot_counter}++;
+
+    $self->upload_wicked_logs('post_reboot' . $self->{reboot_counter});
+
     serial_terminal::reboot();
     $self->check_logs();
 }
