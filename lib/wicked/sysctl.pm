@@ -101,7 +101,7 @@ EOT
 
     # Wicked set `ipv4.arp_notify = 1` by default.
     my $diff = get_diff($out_native, $out_wicked, 'native', 'wicked', $allow_diff);
-    die("Sysctl of native and wicked defaults are different!\n" . $diff . "\n") if $diff;
+    die("Sysctl of native and wicked defaults are different!\n\n" . $diff . "\n\n") if $diff;
 }
 
 1;
