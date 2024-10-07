@@ -1133,6 +1133,9 @@ sub check_logs {
             $self->result('fail') if get_var(WICKED_CHECK_LOG_FAIL => 0) && $self->{name} ne 'before_test';
         }
     }
+
+    # Reset log cursor, once we checked the logs
+    $self->{pre_run_log_cursor} = $self->get_log_cursor() if ($self->{pre_run_log_cursor});
 }
 
 sub coredumpctl_has_debug {
@@ -1232,12 +1235,14 @@ sub get_container {
 sub reboot {
     my ($self) = @_;
     $self->check_logs();
+
     $self->{reboot_counter}++;
     record_info('REBOOT ' . $self->{reboot_counter});
     $self->upload_wicked_logs('post_reboot' . $self->{reboot_counter});
 
     serial_terminal::reboot();
     $self->check_logs();
+    # Reset log cursor to not find same errors as we already got.
 }
 
 sub post_run {
