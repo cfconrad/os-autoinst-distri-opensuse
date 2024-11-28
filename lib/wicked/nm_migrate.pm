@@ -15,11 +15,12 @@ sub migrate
     record_info("xmlcfg", script_output('wicked show-config'));
 
     my $args = "";
-    $args .= "-e MIGRATE_WICKED_CONTINUE_MIGRATION=true " if get_var("WICKED_NM_MIGRATE_CONTINUE_ON_FAILURE");
+    $args .= "-e MIGRATE_WICKED_CONTINUE_MIGRATION=true "
+        if get_var("WICKED_NM_MIGRATE_CONTINUE_ON_FAILURE");
 
     assert_script_run(sprintf('%s run %s -v /etc/sysconfig/network:/etc/sysconfig/network "%s"', $self->container_runtime, $args, $self->container_image));
 
-    record_info("MIGRATED", script_output('for i in /etc/sysconfig/network/NM-migrated/*; do echo "### $i"; cat $i; echo ""; done;'));
+    record_info("MIGRATED", script_output('for i in /etc/sysconfig/network/NM-migrated/system-connections/*; do echo "### $i"; cat $i; echo ""; done;'));
 
     systemctl("enable --force NetworkManager");
 
@@ -29,6 +30,8 @@ sub migrate
 sub assert_nm_state
 {
     my ($self, %args) = @_;
+
+    systemctl('is-active NetworkManager');
 
     if ($args{ping_ip}) {
         $self->ping_with_timeout(ip => $args{ping_ip}, interface => $args{iface});
