@@ -27,6 +27,10 @@ use Mojo::Util 'trim';
 sub run {
     my ($self, $ctx) = @_;
     select_serial_terminal;
+
+    record_info(script_output('echo "HELLO WORLD"'));
+    return;
+
     my @ifaces = split(' ', iface(2));
     my $need_reboot = 0;
     die("Missing at least one interface") unless (@ifaces);

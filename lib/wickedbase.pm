@@ -26,6 +26,7 @@ use File::Basename;
 use version_utils 'check_version';
 use List::MoreUtils qw(uniq);
 use containers::common qw(install_podman_when_needed install_docker_when_needed);
+use Data::Dumper;
 
 
 use strict;
@@ -203,7 +204,7 @@ sub valgrind_cmd {
 
     valgrind_enable()
 
-Modify all systemd service units, to enable valgrind for all binarys which where 
+Modify all systemd service units, to enable valgrind for all binarys which where
 specified via WICKED_VALGRIND.
 
 =cut
@@ -694,7 +695,7 @@ sub upload_wicked_logs {
   do_barrier_create(<barrier_postfix> [, <test_name>] )
 
 Create a barier which can be later used to syncronize the wicked tests for SUT and REF.
-This function can be called statically. In this case the C<test_name> parameter is 
+This function can be called statically. In this case the C<test_name> parameter is
 mandatory.
 
 =cut
@@ -1264,7 +1265,9 @@ sub post_run {
 
 sub pre_run_hook {
     my ($self) = @_;
-    select_serial_terminal();
+    carp("CLEMIX: pre_run_hook() ENTER");
+    my $con = select_serial_terminal();
+    carp(Dumper($con));
     my $coninfo = '## START: ' . $self->{name};
     wait_serial(serial_term_prompt(), undef, 0, no_regex => 1);
     type_string($coninfo);
