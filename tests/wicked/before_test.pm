@@ -36,11 +36,11 @@ sub run {
     my $escaped = $enable_command_logging =~ s/'/'"'"'/gr;
     assert_script_run("echo '$escaped' >> /root/.bashrc");
     assert_script_run($enable_command_logging);
-    # image which we using for sle15 don't have firewall running.
-    # QAM need another way to figure out firewall state due to wider set of images
-    if (is_sle('<15') || (is_updates_tests() && !script_run('systemctl is-active -q ' . opensusebasetest::firewall))) {
-        systemctl("stop " . opensusebasetest::firewall);
-        systemctl("disable " . opensusebasetest::firewall);
+
+    # Disable firewall by default.
+    # Tests which need firewall, should explicit enable it
+    if (script_run('systemctl is-active -q ' . opensusebasetest::firewall) == 0) {
+        systemctl("disable --now " . opensusebasetest::firewall);
     }
     record_info('INFO', 'Setting debug level for wicked logs');
     file_content_replace('/etc/sysconfig/network/config', '--sed-modifier' => 'g', '^WICKED_DEBUG=.*' => 'WICKED_DEBUG="all"', '^WICKED_LOG_LEVEL=.*' => 'WICKED_LOG_LEVEL="debug2"');
@@ -181,13 +181,6 @@ EOT
             my $repo_url = 'http://download.suse.de/ibs/home:/wicked-maintainers:/openQA/';
             zypper_ar($repo_url . generate_version('_') . '/', name => 'wicked_maintainers', no_gpg_check => 1, priority => 60);
             $package_list .= ' ndisc6';
-        }
-        if (check_var('WICKED', 'startandstop')) {
-            # No firewalld on sles 12-SP5 (bsc#1180116)
-            if (!is_sle('<=12-SP5')) {
-                zypper_call('-q in firewalld', timeout => 400);
-                systemctl('disable --now firewalld');
-            }
         }
         wicked::wlan::prepare_packages() if (check_var('WICKED', 'wlan'));
 
