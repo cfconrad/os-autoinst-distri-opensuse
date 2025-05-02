@@ -36,12 +36,6 @@ sub run {
     my $escaped = $enable_command_logging =~ s/'/'"'"'/gr;
     assert_script_run("echo '$escaped' >> /root/.bashrc");
     assert_script_run($enable_command_logging);
-
-    # Disable firewall by default.
-    # Tests which need firewall, should explicit enable it
-    if (script_run('systemctl is-active -q ' . opensusebasetest::firewall) == 0) {
-        systemctl("disable --now " . opensusebasetest::firewall);
-    }
     record_info('INFO', 'Setting debug level for wicked logs');
     file_content_replace('/etc/sysconfig/network/config', '--sed-modifier' => 'g', '^WICKED_DEBUG=.*' => 'WICKED_DEBUG="all"', '^WICKED_LOG_LEVEL=.*' => 'WICKED_LOG_LEVEL="debug2"');
     assert_script_run('mkdir -p /etc/systemd/journald.conf.d/');
@@ -185,6 +179,7 @@ EOT
         wicked::wlan::prepare_packages() if (check_var('WICKED', 'wlan'));
 
         $package_list .= ' openvswitch iputils';
+        $package_list .= ' ' . opensusebasetest::firewall if (check_var('WICKED', 'startandstop'));
         $package_list .= ' libteam-tools libteamdctl0 ' if check_var('WICKED', 'advanced') || check_var('WICKED', 'aggregate') || check_var('WICKED', 'startandstop');
         $package_list .= ' gcc' if check_var('WICKED', 'advanced');
         zypper_call('-q in ' . $package_list, timeout => 400);
@@ -192,6 +187,12 @@ EOT
         $self->reboot() if $need_reboot;
         record_info('ps', script_output(q(ps -aux)));
         wicked::wlan::prepare_sut() if (check_var('WICKED', 'wlan'));
+    }
+
+    # Disable firewall by default.
+    # Tests which need firewall, should explicit enable it
+    if (script_run('systemctl is-active -q ' . opensusebasetest::firewall) == 0) {
+        systemctl("disable --now " . opensusebasetest::firewall);
     }
     record_info('PKG', script_output(q(rpm -qa 'wicked*' --qf '%{NAME}\n' | sort | uniq | xargs rpm -qi)));
 }
