@@ -154,12 +154,14 @@ sub post_fail_hook {
     foreach my $redis_version (@redis_versions) {
         upload_redis_logs(redis_version => $redis_version);
     }
+    record_info("HELLO", "WORLD post_fail_hook() " . time());
     $self->SUPER::post_fail_hook;
 }
 
 sub post_run_hook {
     my $self = shift;
     zypper_call('rm -u ' . $redis_versions[-1]);
+    record_info("HELLO", "WORLD post_run_hook() " . time());
     $self->SUPER::post_run_hook;
 }
 
