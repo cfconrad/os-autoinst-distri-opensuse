@@ -4,30 +4,36 @@
 nicA="${nicA:?Missing "nicA" parameter, this should be set to the first physical ethernet adapter (e.g. nicA=eth1)}"
 nicB="${nicB:?Missing "nicB" parameter, this should be set to the first physical ethernet adapter (e.g. nicB=eth2)}"
 ovsbrA=${ovsbrA:-ovsbrA}
-tapA=${tapA:-tap3}
+tapA=${tapA:-tapA}
 
 test_description()
 {
 	cat - <<-EOT
+	Create a ovs-bridge with wicked. Test if port changes are considered
+	correctly on ifreload.
 
-	Setup:
-	    $nicA|$nicB   -m->    $ovsbrA   <-l-    $ovsbrB
+	setup:
+	    $nicA|$nicB|$tapA  --m-->  $ovsbrA
 
 	EOT
 }
 
 set_ovsbridge_ports()
 {
-	local br=$1; shift
+	local br
+	local cnt
+	local ifc
+	br=$1; shift
+	cnt=0
 
-	if [ "XXX$*" == "XXX" ]; then
-		sed -i "/OVS_BRIDGE_PORT_DEVICE/d" "${dir}/ifcfg-$br"
-	else
-		if grep -qsw OVS_BRIDGE_PORT_DEVICE "${dir}/ifcfg-$br"; then
-			sed -i "/OVS_BRIDGE_PORT_DEVICE/cOVS_BRIDGE_PORT_DEVICE='$*'" "${dir}/ifcfg-$br"
-		else
-			echo "OVS_BRIDGE_PORT_DEVICE='$*'" >> "${dir}/ifcfg-$br"
-		fi
+	sed -i "/^OVS_BRIDGE_PORT_DEVICE/d" "${dir}/ifcfg-$br"
+
+	if [ "XXX$*" != "XXX" ]; then
+		for ifc in "$@"
+		do
+		    echo "OVS_BRIDGE_PORT_DEVICE_${cnt}='$ifc'" >> "${dir}/ifcfg-$br"
+		    ((cnt++))
+		done
 	fi
 
 	log_device_config "$br" "$@"
@@ -166,6 +172,24 @@ step6()
 	check_ovsbr_has_not_port "$ovsbrA" "$nicB"
 }
 
+step7()
+{
+	bold "=== $step: ifreload ${ovsbrA} { ${tapA} + $nicA + $nicB }"
+
+	set_ovsbridge_ports "$ovsbrA" "$nicA" "$nicB"
+
+	echo "wicked ifreload --dry-run $cfg all"
+	wicked ifreload --dry-run $cfg all
+	echo ""
+	echo "wicked ${wdebug} ifreload $cfg all"
+	wicked ${wdebug} ifreload $cfg all
+	echo ""
+
+	print_device_status "${ovsbrA}" "${nicB}" "$nicA" "${tapA}"
+	ovs-vsctl show
+
+	check_ovsbr_has_port "$ovsbrA" "$tapA" "$nicA" "$nicB"
+}
 
 step99()
 {

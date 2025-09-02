@@ -38,14 +38,33 @@ policy_delete()
 	return $rc
 }
 
+# Check if the given two version strings are $1 <= $2
+check_version_lte()
+{
+	printf '%s\n%s' "$1" "$2" | sort -C -V
+}
+
 device_exists()
 {
 	test -d "/sys/class/net/$1"
 }
+
 device_is_up()
 {
 	LC_ALL=POSIX ip link show dev "$1" 2>/dev/null | grep -qs "[<,]UP[,>]"
 }
+
+device_has_ip()
+{
+	LC_ALL=POSIX ip addr show dev "$1" 2>/dev/null | \
+	grep -Eqs "(inet|inet6) ${2}"
+}
+
+device_lladdr()
+{
+	cat "/sys/class/net/${1}/address" 2>/dev/null
+}
+
 device_create()
 {
 	local name="$1" ; shift
@@ -97,6 +116,77 @@ device_ifcfg_delete()
 	done
 }
 
+device_unbind()
+{
+    local name
+    local info_file
+
+    name=${1:?Missing interface name}
+    info_file="${test_output_dir}/bind_${name}.devinfo"
+
+    if ! device_exists $name; then
+        red "ERROR: unkown device in call of unbind()"
+        ((err++))
+        return 1
+    fi
+
+    if [ ! -d /sys/class/net/$name/device ]; then
+        red "ERROR: missing directory /sys/class/net/$name/device"
+        ((err++))
+        return 1
+    fi
+    DEVPATH=$(cd -P "/sys/class/net/$name/device" 2>/dev/null ; echo "$PWD")
+
+    if [ ! -d "$DEVPATH/driver" ]; then
+        red "ERROR: missing directory $DEVPATH/driver"
+        ((err++))
+        return 1
+    fi
+    DRVPATH=$(cd -P "$DEVPATH/driver" 2>/dev/null ; echo "$PWD")
+    DEVICE=${DEVPATH##*/}
+
+	echo "echo -n '$DEVICE' > '$DRVPATH/unbind'"
+    if ! echo -n "$DEVICE" > "$DRVPATH/unbind"; then
+        red "ERROR: failed to unbind $name"
+        ((err++))
+    fi
+
+    cat > $info_file <<-EOT
+		DEVICE='$DEVICE'
+		DEVPATH='$DEVPATH'
+		DRVPATH='$DRVPATH'
+EOT
+}
+
+device_bind()
+{
+    local name
+    local info_file
+
+    name=${1:?Missing interface name}
+    info_file="${test_output_dir}/bind_${name}.devinfo"
+
+    if [ ! -f "$info_file" ]; then
+        red "ERROR: Can't find devinfo for $name ($info_file)"
+        ((err++))
+    fi
+
+    . "$info_file"
+
+    echo "add > $DEVPATH/uevent"
+    if ! echo -n add > "$DEVPATH/uevent"; then
+        red "ERROR: faild to trigger add uevent for $name"
+        ((err++))
+    fi
+
+    if [ ! -d $DEVPATH/driver -a -d "$DRVPATH" ] ; then
+        echo "$DEVICE > $DRVPATH/bind"
+        if ! echo -n "$DEVICE" > $DRVPATH/bind; then
+            red "ERROR: faild to bind interface $name"
+        fi
+    fi
+}
+
 print_test_description()
 {
 	test_description;
@@ -109,6 +199,7 @@ log_device_config()
 	ifc=()
 	if [ "$1" == "all" ]; then
 		for dev in "$dir"/ifcfg-*; do
+			dev=$(basename $dev)
 			ifc+=("${dev:6}")
 		done
 	else
@@ -150,8 +241,10 @@ log_device_config()
 print_device_status()
 {
 	out="$test_output_dir/"
+	ofile="${out}status-${step}.txt"
+
 	mkdir -p "$out"
-   	{
+	{
 		echo "# wicked ifstatus $cfg ""$*"
 		wicked ifstatus $cfg "$@"
 		echo ""
@@ -161,15 +254,15 @@ print_device_status()
 				echo "# ip a s"
 				ip a s
 			else
-				echo "# ip a s dev $dev"
-				ip a s dev $dev
+				echo "# ip -d a s dev $dev"
+				ip -d a s dev $dev
 			fi
 		done
 		echo ""
-	} > "${out}status-${step}.txt"
+	} > "$ofile"
 
 	if [ "$verbose" == "yes" ]; then
-		cat "${out}status-${step}.txt"
+		cat "$ofile"
 	fi
 }
 
@@ -221,6 +314,35 @@ check_device_is_down()
 	fi
 }
 
+check_device_has_ip()
+{
+	if device_has_ip "$1" "$2" ; then
+		echo "WORKS: IP ${2} is assigned to $1"
+	else
+		red "ERROR: IP ${2} is NOT assigned to $1"
+		((err++))
+	fi
+}
+
+check_device_has_lladdr()
+{
+	local ifname="$1" ; shift
+	local lla arg
+
+	lla=$(device_lladdr "$ifname")
+	if test "X$lla" != "X" -a $# -ge 0 ; then
+		for arg in "$@" ; do
+			test "X$lla" != "X$arg" && continue
+
+			echo "WORKS: device $ifname has expected lladdr $lla"
+			return 0
+		done
+	fi
+	red "ERROR: device $ifname has different lladdr $lla (expect: $*)"
+	((err++))
+	return 1
+}
+
 check_device_has_port()
 {
 	local master=$1; shift
@@ -230,7 +352,7 @@ check_device_has_port()
 	start_time="$(date "+%s")"
 
 	for dev in "$@"; do
-		if ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
+		if ip a s dev $dev 2>/dev/null | grep -qs "master $master" ; then
 			count=$((count + 1))
 		fi
 	done
@@ -245,7 +367,7 @@ check_device_has_port()
 	while [ $(( $(date "+%s") - start_time )) -lt "$wait_for_ports" ]; do
 		missing=""
 		for dev in "$@"; do
-			if ! ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
+			if ! ip a s dev $dev 2>/dev/null | grep -qs "master $master" ; then
 				[ -z "$missing" ] || missing="$missing "
 				missing="$missing$dev"
 			fi
@@ -267,7 +389,7 @@ check_device_has_not_port()
 	local master=$1; shift
 
 	for dev in "$@"; do
-		if ip a s dev $dev 2>/dev/null | grep -qs "master .*$master" ; then
+		if ip a s dev $dev 2>/dev/null | grep -qs "master $master" ; then
 			red "ERROR: $dev is port of $master"
 			((err++))
 		else
@@ -364,7 +486,52 @@ check_vlan_id()
 	fi
 }
 
+check_ipvlantap()
+{
+	local type
+	local device
+	local mode
+	local flags
 
+	type=$1
+	device=$2
+	mode=$3
+	flags=$4
+
+	# Older versions of ip does not show the ipvlan flags in detailed mode (e.g. SLE12-SP5)
+	if check_version_lte "$(rpm -q --queryformat "%{VERSION}" iproute2)" "4.12";
+	then
+		if [ "$type" == "ipvtap" ];
+		then
+			show_check="ipvtap"
+			regex="\s+${type}\s+"
+		else
+			show_check="$mode"
+			regex="\s+${type}\s+mode\s+${mode}\s+"
+		fi
+	else
+		show_check="$mode $flags"
+		regex="\s+${type}\s+mode\s+${mode}\s+${flags}\s+"
+	fi
+
+	if ip -d a s dev "$device" | grep -Po "$regex" > /dev/null
+	then
+		echo "WORKS: $device ${type^^} config is $show_check"
+	else
+		red "ERROR: $device ${type^^} config doesn't match $show_check"
+		((err++))
+	fi
+}
+
+check_ipvlan()
+{
+	check_ipvlantap ipvlan "$1" "$2" "$3"
+}
+
+check_ipvtap()
+{
+	check_ipvlantap ipvtap "$1" "$2" "$3"
+}
 
 color() {
     local NC
