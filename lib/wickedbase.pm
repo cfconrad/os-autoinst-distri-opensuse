@@ -295,13 +295,8 @@ sub reset_wicked {
     assert_script_run("netconfig -f update");
 
     # Restart services
-    if (is_sle("<16")) {
-        assert_script_run('rcwickedd restart');
-        assert_script_run('rcwicked restart');
-    } else {
-        assert_script_run('systemctl restart wickedd');
-        assert_script_run('systemctl restart wicked');
-    }
+    systemctl('restart wickedd');
+    systemctl('restart wicked');
 }
 
 
