@@ -42,7 +42,7 @@ sub setup_apache2 {
     push @packages, get_var('APACHE2_PKG', "apache2");
 
     # For gensslcert
-    push @packages, 'apache2-utils', 'openssl' if (is_tumbleweed || is_jeos);
+    push @packages, 'apache2-utils', 'openssl' if (is_tumbleweed || is_jeos || is_sle('>=16'));
 
     if (($mode eq "NSS") && get_var("FIPS")) {
         $mode = "NSSFIPS";
@@ -144,7 +144,11 @@ sub setup_apache2 {
 "expect -c 'spawn systemctl start apache2; expect \"Enter SSL pass phrase for NSS FIPS 140-2 Certificate DB (NSS)\"; send \"$nsspasswd\\n\"; interact'";
     }
     else {
-        systemctl 'start apache2';
+        if (systemctl 'start apache2', ignore_failure => 1) {
+            record_info('poo#179678', 'Job for apache2.service may fail because start of the service was attempted too often');
+            sleep 5;
+            systemctl 'start apache2';
+        }
     }
     systemctl 'is-active apache2';
 

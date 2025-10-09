@@ -1,32 +1,38 @@
 terraform {
   required_providers {
     google = {
-      version = "= 4.57.0"
+      version = "= 6.36.1"
       source  = "hashicorp/google"
     }
     random = {
-      version = "= 3.1.0"
+      version = "= 3.7.2"
       source  = "hashicorp/random"
     }
     external = {
-      version = "= 2.1.0"
+      version = "= 2.3.5"
       source  = "hashicorp/external"
     }
   }
 }
 
-variable "cred_file" {
-  default = "/root/google_credentials.json"
-}
-
 provider "google" {
   credentials = var.cred_file
   project     = var.project
+  region      = var.region #sets global default region for all resources
+  zone        = local.zone #sets the global default zone for all zonal resources
 }
 
 data "external" "gce_cred" {
   program = ["cat", var.cred_file]
   query   = {}
+}
+
+locals {
+  zone = "${var.region}-${var.availability_zone}"
+}
+
+variable "cred_file" {
+  default = "/root/google_credentials.json"
 }
 
 variable "instance_count" {
@@ -41,8 +47,15 @@ variable "type" {
   default = "n1-standard-2"
 }
 
+# https://cloud.google.com/compute/docs/regions-zones
 variable "region" {
-  default = "europe-west1-b"
+  description = "The region where the objects will be deployed to."
+  default     = "europe-west1"
+}
+
+variable "availability_zone" {
+  description = "The availability zone of the specified region. Used by zone-specific resources like DBs and disks."
+  default     = "b"
 }
 
 variable "image_id" {
@@ -51,6 +64,10 @@ variable "image_id" {
 
 variable "project" {
   default = "suse-sle-qa"
+}
+
+variable "root-disk-size" {
+  default = 20
 }
 
 variable "extra-disk-size" {
@@ -96,6 +113,11 @@ variable "stack_type" {
   default = "IPV4_ONLY"
 }
 
+variable "nic_type" {
+  type    = string
+  default = null
+}
+
 
 resource "random_id" "service" {
   count = var.instance_count
@@ -107,9 +129,8 @@ resource "random_id" "service" {
 
 resource "google_compute_instance" "openqa" {
   count        = var.instance_count
-  name         = "${var.name}-${element(random_id.service.*.hex, count.index)}"
+  name         = "${var.name}-${element(random_id.service[*].hex, count.index)}"
   machine_type = var.type
-  zone         = var.region
 
   guest_accelerator {
     type  = "nvidia-tesla-t4"
@@ -121,29 +142,35 @@ resource "google_compute_instance" "openqa" {
   }
 
   boot_disk {
-    device_name = "${var.name}-${element(random_id.service.*.hex, count.index)}"
+    device_name = "${var.name}-${element(random_id.service[*].hex, count.index)}"
     initialize_params {
       image = var.image_id
-      size  = 20
+      size  = var.root-disk-size
     }
   }
 
-  scheduling {
-    on_host_maintenance = "TERMINATE"
+  # some instance types requires this parameter others fails with it so we need to use it based on instance type
+  # NOTE: currently list contains instance types which does NOT need this parameter
+  dynamic "scheduling" {
+    for_each = contains(["e2-medium"], var.type) ? [] : [1]
+    content {
+      on_host_maintenance = "TERMINATE"
+    }
   }
 
   metadata = merge({
-    sshKeys             = "susetest:${file("${var.ssh_public_key}")}"
+    sshKeys             = "susetest:${file(var.ssh_public_key)}"
     openqa_created_by   = var.name
     openqa_created_date = timestamp()
-    openqa_created_id   = element(random_id.service.*.hex, count.index)
+    openqa_created_id   = element(random_id.service[*].hex, count.index)
   }, var.tags)
 
   network_interface {
-    network    = "tf-network"
-    subnetwork = "tf-subnetwork"
+    network      = "tf-network"
+    subnetwork   = "tf-subnetwork"
+    stack_type   = var.stack_type
+    nic_type     = var.nic_type
     access_config {}
-    stack_type = var.stack_type
   }
   can_ip_forward = true
 
@@ -168,31 +195,42 @@ resource "google_compute_instance" "openqa" {
 
 resource "google_compute_attached_disk" "default" {
   count    = var.create-extra-disk ? var.instance_count : 0
-  disk     = element(google_compute_disk.default.*.self_link, count.index)
-  instance = element(google_compute_instance.openqa.*.self_link, count.index)
+  disk     = element(google_compute_disk.default[*].self_link, count.index)
+  instance = element(google_compute_instance.openqa[*].self_link, count.index)
 }
 
 resource "google_compute_disk" "default" {
-  name                      = "ssd-disk-${element(random_id.service.*.hex, count.index)}"
+  name                      = "ssd-disk-${element(random_id.service[*].hex, count.index)}"
   count                     = var.create-extra-disk ? var.instance_count : 0
   type                      = var.extra-disk-type
-  zone                      = var.region
   size                      = var.extra-disk-size
   physical_block_size_bytes = 4096
   labels = {
     openqa_created_by = var.name
-    openqa_created_id = element(random_id.service.*.hex, count.index)
+    openqa_created_id = element(random_id.service[*].hex, count.index)
   }
 }
 
 output "public_ip" {
-  value = google_compute_instance.openqa.*.network_interface.0.access_config.0.nat_ip
+  value = google_compute_instance.openqa[*].network_interface[0].access_config[0].nat_ip
 }
 
 output "vm_name" {
-  value = google_compute_instance.openqa.*.name
+  value = google_compute_instance.openqa[*].name
 }
 
 output "confidential_instance_config" {
-  value = google_compute_instance.openqa.*.confidential_instance_config
+  value = google_compute_instance.openqa[*].confidential_instance_config
+}
+
+output "project" {
+  value = var.project
+}
+
+output "region" {
+  value = var.region
+}
+
+output "availability_zone" {
+  value = var.availability_zone
 }

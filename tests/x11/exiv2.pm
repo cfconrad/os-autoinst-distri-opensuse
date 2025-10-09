@@ -13,8 +13,6 @@
 # Maintainer: João Walter Bruno Filho <bfilho@suse.com>
 
 use base "opensusebasetest";
-use strict;
-use warnings;
 use testapi;
 use utils;
 
@@ -78,7 +76,7 @@ sub run {
     #prepare
     become_root;
     quit_packagekit;
-    zypper_call "in exiv2";
+    zypper_call "in exiv2 eog";
 
     #Get assets to local directory
     assert_script_run "wget --quiet " . data_url('exiv2/test.jpg') . " -O test.jpg";

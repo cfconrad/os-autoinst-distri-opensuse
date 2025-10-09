@@ -11,6 +11,7 @@ use base 'opensusebasetest';
 use testapi qw(is_serial_terminal :DEFAULT);
 use utils;
 use version_utils;
+use package_utils;
 use strict;
 use warnings;
 
@@ -50,8 +51,12 @@ sub prepare_test_data {
         zypper_call("in psmisc -busybox-psmisc");
     }
 
+    # on Micro, the 'expect' package is in the IBS QA:Head repo
+    zypper_ar(get_required_var('QA_HEAD_REPO'), name => 'qa_head', no_gpg_check => 1) if is_transactional();
+
     # Install software needed for this test module
-    zypper_call("in netcat-openbsd expect psmisc");
+    install_package("netcat-openbsd expect psmisc", trup_reboot => 1);
+
 }
 
 sub configure_service {
@@ -87,7 +92,7 @@ sub ssh_basic_check {
 
     # Check that we are really in the SSH session
     assert_script_run 'echo $SSH_TTY | grep "\/dev\/pts\/"';
-    assert_script_run 'ps ux | grep -E ".* \? .* sshd\:"';
+    assert_script_run 'ps ux | grep -E ".* \? .* sshd(-session)?\:"';
     assert_script_run "whoami | grep $ssh_testman";
     assert_script_run "mkdir .ssh";
 

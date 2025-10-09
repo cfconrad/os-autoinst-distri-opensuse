@@ -5,7 +5,7 @@
 
 # Summary: Base class for public cloud instances
 #
-# Maintainer: qa-c@suse.de
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::instance;
 use testapi;
@@ -34,7 +34,7 @@ has image_id => undef;    # image from where the VM is booted
 has type => undef;
 has region => undef;    # provider region, filled by provider::terraform_apply
 has provider => undef, weak => 1;    # back reference to the provider
-has ssh_opts => '-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=ERROR';
+has ssh_opts => '';
 
 =head2 run_ssh_command
 
@@ -58,13 +58,17 @@ sub run_ssh_command {
     my $self = shift;
     my %args = testapi::compat_args({cmd => undef}, ['cmd'], @_);
     die('Argument <cmd> missing') unless ($args{cmd});
-    $args{ssh_opts} //= $self->ssh_opts() . " -i '" . $self->provider->ssh_key . "'";
+    $args{ssh_opts} //= $self->ssh_opts();
     $args{username} //= $self->username();
     $args{timeout} //= SSH_TIMEOUT;
     $args{quiet} //= 1;
     $args{no_quote} //= 0;
     my $rc_only = $args{rc_only} // 0;
     my $timeout = $args{timeout};
+    # Increase the hard timeout for script_run and script_output,
+    # otherwise possible error from 'timeout $args{timeout} ...'
+    # is not correctly processed, expecially in conjunction with proceed_on_failure
+    $args{timeout} += 20 unless ($args{timeout} == 0);
 
     my $cmd = $args{cmd};
     unless ($args{no_quote}) {
@@ -86,10 +90,7 @@ sub run_ssh_command {
         script_run($ssh_cmd, %args);
     }
     elsif ($rc_only) {
-        # Increase the hard timeout for script_run, otherwise our 'timeout $args{timeout} ...' has no effect
-        $args{timeout} += 2;
         $args{quiet} = 0;
-        $args{die_on_timeout} = 1;
         # Run the command and return only the returncode here
         return script_run($ssh_cmd, %args);
     }
@@ -137,7 +138,7 @@ sub retry_ssh_command {
 sub _prepare_ssh_cmd {
     my ($self, %args) = @_;
     die('No command defined') unless ($args{cmd});
-    $args{ssh_opts} //= $self->ssh_opts() . " -i '" . $self->provider->ssh_key . "'";
+    $args{ssh_opts} //= $self->ssh_opts();
     $args{username} //= $self->username();
     $args{timeout} //= SSH_TIMEOUT;
 
@@ -147,7 +148,9 @@ sub _prepare_ssh_cmd {
         $cmd = "\$'$cmd'";
     }
 
-    my $ssh_cmd = sprintf('ssh -tvE /var/tmp/ssh_sut.log %s "%s@%s" -- %s', $args{ssh_opts}, $args{username}, $self->public_ip, $cmd);
+    my $log = '/var/tmp/ssh_sut.log';
+    my $ssh_cmd = sprintf('ssh %s %s "%s@%s" -- %s', (($args{ssh_opts} !~ m{-E\s+$log}) ? "-E $log" : ''), $args{ssh_opts}, $args{username}, $self->public_ip, $cmd);
+
     return $ssh_cmd;
 }
 
@@ -241,7 +244,11 @@ sub scp {
     $from =~ s/^remote:/$url/;
     $to =~ s/^remote:/$url/;
 
-    my $ssh_cmd = sprintf('scp %s -i "%s" "%s" "%s"', $self->ssh_opts, $self->provider->ssh_key, $from, $to);
+    # Sanitize ssh_opts by removing -E options which are not accepted by 'scp'
+    my $ssh_opts = $self->ssh_opts;
+    $ssh_opts =~ s/\-E\s[^\s]+//g;
+
+    my $ssh_cmd = sprintf('scp %s "%s" "%s"', $ssh_opts, $from, $to);
 
     return script_run($ssh_cmd, %args);
 }
@@ -256,10 +263,9 @@ If the file doesn't exists on the instance, B<no> error is thrown.
 
 sub upload_log {
     my ($self, $remote_file, %args) = @_;
-
-    my $tmpdir = script_output('mktemp -d');
+    my $tmpdir = script_output_retry('mktemp -d');
     my $dest = $tmpdir . '/' . basename($remote_file);
-    my $ret = $self->scp('remote:' . $remote_file, $dest);
+    my $ret = $self->scp('remote:' . $remote_file, $dest, %args);
     upload_logs($dest, %args) if (defined($ret) && $ret == 0);
     assert_script_run("test -d '$tmpdir' && rm -rf '$tmpdir'");
 }
@@ -300,7 +306,6 @@ a soft-failure will be recorded.
 If guestregister will not finish within C<timeout> seconds, job dies.
 In case of BYOS images we checking that service is inactive and quit
 Returns the time needed to wait for the guestregister to complete.
-C<wait_for_guestregister> is called inside C<create_instance()>, enabled by C<check_guestregister>
 =cut
 
 sub wait_for_guestregister {
@@ -313,23 +318,27 @@ sub wait_for_guestregister {
 
     # Check what version of registercloudguest binary we use
     $self->run_ssh_command(cmd => "rpm -qa cloud-regionsrv-client", proceed_on_failure => 1);
-    record_info('CHECK', 'guestregister check');
+    record_info('CHECK guestregister', 'guestregister check');
     while (time() - $start_time < $args{timeout}) {
         my $out = $self->run_ssh_command(cmd => 'sudo systemctl is-active guestregister', proceed_on_failure => 1, quiet => 1);
         # guestregister is expected to be inactive because it runs only once
         # the tests match the expected string at end of the cmd output
         if ($out =~ m/inactive$/) {
+            diag("guestregister inactive");
             $self->upload_log($log, log_name => $name);
-            return time() - $start_time;
+            return 1;
         }
         elsif ($out =~ m/failed$/) {
-            $self->upload_log($log, log_name => $name);
-            $out = $self->run_ssh_command(cmd => 'sudo systemctl status guestregister', quiet => 1);
-            return time() - $start_time;
+            diag("guestregister failed");
+            # we have some cases where it is known that guestregister service will fail
+            # ( e.g. when we testing images not published on Market hence w/o product codes)
+            return 1 if (get_var('PUBLIC_CLOUD_IGNORE_GUESTREGISTER_FAILURE'));
+            die('guestregister failed');
         }
         elsif ($out =~ m/active$/) {
-            $self->upload_log($log, log_name => $name);
+            diag("guestregister active");
             die "guestregister should not be active on BYOS" if (is_byos);
+            $self->upload_log($log, log_name => $name);
         }
 
         if (time() - $last_info > 10) {
@@ -338,14 +347,43 @@ sub wait_for_guestregister {
         }
         sleep 1;
     }
-
-    $self->upload_log($log, log_name => $name);
+    diag("guestregister timeout");
     die('guestregister didn\'t end in expected timeout=' . $args{timeout});
+}
+
+=head2 update_instance_ip
+
+    update_instance_ip(timeout => 600)
+
+This subroutine checks the public IP cloud provider provides for the VM.
+When the IP differs from `$self->public_ip` we update `$self->public_ip`.
+
+=cut
+
+sub update_instance_ip {
+    my $self = shift;
+    my $timeout = 300;
+    my $delay = 5;
+
+    return if (get_var('PUBLIC_CLOUD_SLES4SAP'));
+
+    my $start_time = time();
+    my $public_ip_from_provider = $self->provider->get_public_ip();
+    until ($public_ip_from_provider !~ /null/ || (time() - $start_time) >= $timeout) {
+        sleep($delay);
+        $public_ip_from_provider = $self->provider->get_public_ip();
+    }
+
+    # Update the public IP address if it differs
+    if ($self->public_ip ne $public_ip_from_provider and $public_ip_from_provider !~ /null/) {
+        record_info('IP CHANGED', "The address we know is $self->{public_ip} but provider returns $public_ip_from_provider", result => 'fail');
+        $self->public_ip($public_ip_from_provider);
+    }
 }
 
 =head2 wait_for_ssh
 
-    wait_for_ssh([timeout => 600] [, proceed_on_failure => 0] [, ...])
+    wait_for_ssh([timeout => 600] [, proceed_on_failure => 0] [, scan_ssh_host_key => 0] [, ...])
 
 When a remote pc instance starting, by default wait_stop param.=0(false) and 
 this routine checks until the SSH port of the remote instance is reachable and open. 
@@ -359,8 +397,12 @@ Parameters:
  timeout => total wait timeout; default: 600.
  wait_stop => If true waits for ssh port to become unreachable, if false waits for ssh reachable; default: false.
  proceed_on_failure => in case of fail, if false exit test with error, if true let calling code to continue; default: wait_stop.
+ scan_ssh_host_key => If true we will rescan the SSH host key
+                      This will be true when:
+                       * SUT changes it's public IP address
+                       * SUT regenerates it's SSH host keys
+                         (e.g. when cloud-init state is cleared)
  username => default: username().
- public_ip => default: public_ip().
  systemup_check => If true, checks if the system is up too, instead of just checking the ssh port; default: !wait_stop.
  logs => If true, upload journal to test logs, if false log not uploaded, to speed up check; default: true.
 
@@ -374,10 +416,10 @@ sub wait_for_ssh {
     # Input parameters, see description in above head2 - Parameters section:
     $args{timeout} = get_var('PUBLIC_CLOUD_SSH_TIMEOUT', $args{timeout} // 600);
     $args{wait_stop} //= 0;
+    $args{scan_ssh_host_key} //= 0;
     $args{proceed_on_failure} //= $args{wait_stop};
     $args{systemup_check} //= not $args{wait_stop};
     $args{logs} //= 1;
-    $args{public_ip} //= $self->public_ip();
     # DMS migration (tests/publiccloud/migration.pm) is running under user "migration"
     # until it is not over we will receive "ssh permission denied (pubkey)" error
     # but it is not good reason to die early because after it will be over
@@ -391,9 +433,10 @@ sub wait_for_ssh {
 
     # Looping until SSH port 22 is reachable or timeout.
     while (($duration = time() - $start_time) < $args{timeout}) {
-        $exit_code = script_run('nc -vz -w 1 ' . $self->{public_ip} . ' 22', quiet => 1);
+        $exit_code = script_run('nc -vz -w 1 ' . $self->public_ip . ' 22', quiet => 1);
         last if (isok($exit_code) and not $args{wait_stop});    # ssh port open ok
         last if (not isok($exit_code) and $args{wait_stop});    # ssh port closed ok
+
         sleep $delay;
     }    # endloop
 
@@ -406,44 +449,75 @@ sub wait_for_ssh {
         $sshout .= "as expected by stopping: OK.\n" if $args{wait_stop};
     }    # endif
 
-    # check also remote system is up and running:
+    # Check also remote system is up and running:
     my $retry = 0;    # count retries of unexpected sysout
-    if ($args{systemup_check} and isok($exit_code)) {
-        # Install server's ssh publicckeys to prevent authentication interactions
-        # or instance address changes during VM reboots.
-        script_run("ssh-keyscan $args{public_ip} | tee -a ~/.ssh/known_hosts");
-        while (($duration = time() - $start_time) < $args{timeout}) {
-            # timeout recalculated removing consumed time until now
-            $sysout = $self->ssh_script_output(cmd => 'sudo systemctl is-system-running',
-                timeout => $args{timeout} - $duration, proceed_on_failure => 1, username => $args{username});
-            # result check
-            if ($sysout =~ m/initializing|starting/) {    # still starting
-                $exit_code = undef;
-            }
-            elsif ($sysout =~ m/running/) {    # startup OK
-                $exit_code = 0;
-                $sysout .= "\nSystem successfully booted";
-                last;
-            }
-            elsif ($sysout =~ m/degraded/) {    # up but with failed services to collect
-                $exit_code = 0;
-                $sysout .= "\nSystem booted, but some services failed:\n" .
-                  $self->ssh_script_output(cmd => 'sudo systemctl --failed',
-                    proceed_on_failure => 1, username => $args{username});
-                last;
-            }
-            elsif ($sysout =~ m/maintenance|stopping|offline|unknown/) {
-                $exit_code = 1;
-                $sysout .= "\nCan not reach systemd target";
-                last;
-            }
-            else {    # other outcome or connection refused: retry/reloop
-                $exit_code = 2;
-                ++$retry;
-            }    # endif
-            sleep $delay;
-        }    # end loop
+    if (isok($exit_code)) {
+        if ($args{systemup_check}) {
+            # SSH host key is not checked and master socket is not used
+            my $ssh_opts = $self->ssh_opts() . ' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ControlPath=none -o ConnectTimeout=10';
+            while (($duration = time() - $start_time) < $args{timeout}) {
+                # timeout recalculated removing consumed time until now
+                # We don't support password authentication so it would just block the terminal
+                $sysout = $self->ssh_script_output(cmd => 'sudo systemctl is-system-running', ssh_opts => $ssh_opts,
+                    timeout => $args{timeout} - $duration, proceed_on_failure => 1, username => $args{username});
+                # result check
+                if ($sysout =~ m/initializing|starting/) {    # still starting
+                    $exit_code = undef;
+                }
+                elsif ($sysout =~ m/running/) {    # startup OK
+                    $exit_code = 0;
+                    $sysout .= "\nSystem successfully booted";
+                    last;
+                }
+                elsif ($sysout =~ m/degraded/) {    # up but with failed services to collect
+                    $exit_code = 0;
+                    $sysout .= "\nSystem booted, but some services failed:\n" .
+                      $self->ssh_script_output(cmd => 'sudo systemctl --failed', ssh_opts => $ssh_opts,
+                        proceed_on_failure => 1, username => $args{username});
+                    last;
+                }
+                elsif ($sysout =~ m/maintenance|stopping|offline|unknown/) {
+                    $exit_code = 1;
+                    $sysout .= "\nCan not reach systemd target";
+                    last;
+                }
+                else {    # other outcome or connection refused: retry/reloop
+                    $exit_code = 2;
+                    ++$retry;
+                }    # endif
+                sleep $delay;
+            }    # end loop
+        }    # endif
 
+        if ($args{scan_ssh_host_key}) {
+            record_info('RESCAN', 'Rescanning SSH host key');
+            # remove username/known_host when missing
+            my $known_hosts_2 = (script_run("test -f /home/$testapi::username/.ssh/known_hosts") eq 0)
+              ? "/home/$testapi::username/.ssh/known_hosts" : "";
+            # Install server's ssh publicckeys to prevent authentication interactions
+            # or instance address changes during VM reboots.
+            script_run("ssh-keyscan $self->{public_ip} | tee ~/.ssh/known_hosts $known_hosts_2");
+        }
+
+        my $exit_ssh;
+        # Finally make sure that SSH works
+        while (($duration = time() - $start_time) < $args{timeout}) {
+            # After the instance is resumed from hibernation the SSH can freeze
+            my $ssh_opts = $self->ssh_opts() . ' -o ControlPath=none -o ConnectTimeout=10';
+            $exit_ssh = $self->ssh_script_run(cmd => "true", ssh_opts => $ssh_opts, username => $args{username}, timeout => $args{timeout} - $duration, proceed_on_failure => 1);
+            last if isok($exit_ssh);
+            sleep $delay;
+        }
+
+        # Merge exit results
+        $exit_code = $exit_ssh || $exit_code;
+        # Add debugging info on error:
+        unless (isok($exit_code)) {
+            # validate sshd_config configuration file and verbose ssh debugging
+            my $debug = script_output("ssh " . $self->ssh_opts() . " " . $args{username} . "@" . $self->{public_ip} . " -- 'sudo sshd -t && echo sshd OK || echo sshd config error'", timeout => 90, proceed_on_failure => 1) . "\n";
+            $debug .= script_output("ssh -vvv" . $self->ssh_opts() . " " . $args{username} . "@" . $self->{public_ip} . " -- 'ls -lR /etc/ssh'", timeout => 90, proceed_on_failure => 1) . "\n";
+            record_info('SSH CHECK', "Check ssh on error\n" . $debug, result => 'fail');
+        }
         # Log upload
         if (!get_var('PUBLIC_CLOUD_SLES4SAP') and $args{logs}) {
             #Exclude 'mr_test/saptune' test case as it will introduce random softreboot failures.
@@ -459,9 +533,11 @@ sub wait_for_ssh {
       ", $instance_msg, Duration: $duration sec.\nResult: $sshout";
     $instance_msg .= $sysout if defined($sysout);
     $instance_msg .= "\nRetries on failure: $retry" if ($retry);
-    record_info("WAIT CHECK", $instance_msg);
+    # $sysout is not available if $args{systemup_check} is 0
+    record_info("WAIT CHECK:" . isok($exit_code), $instance_msg, result => (defined($sysout) && $sysout =~ m/\sfailed\s/) ? "fail" : "ok");
+
     # OK
-    return $duration if (isok($exit_code) and not $args{wait_stop});
+    return $duration if (!$exit_code && !$args{wait_stop} || $exit_code && $args{wait_stop});
     # FAIL
     croak(" results summary:\n" . $sshout . $sysout) unless ($args{proceed_on_failure});
     return;    # proceed_on_failure true
@@ -486,7 +562,7 @@ sub isok {
 
 =head2 softreboot
 
-    ($shutdown_time, $bootup_time) = softreboot([timeout => 600]);
+    ($shutdown_time, $bootup_time) = softreboot([timeout => 600] [, scan_ssh_host_key => ?]);
 
 Does a softreboot of the instance by running the command C<shutdown -r>.
 Return an array of two values, first one is the time till the instance isn't
@@ -496,6 +572,7 @@ reachable anymore. The second one is the estimated bootup time.
 sub softreboot {
     my ($self, %args) = @_;
     $args{timeout} //= 600;
+    $args{scan_ssh_host_key} //= 0;
     $args{username} //= $self->username();
     # see detailed explanation inside wait_for_ssh
 
@@ -514,6 +591,9 @@ sub softreboot {
         }
     }
 
+    # Let's go to host console (where we have the provider specific environment variables)
+    select_host_console();
+
     $self->ssh_assert_script_run(cmd => 'sudo /sbin/shutdown -r +1');
     sleep 60;    # wait for the +1 in the previous command
     my $start_time = time();
@@ -521,12 +601,14 @@ sub softreboot {
     # wait till ssh disappear
     my $out = $self->wait_for_ssh(timeout => $args{timeout}, wait_stop => 1, username => $args{username});
     # ok ssh port closed
-    record_info("Shutdown failed", "WARNING: while stopping the system, ssh port still open after timeout,\nreporting: $out")
-      if (defined $out);    # not ok port still open
+    record_info("Shutdown failed", "WARNING: while stopping the system, ssh port still open after timeout,\nreporting: $out", result => 'fail')
+      unless (defined $out);    # not ok port still open
 
     my $shutdown_time = time() - $start_time;
     die("Waiting for system down failed!") unless ($shutdown_time < $args{timeout});
-    my $bootup_time = $self->wait_for_ssh(timeout => $args{timeout} - $shutdown_time, username => $args{username});
+
+    $self->update_instance_ip();
+    my $bootup_time = $self->wait_for_ssh(timeout => $args{timeout} - $shutdown_time, username => $args{username}, scan_ssh_host_key => $args{scan_ssh_host_key});
 
     # ensure the tunnel-console is healthy, usefuly to early detect possible issues with the serial terminal
     assert_script_run("true", fail_message => "console is broken");
@@ -557,7 +639,7 @@ sub stop {
 
 =head2 start
 
-    start([timeout => ?]);
+    start([timeout => ?] [, scan_ssh_host_key => ?]);
 
 Start the instance and wait for the system to be up.
 Returns the number of seconds till the system up and running.
@@ -566,8 +648,10 @@ Returns the number of seconds till the system up and running.
 sub start {
     my ($self, %args) = @_;
     $args{timeout} //= 600;
+    $args{scan_ssh_host_key} //= 0;
     $self->provider->start_instance($self, @_);
-    return $self->wait_for_ssh(timeout => $args{timeout});
+    $self->update_instance_ip();
+    return $self->wait_for_ssh(timeout => $args{timeout}, scan_ssh_host_key => $args{scan_ssh_host_key});
 }
 
 =head2 get_state
@@ -591,15 +675,66 @@ Test the network speed.
 
 sub network_speed_test() {
     my ($self, %args) = @_;
+    my ($cmd, $ret);
+
     # Curl stats output format
     my $write_out
       = 'time_namelookup:\t%{time_namelookup} s\ntime_connect:\t\t%{time_connect} s\ntime_appconnect:\t%{time_appconnect} s\ntime_pretransfer:\t%{time_pretransfer} s\ntime_redirect:\t\t%{time_redirect} s\ntime_starttransfer:\t%{time_starttransfer} s\ntime_total:\t\t%{time_total} s\n';
     # PC RMT server domain name
     my $rmt_host = "smt-" . lc(get_required_var('PUBLIC_CLOUD_PROVIDER')) . ".susecloud.net";
-    my $rmt = $self->run_ssh_command(cmd => "grep \"$rmt_host\" /etc/hosts", proceed_on_failure => 1);
-    record_info("rmt_host", $rmt);
-    record_info("ping 1.1.1.1", $self->run_ssh_command(cmd => "ping -c30 1.1.1.1", proceed_on_failure => 1, timeout => 600));
-    record_info("curl $rmt_host", $self->run_ssh_command(cmd => "curl -w '$write_out' -o /dev/null -v https://$rmt_host/", proceed_on_failure => 1));
+
+    $cmd = "grep \"$rmt_host\" /etc/hosts";
+    $ret = $self->run_ssh_command(cmd => $cmd, proceed_on_failure => 1);
+    record_info("RMT_HOST", printf('$ %s\n%s', $cmd, $ret));
+
+    $cmd = "ping -c3 1.1.1.1";
+    $ret = $self->run_ssh_command(cmd => $cmd, proceed_on_failure => 1);
+    record_info("PING", printf('$ %s\n%s', $cmd, $ret));
+
+    $cmd = "curl -w '$write_out' -o /dev/null -v https://$rmt_host/";
+    $ret = $self->run_ssh_command(cmd => $cmd, proceed_on_failure => 1);
+    record_info("CURL", printf('$ %s\n%s', $cmd, $ret));
+}
+
+sub cleanup_cloudinit() {
+    my ($self) = @_;
+    $self->ssh_assert_script_run('sudo cloud-init clean --logs');
+    if (get_var('PUBLIC_CLOUD_CLOUD_INIT')) {
+        $self->ssh_assert_script_run('sudo rm /root/test_cloud-init.txt');
+        $self->ssh_assert_script_run('sudo zypper -n rm ed');
+    }
+}
+
+sub check_cloudinit() {
+    my ($self) = @_;
+
+    # cloud-init status
+    $self->ssh_script_retry(cmd => "sudo cloud-init status", timeout => 90, retry => 12, delay => 15);
+    $self->ssh_script_retry(cmd => "sudo cloud-init status --long", timeout => 90, retry => 12, delay => 15);
+
+    # cloud-id
+    my $cloud_id = (is_azure) ? 'azure' : 'aws';
+    $self->ssh_assert_script_run(cmd => "sudo cloud-id | grep '^$cloud_id\$'");
+
+    # cloud-init collect-logs
+    $self->ssh_assert_script_run('sudo cloud-init collect-logs');
+    $self->upload_log('~/cloud-init.tar.gz', failok => 1);
+
+    if (get_var('PUBLIC_CLOUD_CLOUD_INIT')) {
+        # Check for bootcmd, runcmd and write_files module
+        $self->ssh_assert_script_run('sudo grep pookie /root/test_cloud-init.txt');
+        $self->ssh_assert_script_run('sudo grep Mithrandir /root/test_cloud-init.txt');
+        $self->ssh_assert_script_run('sudo grep snickerdoodle /root/test_cloud-init.txt');
+
+        # Check for packages module
+        $self->ssh_assert_script_run('ed -V');
+
+        # Check for final_message module
+        $self->ssh_assert_script_run('sudo journalctl -b | grep "cloud-init qa has finished"');
+
+        # cloud-init schema
+        $self->ssh_assert_script_run('sudo cloud-init schema --system') unless (is_sle('=12-SP5'));
+    }
 }
 
 =head2 measure_boottime
@@ -784,5 +919,41 @@ sub do_systemd_analyze_time {
     return @ret;
 }
 
+sub upload_supportconfig_log {
+    my ($self, %args) = @_;
+    my $timeout = 600 + (is_sle('=12-SP5') ? 1400 : 0);
+    my $start = time();
+    my $logs = "/var/tmp/scc_supportconfig";
+    # Eventual comma-separated tokens list to exclude
+    my $exclude = get_var('PUBLIC_CLOUD_SUPPORTCONFIG_EXCLUDE', 'AUDIT');
+    # To remove exclusions, _EXCLUDE='-'
+    $exclude = undef if ($exclude eq '-');
+    $exclude = "-x " . $exclude if ($exclude);
+    # poo#187440 Workaround applied inject newline in ssh supportconfig to prevent hang cases, while bsc#1250310 open
+    my $cmd = "echo | timeout --preserve-status -k 60 $timeout sudo supportconfig -R " . dirname($logs) . " -B supportconfig $exclude";
+    my $err = $self->ssh_script_run($cmd, timeout => ($timeout + 180));
+    if (isok($err)) {
+        $self->ssh_script_run(cmd => "sudo chmod 0644 $logs.txz", timeout => 0);
+        $self->upload_log("$logs.txz", failok => 1, timeout => 180);
+        record_info('supportconfig done', "OK: duration " . (time() - $start) . "s. Log $logs.txz" . (($exclude) ? " - Excluded: $exclude" : ''));
+        return 1;
+    } else {
+        record_info('FAILED supportconfig', 'Failed after: ' . (time() - $start) . "sec.", result => 'fail');
+        return;
+    }
+}
+
+sub wait_for_state {
+    my ($self, $state, $timeout) = @_;
+    $timeout //= 1800;
+    my $deadline = time() + $timeout;
+    my $current;
+    while (time() < $deadline) {
+        $current = lc($self->provider->get_state_from_instance($self));
+        return if ($current =~ /$state/);
+        sleep 15;
+    }
+    die("The instance state is not '$state' but '$current' instead.");
+}
 
 1;

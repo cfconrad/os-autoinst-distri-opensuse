@@ -10,18 +10,18 @@ use warnings;
 use testapi;
 use Utils::Architectures;
 use Utils::Backends qw(is_qemu);
-use utils qw(addon_decline_license assert_screen_with_soft_timeout zypper_call systemctl handle_untrusted_gpg_key quit_packagekit script_retry wait_for_purge_kernels);
-use version_utils qw(is_sle is_sles4sap is_upgrade is_leap_migration is_sle_micro is_hpc);
+use serial_terminal 'select_serial_terminal';
+use utils qw(addon_decline_license assert_screen_with_soft_timeout zypper_call systemctl handle_untrusted_gpg_key quit_packagekit script_retry script_output_retry wait_for_purge_kernels);
+use version_utils qw(is_sle is_sles4sap is_upgrade is_leap_migration is_sle_micro is_hpc is_jeos is_transactional is_staging is_agama);
 use constant ADDONS_COUNT => 50;
 use y2_module_consoletest;
 use YaST::workarounds;
 use y2_logs_helper qw(accept_license);
+use transactional;
 
 our @EXPORT = qw(
   add_suseconnect_product
-  ssh_add_suseconnect_product
   remove_suseconnect_product
-  ssh_remove_suseconnect_product
   cleanup_registration
   register_product
   assert_registration_screen_present
@@ -40,9 +40,11 @@ our @EXPORT = qw(
   verify_scc
   investigate_log_empty_license
   register_addons_cmd
+  deregister_addons_cmd
   register_addons
   handle_scc_popups
   process_modules
+  runtime_registration
   %SLE15_MODULES
   %SLE15_DEFAULT_MODULES
   %ADDONS_REGCODE
@@ -84,6 +86,7 @@ our %ADDONS_REGCODE = (
     'sle-module-live-patching' => get_var('SCC_REGCODE_LIVE'),
     'sle-live-patching' => get_var('SCC_REGCODE_LIVE'),
     'SLES-LTSS' => get_var('SCC_REGCODE_LTSS'),
+    'SLES-LTSS-Extended-Security' => get_var('SCC_REGCODE_LTSS_ES'),
     'SUSE-Linux-Enterprise-RT' => get_var('SCC_REGCODE_RT'),
     ESPOS => get_var('SCC_REGCODE_ESPOS'),
 );
@@ -170,7 +173,7 @@ in format X-SPY into X.Y.
 
 sub scc_version {
     my $version = shift;
-    $version //= get_required_var('VERSION');
+    $version //= get_var('VERSION_UPGRADE_FROM', get_var('VERSION_TO_INSTALL', get_var('VERSION', '')));
     return $version =~ s/-SP/./gr;
 }
 
@@ -183,6 +186,8 @@ Wrapper for SUSEConnect -p $name.
 
 sub add_suseconnect_product {
     my ($name, $version, $arch, $params, $timeout, $retry) = @_;
+    # no SCC registration https://progress.opensuse.org/issues/131498#note-5
+    record_info('skip SCC', "Skip activating product on flavor without SCC registration") && return if ((get_var('FLAVOR') =~ /TERADATA/) && is_sle('=15-SP4'));
     assert_script_run 'source /etc/os-release';
     $version //= '${VERSION_ID}';
     $arch //= '${CPU}';
@@ -197,7 +202,11 @@ sub add_suseconnect_product {
 
     my $try_cnt = 0;
     while ($try_cnt++ <= $retry) {
-        eval { assert_script_run("SUSEConnect $debug_flag -p $name/$version/$arch $params", timeout => $timeout); };
+        if (is_transactional) {
+            eval { trup_call("register -p $name/" . $version . '/' . get_var('ARCH')) };
+        } else {
+            eval { assert_script_run("SUSEConnect $debug_flag -p $name/$version/$arch $params", timeout => $timeout); };
+        }
         if ($@) {
             record_info('retry', "SUSEConnect failed to activate the module $name. Retrying...");
             sleep 60 * $try_cnt;    # we wait a bit longer for each retry
@@ -210,27 +219,6 @@ sub add_suseconnect_product {
         record_info('INFO', 'PackageHub installation might fail in early development');
     }
     die "SUSEConnect failed activating module $name after $retry retries.";
-}
-
-=head2 ssh_add_suseconnect_product
-
-    ssh_add_suseconnect_product($remote, $name, [$version, [$arch, [$params, [$timeout, [$retries, [$delay]]]]]]);
-
-Wrapper for SUSEConnect -p $name  over ssh.
-=cut
-
-sub ssh_add_suseconnect_product {
-    my ($remote, $name, $version, $arch, $params, $timeout, $retries, $delay) = @_;
-    assert_script_run "sftp $remote:/etc/os-release /tmp/os-release";
-    assert_script_run 'source /tmp/os-release';
-    $version //= '${VERSION_ID}';
-    $arch //= '${CPU}';
-    $params //= '';
-    $timeout //= 300;
-    $retries //= 3;
-    $delay //= 10;
-
-    script_retry("ssh $remote sudo SUSEConnect $debug_flag -p $name/$version/$arch $params", delay => $delay, retry => $retries, timeout => $timeout);
 }
 
 =head2 remove_suseconnect_product
@@ -246,23 +234,6 @@ sub remove_suseconnect_product {
     $arch //= get_required_var('ARCH');
     $params //= '';
     script_retry("SUSEConnect $debug_flag -d -p $name/$version/$arch $params", retry => 5, delay => 60, timeout => 180);
-}
-
-=head2 ssh_remove_suseconnect_product
-
-    ssh_remove_suseconnect_product($name, [$version, [$arch, [$params]]]);
-
-Wrapper for SUSEConnect -d $name over ssh.
-=cut
-
-sub ssh_remove_suseconnect_product {
-    my ($remote, $name, $version, $arch, $params) = @_;
-    assert_script_run "sftp $remote:/etc/os-release /tmp/os-release";
-    assert_script_run 'source /tmp/os-release';
-    $version //= scc_version();
-    $arch //= get_required_var('arch');
-    $params //= '';
-    script_retry("ssh $remote sudo SUSEConnect $debug_flag -d -p $name/$version/$arch $params", retry => 5, delay => 60, timeout => 180);
 }
 
 =head2 cleanup_registration
@@ -318,7 +289,7 @@ sub register_addons_cmd {
             }
             elsif (grep(/$name/, keys %ADDONS_REGCODE)) {
                 my $opt = "";
-                if (is_sle("=15-SP4")) {
+                if (is_sle("=15-SP4") && !is_jeos) {
                     $opt = " --auto-agree-with-licenses";
                 }
                 add_suseconnect_product($name, undef, undef, "-r " . $ADDONS_REGCODE{$name} . $opt, 300, $retry);
@@ -334,6 +305,29 @@ sub register_addons_cmd {
     }
 }
 
+sub deregister_addons_cmd {
+    my ($addonlist) = @_;
+    $addonlist //= get_var('SCC_ADDONS');
+    my @addons = grep { defined $_ && $_ } split(/,/, $addonlist);
+
+    foreach my $addon (@addons) {
+        my $name = get_addon_fullname($addon);
+        if (length $name) {
+            record_info($name, "Deregister $name");
+            my $version = scc_version();
+            my $arch = get_required_var('ARCH');
+
+            # Special handling for SLE12 modules: use major version
+            if (grep { $name eq $_ } @SLE12_MODULES and is_sle('<15')) {
+                my @ver = split(/\./, $version);
+                $version = $ver[0];
+            }
+
+            remove_suseconnect_product($name, $version, undef);
+        }
+    }
+}
+
 sub register_addons {
     my (@scc_addons) = @_;
 
@@ -343,7 +337,7 @@ sub register_addons {
         last if (get_var('SMT_URL'));
         # change to uppercase to match variable
         $uc_addon = uc $addon;
-        my @addons_with_code = qw(geo live rt ltss ses espos);
+        my @addons_with_code = qw(geo live rt ltss ltss_es ltss_td ses espos);
         # WE doesn't need code on SLED
         push @addons_with_code, 'we' unless (check_var('SLE_PRODUCT', 'sled'));
         # HA doesn't need code on SLES4SAP or in migrations to 12-SP5
@@ -362,11 +356,7 @@ sub register_addons {
                 assert_and_click("scc-code-field-$addon", timeout => 240);
             }
             # avoid duplicated tests to manage LTSS regcode by integrating new variables
-            if ($addon eq "ltss") {
-                my $os_sp_version = get_var("HDDVERSION");
-                $os_sp_version =~ s/-/_/g;
-                $regcode = get_var("SCC_REGCODE_LTSS_$os_sp_version", $regcode);
-            }
+            $regcode = get_ltss_regcode($regcode) if $addon eq "ltss";
             type_string $regcode;
             save_screenshot;
             $regcodes_entered++;
@@ -374,6 +364,20 @@ sub register_addons {
     }
 
     return $regcodes_entered;
+}
+
+sub get_ltss_regcode {
+    my $regcode = shift;
+    if (my $os_version = get_var("HDDVERSION")) {
+        $os_version =~ s/-/_/g;
+        return get_var("SCC_REGCODE_LTSS_$os_version", $regcode);
+    }
+    elsif ($os_version = get_var("VERSION_TO_INSTALL")) {
+        # Check if VERSION_TO_INSTALL contains "12" or "15"
+        return get_var("SCC_REGCODE_LTSS_12", $regcode) if $os_version =~ /12/;
+        return get_var("SCC_REGCODE_LTSS_15", $regcode) if $os_version =~ /15/;
+    }
+    return $regcode;
 }
 
 sub assert_registration_screen_present {
@@ -478,6 +482,12 @@ sub process_scc_register_addons {
         my @scc_addons = split(/,/, get_var('SCC_ADDONS', ''));
         # remove empty elements
         @scc_addons = grep { $_ ne '' } @scc_addons;
+        # For HA LTSS_TO_LTSS_ES migration if the original version is 12-SP4 then it only has LTSS
+        if ((grep { $_ == 'ltss_es' } @scc_addons) && get_var('LTSS_TO_LTSS_ES') && is_sle('=12-SP4')) {
+            foreach my $addon (@scc_addons) {
+                $addon =~ s/ltss_es/ltss/g;
+            }
+        }
 
         for my $addon (@scc_addons) {
             next if (skip_package_hub_if_necessary($addon));
@@ -550,7 +560,7 @@ sub process_scc_register_addons {
             # Similarly for encrypted partitions activation
             push @needles, 'encrypted_volume_activation_prompt' if (get_var('ENCRYPT_ACTIVATE_EXISTING') || get_var('ENCRYPT_CANCEL_EXISTING'));
         }
-        push @needles, 'sles4sap-product-installation-mode' if (is_sles4sap() && is_sle('<=12-SP3'));
+        push @needles, 'sles4sap-product-installation-mode' if (is_sles4sap() && is_sle('<=12-SP5'));
         while ($counter--) {
             die 'Addon registration repeated too much. Check if SCC is down.' if ($counter eq 1);
             assert_screen([@needles], 90);
@@ -746,7 +756,7 @@ sub select_addons_in_textmode {
             record_info("Module preselected", "Module $addon is already selected and installed by default");
             # As we are not selecting this, scc will not bounce the focus,
             # hence we need to go up manually.
-            for (1 .. 15) {
+            for (1 .. 22) {
                 send_key 'up';
             }
         }
@@ -762,10 +772,10 @@ sub registration_bootloader_cmdline {
     # SCC_URL=https://smt.example.com
     # prevent rogue RMT servers to show up in unexpected selection dialogs
     # https://progress.opensuse.org/issues/94696
-    set_var('SCC_URL', 'https://scc.suse.com') unless get_var('SCC_URL');
+    set_var('SCC_URL', 'https://scc.suse.com') unless (get_var('SCC_URL') || is_agama);
     my $cmdline = '';
     if (my $url = get_var('SMT_URL') || get_var('SCC_URL')) {
-        $cmdline .= " regurl=$url";
+        $cmdline .= is_agama ? " inst.register_url=$url" : " regurl=$url";
         $cmdline .= " regcert=$url" if get_var('SCC_CERT');
     }
     return $cmdline;
@@ -775,7 +785,9 @@ sub registration_bootloader_params {
     my ($max_interval) = @_;    # see 'type_string'
     $max_interval //= 13;
     my @params;
-    push @params, split ' ', registration_bootloader_cmdline;
+    if (!(is_agama && check_var('FLAVOR', 'Full'))) {
+        push @params, split ' ', registration_bootloader_cmdline;
+    }
     type_string "@params", $max_interval;
     save_screenshot;
     return @params;
@@ -837,6 +849,8 @@ sub get_addon_fullname {
         legacy => 'sle-module-legacy',
         lgm => 'sle-module-legacy',
         ltss => is_hpc('15+') ? 'SLE_HPC-LTSS' : 'SLES-LTSS',
+        ltss_es => 'SLES-LTSS-Extended-Security',
+        ltss_td => 'SLES-LTSS-TERADATA',
         pcm => 'sle-module-public-cloud',
         rt => 'SUSE-Linux-Enterprise-RT',
         sapapp => 'sle-module-sap-applications',
@@ -852,6 +866,7 @@ sub get_addon_fullname {
         nvidia => 'sle-module-NVIDIA-compute',
         idu => is_sle('15+') ? 'IBM-POWER-Tools' : 'IBM-DLPAR-utils',
         ids => is_sle('15+') ? 'IBM-POWER-Adv-Toolchain' : 'IBM-DLPAR-SDK',
+        sysm => 'sle-module-systems-management',
     );
     return $product_list{"$addon"};
 }
@@ -915,6 +930,11 @@ sub scc_deregistration {
         quit_packagekit;
         wait_for_purge_kernels;
         assert_script_run('SUSEConnect --version');
+        # Remove registercloudguest when use suseconnect in a non public cloud environment.
+        if (get_var('SCC_ADDONS', '') =~ /pcm/) {
+            my $cloudguest_bin = "/usr/sbin/registercloudguest";
+            script_run "[ -f $cloudguest_bin ] && rm -f $cloudguest_bin";
+        }
         # We don't need to pass $debug_flag to SUSEConnect, because it's already set
         my $deregister_ret = script_run("SUSEConnect --de-register --debug > /tmp/SUSEConnect.debug 2>&1", 300);
         if ($deregister_ret) {
@@ -1033,9 +1053,59 @@ sub process_modules {
     if (check_var('SCC_REGISTER', 'installation') || check_var('SCC_REGISTER', 'yast') || check_var('SCC_REGISTER', 'console')) {
         process_scc_register_addons;
     }
-    elsif (!get_var('SCC_REGISTER', '') =~ /addon|network/) {
+    elsif (get_var('SCC_REGISTER', '') !~ /addon|network/) {
         send_key $cmd{next};
     }
+}
+
+sub runtime_registration {
+    return if get_var('HDD_SCC_REGISTERED');
+    my $cmd = ' -r ' . get_required_var 'SCC_REGCODE';
+    my $scc_addons = get_var 'SCC_ADDONS', '';
+    # fake scc url pointing to synced repos on openQA
+    # valid only for products currently in development
+    # please unset in job def *SCC_URL* if not required
+    my $fake_scc = get_var 'SCC_URL', '';
+    $cmd .= ' --url ' . $fake_scc if $fake_scc;
+    my $retries = 5;    # number of retries to run SUSEConnect commands
+    my $delay = 60;    # time between retries to run SUSEConnect commands
+
+
+    select_serial_terminal;
+    die 'SUSEConnect package is not pre-installed!' if script_run 'command -v SUSEConnect';
+    if ((is_jeos || is_sle_micro)) {
+        my $status = script_output('SUSEConnect --status-text');
+        die 'System has been already registered!' if ($status !~ m/not registered/i);
+    }
+
+    # There are sporadic failures due to the command timing out, so we increase the timeout
+    # and make use of retries to overcome a possible sporadic network issue.
+    # script_output_retry is useless for `transactional-update` cmd because it returns 0 even with failure
+    # trup_call will raise a failure if the command fails
+    if (is_transactional) {
+        trup_call('register' . $cmd);
+        trup_call('--continue run zypper --gpg-auto-import-keys refresh') if is_staging;
+        if (is_sle_micro('>=6.0') && is_sle_micro('<=6.1')) {
+            process_reboot(trigger => 1);
+            add_suseconnect_product('SL-Micro-Extras', get_var('HDDVERSION'), undef, undef, 90, 1);
+        }
+        process_reboot(trigger => 1);
+    }
+    else {
+        my $output = script_output_retry("SUSEConnect $cmd", retry => $retries, delay => $delay, timeout => 180);
+        die($output) if ($output =~ m/error|timeout|problem retrieving/i);
+    }
+    # Check available extenstions (only present in sle)
+    my $extensions = script_output_retry("SUSEConnect --list-extensions", retry => $retries, delay => $delay, timeout => 180);
+    record_info('Extensions', $extensions);
+
+    die("None of the modules are Activated") if ($extensions !~ m/Activated/ && is_sle);
+
+    # add modules
+    register_addons_cmd($scc_addons, $retries) if $scc_addons;
+    # Check that repos actually work
+    zypper_call 'refresh';
+    zypper_call 'repos --details';
 }
 
 1;

@@ -37,6 +37,8 @@
       <start_multipath config:type="boolean">false</start_multipath>
     </storage>
   </general>
+  <!--12sp3 TD shall not do any registration at all, see poo#170233-->
+  % unless ($check_var->('NO_REGISTER', '1')) {
   <suse_register>
   <do_registration config:type="boolean">true</do_registration>
     <email/>
@@ -51,7 +53,7 @@
     <arch>{{ARCH}}</arch>
     <release_type/>
     </addon>
-    % if ($ltss_code) {
+    % if ($ltss_code && $check_var->('EXTENDED_SECURITY', '0')) {
     <addon>
       <name>SLES-LTSS</name>
       <version>{{VERSION}}</version>
@@ -60,8 +62,18 @@
       <release_type/>
     </addon>
     % }
+    % if ($ltss_es_code && $check_var->('EXTENDED_SECURITY', '1')) {
+    <addon>
+      <name>SLES-LTSS-Extended-Security</name>
+      <version>{{VERSION}}</version>
+      <arch>{{ARCH}}</arch>
+      <reg_code><%= $ltss_es_code %></reg_code>
+      <release_type/>
+    </addon>
+    % }
     </addons>
   </suse_register>
+  % }
   <add-on>
     <add_on_products config:type="list">
       <listentry>
@@ -69,8 +81,8 @@
       </listentry>
     % if ($vm_name =~ /sles12sp3/) {
       <listentry>
-        <media_url>http://updates.nue.suse.com/download/SUSE/Updates/SLE-SERVER/12-SP3-LTSS-TERADATA/x86_64/update/</media_url>
-        <alias>SLES12-SP3-LTSS-TERADATA</alias>
+        <media_url>http://updates.nue.suse.com/download/SUSE/Updates/SLE-SERVER/12-SP3-TERADATA/x86_64/update/</media_url>
+        <alias>SLES12-SP3-TERADATA</alias>
       </listentry>
     % }
     % unless ($check_var->('PATCH_WITH_ZYPPER', '1')) {
@@ -106,31 +118,17 @@
       <hostname><%= $vm_name %></hostname>
       <resolv_conf_policy>auto</resolv_conf_policy>
       <write_hostname config:type="boolean">true</write_hostname>
-      <nameservers config:type="list">
-      <nameserver>192.168.122.1</nameserver>
-      </nameservers>
     </dns>
     <interfaces config:type="list">
       <interface>
-        <bootproto>static</bootproto>
+        <bootproto>dhcp</bootproto>
         <device>eth0</device>
-        <ipaddr>{{IP}}</ipaddr>
-        <netmask>255.255.255.0</netmask>
-        <network>192.168.122.0</network>
-        <prefixlen>24</prefixlen>
         <startmode>auto</startmode>
       </interface>
     </interfaces>
     <ipv6 config:type="boolean">true</ipv6>
     <keep_install_network config:type="boolean">true</keep_install_network>
     <managed config:type="boolean">false</managed>
-    <net-udev config:type="list">
-      <rule>
-        <name>eth0</name>
-        <rule>ATTR{address}</rule>
-        <value>{{MAC}}</value>
-      </rule>
-    </net-udev>
     <routing>
       <ipv4_forward config:type="boolean">false</ipv4_forward>
       <ipv6_forward config:type="boolean">false</ipv6_forward>
@@ -138,7 +136,6 @@
         <route>
           <destination>default</destination>
           <device>-</device>
-          <gateway>192.168.122.1</gateway>
           <netmask>-</netmask>
         </route>
       </routes>

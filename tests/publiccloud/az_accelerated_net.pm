@@ -6,11 +6,9 @@
 # Package: azure-cli
 # Summary: Network performance for Azure Accelerated NICs
 #
-# Maintainer: Jose Lausuch <jalausuch@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use base "publiccloud::basetest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -73,6 +71,7 @@ sub enable_accelerated_net {
     sleep 60 * 3;    # Sometimes, IP is not reachable after the restart and 5 minutes is enough.
     $instance->{private_ip} = get_new_ip($instance);
     $instance->public_ip(get_new_ip($instance, 1));
+    script_run("ssh-keyscan " . $instance->public_ip . " | tee ~/.ssh/known_hosts /home/$testapi::username/.ssh/known_hosts");
     die('SR-IOV flags not found') if (!$self->check_sriov($instance));
 }
 

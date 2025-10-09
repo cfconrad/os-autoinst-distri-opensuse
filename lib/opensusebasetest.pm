@@ -16,7 +16,7 @@ use Utils::Backends;
 use Utils::Systemd;
 use Utils::Architectures;
 use lockapi 'mutex_wait';
-use serial_terminal 'get_login_message';
+use serial_terminal qw(get_login_message prepare_serial_console select_serial_terminal);
 use version_utils;
 use main_common 'opensuse_welcome_applicable';
 use isotovideo;
@@ -24,7 +24,6 @@ use IO::Socket::INET;
 use x11utils qw(handle_login ensure_unlocked_desktop handle_additional_polkit_windows);
 use publiccloud::ssh_interactive 'select_host_console';
 use Utils::Logging qw(save_and_upload_log tar_and_upload_log export_healthcheck_basic select_log_console upload_coredumps export_logs);
-use serial_terminal 'select_serial_terminal';
 
 # Base class for all openSUSE tests
 
@@ -303,7 +302,7 @@ Upload C</var/log/pk_backend_zypp>.
 
 sub upload_packagekit_logs {
     my ($self) = @_;
-    upload_logs '/var/log/pk_backend_zypp';
+    tar_and_upload_log('/var/log/pk_backend_zypp*', '/tmp/pk_backend_zypp.tar.bz2');
 }
 
 =head2 set_standard_prompt
@@ -337,11 +336,15 @@ sub handle_uefi_boot_disk_workaround {
     send_key_until_needlematch 'tianocore-boot_from_file', 'down';
     wait_screen_change { send_key 'ret' };
     # Device selection: HD or CDROM
-    send_key_until_needlematch 'tianocore-select_HD', 'down';
+    (is_agama && is_aarch64 && get_var('BOOTFROM') eq 'd' && is_sle) ?
+      map { send_key 'down' } (1 .. 4) :
+      send_key_until_needlematch 'tianocore-select_HD', 'down';
     wait_screen_change { send_key 'ret' };
     # cycle to last entry by going up in the next steps
     # <EFI>
-    send_key 'up';
+    wait_screen_change { send_key 'up' };
+    check_screen 'overlays-folder';
+    wait_screen_change { send_key 'up' } if match_has_tag 'overlays-folder';    # As we are in the overlays folder
     save_screenshot;
     wait_screen_change { send_key 'ret' };
     # <sles> or <opensuse>
@@ -382,8 +385,10 @@ sub wait_grub {
     my $bootloader_time = $args{bootloader_time} // 100;
     my $in_grub = $args{in_grub} // 0;
     my @tags;
-    push @tags, 'bootloader-shim-import-prompt' if get_var('UEFI');
-    push @tags, 'grub2';
+    push @tags, 'bootloader-shim-import-prompt' if get_var('UEFI') && !get_var('DISABLE_SECUREBOOT');
+    push @tags, 'grub2-bls' if is_bootloader_grub2_bls;
+    push @tags, 'bootloader-sdboot' if is_bootloader_sdboot;
+    push @tags, 'grub2' if is_bootloader_grub2;
     push @tags, 'boot-live-' . get_var('DESKTOP') if get_var('LIVETEST');    # LIVETEST won't to do installation and no grub2 menu show up
     push @tags, 'bootloader' if get_var('OFW');
     push @tags, 'encrypted-disk-password-prompt-grub', 'encrypted-disk-password-prompt' if get_var('ENCRYPT');
@@ -435,8 +440,9 @@ sub wait_grub {
       if (is_aarch64_uefi_boot_hdd
         && !is_jeos
         && !$in_grub
-        && (!(isotovideo::get_version() >= 12 && get_var('UEFI_PFLASH_VARS')) || get_var('ONLINE_MIGRATION') || get_var('UPGRADE') || get_var('ZDUP') || (get_var('LIVE_UPGRADE') && get_var('PATCH_BEFORE_MIGRATION'))));
-    assert_screen(\@tags, $bootloader_time);
+        && (!(isotovideo::get_version() >= 12 && get_var('UEFI_PFLASH_VARS')) || get_var('ONLINE_MIGRATION') || get_var('UPGRADE') || get_var('ZDUP') || (get_var('LIVE_UPGRADE') && get_var('PATCH_BEFORE_MIGRATION')) || (get_var('WORKAROUND_BSC1022064'))));
+    # sle micro on ppc64le with qemu backend has low performance, so skip the first bootloader check
+    assert_screen(\@tags, $bootloader_time) unless (is_sle_micro && is_ppc64le && is_qemu);
     if (match_has_tag("bootloader-shim-import-prompt")) {
         send_key "down";
         send_key "ret";
@@ -460,7 +466,7 @@ sub wait_grub {
     elsif (match_has_tag('encrypted-disk-password-prompt-grub') || match_has_tag('encrypted-disk-password-prompt')) {
         # unlock encrypted disk before grub
         unlock_bootloader;
-        assert_screen("grub2", timeout => ((is_pvm) ? 300 : 90));
+        assert_screen("grub2", timeout => ((is_pvm) ? 300 : 90)) unless check_var('STIG_REMEDIATION', '1');
     }
     mutex_wait 'support_server_ready' if get_var('USE_SUPPORT_SERVER');
 }
@@ -475,10 +481,10 @@ When bootloader appears, make sure to boot from local disk when it is on aarch64
 sub wait_grub_to_boot_on_local_disk {
     # assuming the cursor is on 'installation' by default and 'boot from
     # harddisk' is above
-    my $switch_key = (is_opensuse && get_var('LIVECD')) ? 'down' : 'up';
+    my $switch_key = (is_opensuse && get_var('LIVECD')) || get_var('AGAMA') ? 'down' : 'up';
     send_key_until_needlematch 'inst-bootmenu-boot-harddisk', "$switch_key";
     boot_local_disk;
-    my @tags = qw(grub2 tianocore-mainmenu);
+    my @tags = qw(grub2 tianocore-mainmenu tianocore-bootmenu);
     push @tags, 'encrypted-disk-password-prompt' if (get_var('ENCRYPT'));
 
     # Workaround for poo#118336
@@ -508,6 +514,11 @@ sub wait_grub_to_boot_on_local_disk {
     } else {
         assert_screen(\@tags, 15);
     }
+    if (match_has_tag('tianocore-bootmenu')) {
+        send_key_until_needlematch("tianocore-bootmenu-EFI-fimware-selected", 'down', 6, 1);
+        send_key "ret";
+        assert_screen(\@tags, 90);
+    }
     if (match_has_tag('tianocore-mainmenu')) {
         opensusebasetest::handle_uefi_boot_disk_workaround();
         check_screen('encrypted-disk-password-prompt', 10);
@@ -525,6 +536,10 @@ sub reconnect_s390 {
     my $enable_root_ssh = $args{enable_root_ssh} // 0;
     return undef unless is_s390x;
     my $login_ready = get_login_message();
+    # this is only a temporary measure for BCI tests that run on slem 6.0 and 6.1
+    if (is_s390x && get_var('BCI_TESTS', '') && get_var('HOST_VERSION', '') =~ /slem/i) {
+        $login_ready = qr|Welcome to SUSE Linux Micro 6.[01].*\(s390x\)|;
+    }
     if (is_backend_s390x) {
         my $console = console('x3270');
         # skip grub handle for 11sp4
@@ -605,7 +620,20 @@ sub handle_emergency_if_needed {
 
 sub handle_displaymanager_login {
     my ($self, %args) = @_;
-    assert_screen [qw(displaymanager emergency-shell emergency-mode)], $args{ready_time};
+    assert_screen [qw(displaymanager emergency-shell emergency-mode gdm-crash)], $args{ready_time};
+    if (is_ppc64le && check_var('VERSION', '15-SP7') && match_has_tag('gdm-crash')) {
+        unless (check_var('TEST', 'qam-minimal-full')) {
+            select_console 'root-console';
+            prepare_serial_console;
+        }
+        select_serial_terminal();
+        systemctl('disable --now display-manager');
+        set_var('WORKAROUND_1243491', '1');
+        set_var('DESKTOP', 'textmode', reload_needles => 1);
+        assert_script_run('while ps aux|grep gdm|grep -v grep; do sleep 2; done', 300);
+        select_console 'root-console';
+        return;
+    }
     handle_emergency_if_needed;
     handle_login unless $args{nologin};
 }
@@ -792,10 +820,12 @@ sub wait_boot_past_bootloader {
 
     $self->handle_displaymanager_login(ready_time => $ready_time, nologin => $nologin) if (get_var("NOAUTOLOGIN") || get_var("XDMUSED") || $nologin || $forcenologin);
     return if $args{nologin};
+    return if get_var('WORKAROUND_1243491');
 
     my @tags = qw(generic-desktop emergency-shell emergency-mode);
     push(@tags, 'opensuse-welcome') if opensuse_welcome_applicable;
     push(@tags, 'gnome-activities') if check_var('DESKTOP', 'gnome');
+    push(@tags, 'root-console') if is_ppc64le && check_var('VERSION', '15-SP7') && check_var('TEST', 'qam-minimal-full');
 
     # boo#1102563 - autologin fails on aarch64 with GNOME on current Tumbleweed
     if (!is_sle('<=15') && !is_leap('<=15.0') && is_aarch64 && check_var('DESKTOP', 'gnome')) {
@@ -895,7 +925,8 @@ sub wait_boot {
         $self->handle_pxeboot(bootloader_time => $bootloader_time, pxemenu => 'pxe-custom-kernel', pxeselect => 'pxe-custom-kernel-selected');
     }
     # When no bounce back on power KVM, we need skip bootloader process and go ahead when 'displaymanager' matched.
-    elsif (get_var('OFW') && (check_screen('displaymanager', 5))) {
+    # minimal-VM does not have any display manager
+    elsif (get_var('OFW') && !check_var('DESKTOP', 'textmode') && (check_screen('displaymanager', 5))) {
     }
     elsif (is_bootloader_grub2) {
         assert_screen([qw(virttest-pxe-menu qa-net-selection prague-pxe-menu pxe-menu)], 600) if (uses_qa_net_hardware() || get_var("PXEBOOT"));
@@ -911,7 +942,9 @@ sub wait_boot {
         }
     } elsif (is_bootloader_sdboot) {
         assert_screen 'systemd-boot', 300;
-        save_screenshot;    # Show what's selected for booting
+        send_key('ret');
+    } elsif (is_bootloader_grub2_bls) {
+        assert_screen('grub2-bls', 300);
         send_key('ret');
     } else {
         die 'Unknown bootloader';
@@ -1038,11 +1071,7 @@ sub post_fail_hook {
 
         # Destroy the public cloud instance in case of fatal test failure
         my $flags = $self->test_flags();
-        $self->{run_args}->{my_provider}->cleanup() if ($flags->{fatal});
-
-        # When tunnel-console is used we upload the log
-        my $ssh_sut = '/var/tmp/ssh_sut.log';
-        upload_logs($ssh_sut) unless (script_run("test -f $ssh_sut") != 0);
+        $self->{run_args}->{my_provider}->finalize() if ($flags->{fatal});
     }
 }
 

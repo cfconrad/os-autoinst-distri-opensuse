@@ -9,8 +9,6 @@
 # Tags: poo#52289, tc#1621467, poo#65375
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use utils 'zypper_call';
 use web_browser qw(setup_web_browser_env run_web_browser_text_based);
@@ -19,7 +17,7 @@ sub run {
     select_console "root-console";
     setup_web_browser_env();
     zypper_call("--no-refresh --no-gpg-checks in links");
-    run_web_browser_text_based("links", undef);
+    run_web_browser_text_based("links", "-dump");
 }
 
 sub test_flags {

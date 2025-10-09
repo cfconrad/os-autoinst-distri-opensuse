@@ -32,6 +32,7 @@ software: []
 booting:
   - installation/bootloader_settings/disable_boot_menu_timeout
 security: []
+security_configuration: []
 default_systemd_target: []
 installation_settings:
   - installation/installation_settings/validate_ssh_service_enabled
@@ -48,6 +49,7 @@ confirm_reboot:
   - installation/performing_installation/confirm_reboot
 reconnect_svirt:
   - installation/performing_installation/reconnect_after_reboot
+disk_passphrase: []
 grub:
   - installation/handle_reboot
 first_login:

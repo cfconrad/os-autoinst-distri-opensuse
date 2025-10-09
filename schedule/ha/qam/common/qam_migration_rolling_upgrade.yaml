@@ -61,7 +61,7 @@ vars:
   # LVM locking daemon used since SLE 15
   USE_LVMLOCKD: '1'
   USE_SUPPORT_SERVER: '1'
-  VIRTIO_CONSOLE: '0'
+  VIRTIO_CONSOLE: '1'
   # Below have to be entered in the OpenQA UI because it doesn't read this YAML
   # HDD_1: SLE-%VERSION%-%ARCH%-Build%BUILD%-HA-BV.qcow2
 schedule:
@@ -96,6 +96,7 @@ schedule:
   - ha/cluster_state_mgmt
   - migration/online_migration/zypper_migration
   - '{{register_ltss}}'
+  - qam/incident_to_maintenance_repos
   - migration/online_migration/post_migration
   - '{{cluster_boot_mgmt}}'
   - '{{console_reboot}}'

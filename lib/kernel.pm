@@ -12,7 +12,8 @@ use base Exporter;
 use testapi;
 use strict;
 use utils;
-use version_utils 'is_sle';
+use version_utils qw(is_sle is_transactional);
+use transactional;
 use warnings;
 
 our @EXPORT = qw(
@@ -26,15 +27,19 @@ sub get_kernel_flavor {
 
 sub remove_kernel_packages {
     my @packages;
+    my @devpacks;
 
     if (check_var('SLE_PRODUCT', 'slert')) {
-        @packages = qw(kernel-rt kernel-rt-devel kernel-source-rt);
+        # workaround for bsc1227773
+        @packages = qw(kernel-rt);
+        @devpacks = qw(kernel-rt-devel kernel-source-rt);
     }
     elsif (get_kernel_flavor eq 'kernel-64kb') {
         @packages = qw(kernel-64kb*);
     }
     else {
-        @packages = qw(kernel-default kernel-default-devel kernel-macros kernel-source);
+        @packages = qw(kernel-default);
+        @devpacks = qw(kernel-default-devel kernel-macros kernel-source);
     }
 
     # SLE12 and SLE12SP1 has xen kernel
@@ -42,11 +47,18 @@ sub remove_kernel_packages {
         push @packages, qw(kernel-xen kernel-xen-devel);
     }
 
-    push @packages, "multipath-tools"
+    my @rmpacks = @packages;
+    push @rmpacks, @devpacks unless is_transactional;
+    push @rmpacks, "multipath-tools"
       if is_sle('>=15-SP3') and !get_var('KGRAFT');
-    zypper_call('-n rm ' . join(' ', @packages), exitcode => [0, 104]);
 
-    return @packages;
+    if (is_transactional) {
+        trup_call 'pkg remove ' . join(' ', @rmpacks);
+    } else {
+        zypper_call('-n rm ' . join(' ', @rmpacks), exitcode => [0, 104]);
+    }
+
+    return (@packages, @devpacks);
 }
 
 1;

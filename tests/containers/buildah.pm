@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021-2023 SUSE LLC
+# Copyright 2021-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: buildah
@@ -16,34 +16,19 @@
 
 use Mojo::Base qw(consoletest);
 use testapi;
-use serial_terminal 'select_serial_terminal';
+use serial_terminal qw(select_serial_terminal select_user_serial_terminal);
 use utils;
-use version_utils qw(get_os_release is_sle);
+use version_utils qw(is_sle is_public_cloud);
 use containers::common;
+use Utils::Backends qw(is_svirt);
 
-sub run {
-    my ($self, $args) = @_;
-    select_serial_terminal;
-    my ($running_version, $sp, $host_distri) = get_os_release;
-
-    my $runtime = $args->{runtime};
-    my $image = "registry.opensuse.org/opensuse/tumbleweed:latest";
-
-    record_info('Test', "Install buildah along with $runtime");
-    install_buildah_when_needed($host_distri);
-    install_podman_when_needed($host_distri) if ($runtime eq 'podman');
-    if ($runtime eq 'docker') {
-        install_docker_when_needed($host_distri);
-        zypper_call('install skopeo');
-
-        # temporarily necessary due to https://bugzilla.suse.com/show_bug.cgi?id=1220568
-        zypper_call('install cni-plugins') if (is_sle("15-SP3+"));
-    }
-    record_info('Version', script_output('buildah --version'));
-
+sub run_tests {
+    my $runtime = shift;
+    my $image = get_var("CONTAINER_IMAGE_TO_TEST", "registry.opensuse.org/opensuse/tumbleweed:latest");
+    record_info('buildah info', script_output("buildah info"));
     record_info('Test', "Pull image $image");
     assert_script_run("buildah pull $image", timeout => 300);
-    validate_script_output('buildah images', sub { /registry.opensuse.org\/opensuse\/tumbleweed/ });
+    validate_script_output('buildah images', sub { /\/tumbleweed/ });
 
     record_info('Test', "Create container from $image");
     my $container = script_output("buildah from $image");
@@ -53,9 +38,9 @@ sub run {
     # When trying to install packages inside the container in Docker, there's a
     # network failure
     if ($runtime eq 'podman') {
-        record_info('Test', "Install random package in the container");
-        assert_script_run("buildah run $container -- zypper in -y python3", timeout => 300);
-        assert_script_run("buildah run $container -- python3 --version");
+        record_info('Test', "Install arbitrary package in the container");
+        assert_script_run("buildah run $container -- zypper in -y perl", timeout => 600);
+        assert_script_run(qq{buildah run $container -- perl -e 'print("Hello World\\n");'});
     }
 
     record_info('Test', "Add environment variable to the container");
@@ -90,7 +75,45 @@ sub run {
 
     record_info('Test', "Cleanup");
     assert_script_run("buildah rm $container");
-    assert_script_run("buildah rmi newimage");
+    assert_script_run("buildah rmi -f newimage $image");
+    assert_script_run("buildah rmi -af");
+    assert_script_run("rm -f /tmp/script.sh");
+
+    if (!get_var("OCI_RUNTIME")) {
+        my $runtime = script_output("buildah info --format '{{ .host.OCIRuntime }}'");
+        die "Unexpected OCI runtime: $runtime" if ($runtime ne "runc");
+    }
+}
+
+sub run {
+    my ($self, $args) = @_;
+    select_serial_terminal;
+
+    my $runtime = $args->{runtime};
+
+    record_info('Test', "Install buildah along with $runtime");
+    install_buildah_when_needed();
+    if ($runtime eq 'podman') {
+        install_podman_when_needed();
+    } elsif ($runtime eq 'docker') {
+        install_docker_when_needed();
+        zypper_call('install skopeo');
+    }
+    record_info('Version', script_output('buildah --version'));
+    record_info('buildah info', script_output("buildah info"));
+
+    # Run tests as user
+    if ($runtime eq "podman" && !is_public_cloud && !is_svirt) {
+        select_user_serial_terminal;
+        record_info('Test as user');
+        run_tests($runtime);
+        select_serial_terminal;
+    }
+
+    # Run tests as root
+    record_info('Test as root');
+    run_tests($runtime);
+
 }
 
 1;

@@ -12,37 +12,40 @@
 #   6. Ansible Vault
 # Maintainer: QE Core <qe-core@suse.de>, Pavel Dostál <pdostal@suse.cz>
 
-use warnings;
 use base "consoletest";
-use strict;
 use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call random_string systemctl file_content_replace ensure_serialdev_permissions);
-use version_utils qw(is_opensuse is_tumbleweed is_transactional is_microos is_sle is_jeos);
+use version_utils qw(is_sle is_opensuse is_tumbleweed is_transactional is_microos is_jeos);
 use registration qw(add_suseconnect_product get_addon_fullname is_phub_ready);
 use transactional qw(trup_call check_reboot_changes);
+use Utils::Architectures qw(is_s390x);
 
 # git-core needed by ansible-galaxy
 # sudo is used by ansible to become root
-# python3-yamllint needed by ansible-test
-my $pkgs = 'ansible git-core python3-yamllint';
-# https://bugzilla.suse.com/show_bug.cgi?id=1210876 Nothing provides 'python3-virtualenv'
-# https://bugzilla.suse.com/show_bug.cgi?id=1210875 Package ansible-test requires Python2.7
-$pkgs .= ' ansible-test';
+# sudo has to be pop-out after installation otherwise
+# during the cleanup it will remove preinstalled salt packages
+my @pkgs = qw(sudo git-core ansible);
 
 sub run {
     select_serial_terminal;
 
     # 1. System setup
 
-    unless (is_opensuse || (main_common::is_updates_tests && !(get_var('FIPS_ENABLED') || is_jeos))) {
+    # poo#181136, 15-SP6 and above use from Systems Managent Module, 15-SP4 and 15-SP5 use LTSS
+    # PackageHub should not be covered
+    if (is_sle('<15-SP6') && !main_common::is_updates_tests()) {
         # The Desktop module is required by the Development Tools module
         add_suseconnect_product(get_addon_fullname('desktop'));
         # Package 'ansible-test' needs python3-virtualenv from Development Tools module
         add_suseconnect_product(get_addon_fullname('sdk'));
-
         # Package 'python3-yamllint' and 'ansible' require PackageHub is available
-        add_suseconnect_product(get_addon_fullname('phub')) if (is_phub_ready());
+        add_suseconnect_product(get_addon_fullname('phub'));
+        zypper_call '--gpg-auto-import-keys ref';
+    }
+    if (is_sle('<15-SP4') && main_common::is_updates_tests()) {
+        # For sle15sp3 and older release, ansible packages are still from PackageHub
+        add_suseconnect_product(get_addon_fullname('phub'));
         zypper_call '--gpg-auto-import-keys ref';
     }
 
@@ -54,11 +57,14 @@ sub run {
     }
     ensure_serialdev_permissions;
 
+    # python3-yamllint needed by ansible-test
+    # ansible-test is not available in newer sles'
+    push @pkgs, qw(ansible-test python3-yamllint) unless is_sle;
     if (is_transactional) {
-        trup_call("pkg install $pkgs sudo");
+        trup_call("pkg install @pkgs");
         check_reboot_changes;
     } else {
-        zypper_call "in $pkgs sudo";
+        zypper_call "in @pkgs";
     }
 
     # Start sshd
@@ -98,16 +104,16 @@ sub run {
     # Call the zypper module properly (depends on version)
     file_content_replace('roles/test/tasks/main.yaml', COMMUNITYGENERAL => ((is_tumbleweed) ? 'community.general.' : ''));
 
-    if (is_sle('<15-SP5')) {
-        record_soft_failure 'bsc#1210875 Package ansible-test requires Python2.7';
-        script_run 'echo -e "[defaults]\ninterpreter_python = /usr/bin/python3" | tee ansible.cfg';
-    }
 
     # 2. Ansible basics
 
     # Check Ansible version
     record_info('ansible --version', script_output('ansible --version'));
 
+    # older sles with wicked changes its transient hostname after reboot to s390kvm0XX
+    # wicked can leave the hostname configuration for DHCP
+    # s390x VMs run in a VLAN, this issue is not present present outside s390x and wicked
+    assert_script_run('hostnamectl --transient hostname susetest') if is_s390x && is_jeos && is_sle('<16');
     my $hostname = script_output('hostnamectl --static');
     validate_script_output 'ansible -m setup localhost | grep ansible_hostname', sub { m/$hostname/ };
 
@@ -137,11 +143,18 @@ sub run {
     assert_script_run('ansible-community --version') if (script_run('which ansible-community') == 0);
 
     # Check the playbook
-    assert_script_run "ansible-playbook -i hosts main.yaml --check", timeout => 300;
+    my $rc = script_run "ansible-playbook -vvv -i hosts main.yaml --check", timeout => 300;
+    if ($rc) {
+        record_soft_failure 'bsc#1210875 Package ansible-test requires Python2.7';
+        script_run 'echo -e "[defaults]\ninterpreter_python = /usr/bin/python3" | tee ansible.cfg';
+        assert_script_run "ansible-playbook -vvv -i hosts main.yaml --check", timeout => 300;
+    }
 
     # Run the ansible sanity test
-    script_run 'ansible-test --help';
-    assert_script_run 'ansible-test sanity';
+    unless (is_sle) {
+        script_run 'ansible-test --help';
+        assert_script_run 'ansible-test sanity';
+    }
 
     # 5. Ansible playbook execution
 
@@ -149,7 +162,7 @@ sub run {
     assert_script_run 'ansible -i hosts all --list-hosts';
 
     # Run the playbook
-    assert_script_run "ansible-playbook -i hosts main.yaml", timeout => 600;
+    assert_script_run "ansible-playbook -vvv -i hosts main.yaml", timeout => 600;
 
     # Test that /tmp/ansible/uname.txt created by ansible has desired content
     my $uname = script_output 'uname -r';
@@ -201,14 +214,16 @@ sub cleanup {
     # Remove the johnd user created in the ansible playbook
     assert_script_run 'userdel -rf johnd';
 
+    # remove sudo otherwise it will uninstall salt packages
+    shift @pkgs;
     # Remove ansible, yamllint and git
-    $pkgs .= ' ed';
+    push @pkgs, qw(ed);
     if (is_transactional) {
-        trup_call("pkg remove $pkgs");
+        trup_call("pkg remove @pkgs");
         check_reboot_changes;
     } else {
         # ed has been installed in ansible-playbook
-        zypper_call "rm $pkgs";
+        zypper_call "rm @pkgs";
     }
 }
 

@@ -9,12 +9,10 @@
 # Maintainer: QE-SAP <qe-sap@suse.de>, Alvaro Carvajal <acarvajal@suse.com>
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
 use lockapi;
 use Socket qw(inet_ntoa);
-use utils qw(systemctl file_content_replace);
+use utils qw(systemctl file_content_replace zypper_call script_retry);
 use hacluster qw(get_cluster_name get_hostname get_ip get_my_ip is_node choose_node exec_csync);
 
 sub replace_text_in_ha_files {
@@ -49,6 +47,11 @@ sub run {
     $testname =~ s/@.+$//;
     $testname =~ s/_node\d+$//;
     $dir_id .= "_$testname" if get_var('HDDVERSION', '');
+    $dir_id .= '_angi' if get_var('USE_SAP_HANA_SR_ANGI', '');
+
+    if (script_run('rpm -q nfs-client') != 0) {
+        zypper_call 'in nfs-client';
+    }
 
     set_var('NFS_SUPPORT_DIR', "$mountpt/$dir_id");
     assert_script_run "mkdir -p $mountpt";
@@ -57,12 +60,9 @@ sub run {
     if (is_node(1)) {
         assert_script_run "rm -rf $mountpt/$dir_id";    # Remove info from previous test
         assert_script_run "mkdir -p $mountpt/$dir_id";
-        barrier_wait("BARRIER_HA_NFS_SUPPORT_DIR_SETUP_$cluster_name");
-    }
-    else {
-        barrier_wait("BARRIER_HA_NFS_SUPPORT_DIR_SETUP_$cluster_name");
     }
 
+    barrier_wait("BARRIER_HA_NFS_SUPPORT_DIR_SETUP_$cluster_name");
     my $hostname = get_hostname;
     my $ipaddr = get_my_ip;
     assert_script_run "echo \"$ipaddr  $hostname\" > $mountpt/$dir_id/$hostname.hosts";
@@ -136,8 +136,15 @@ sub run {
                 $lun = script_output 'echo \|$(ls ' . $lun . ')\|';
                 $lun =~ /\|([^\|]+)\|/;
                 $lun = $1;
-                assert_script_run "wipefs --all $lun";
-                assert_script_run "dd if=/dev/zero of=$lun bs=1M count=128";
+                # Need more time due to low performance on hmc_ppc64le workers
+                # Even with "ls $lun" returns 0 command 'dd' still reports sporadic error like:
+                #  "dd: failed to open '/xxx/*-lun-41': No such device or address"
+                # and command 'wipefs' reports sporadic error like:
+                #  "command 'wipefs --all /xxx/*-lun-4' timed out".
+                # So using 'script_retry'
+                script_retry "wipefs --all $lun", timeout => 300, delay => 5, retry => 10, die => 1, fail_message => "failed to wipefs $lun";
+                script_retry "ls $lun", delay => 5, retry => 10;
+                script_retry "dd if=/dev/zero of=$lun bs=1M count=128", timeout => 300, delay => 5, retry => 10, die => 1, fail_message => "failed to dd $lun";
             }
         }
 

@@ -9,8 +9,6 @@
 # Maintainer: QE LSG <qa-team@suse.de>
 
 use base "installbasetest";
-use strict;
-use warnings;
 use testapi;
 use utils qw(OPENQA_FTP_URL zypper_call);
 use Utils::Backends 'is_pvm';
@@ -61,6 +59,11 @@ sub run {
     my $defaultrepo;
     if (get_var('SUSEMIRROR')) {
         $defaultrepo = "http://" . get_var("SUSEMIRROR");
+    } elsif (get_var('AGAMA')) {
+        # We no longer have offline media with Agama, zypper dup against the product repo
+        my $host = get_var('OPENQA_HOST', 'https://openqa.opensuse.org');
+        my $repo = get_var('REPO_0');
+        $defaultrepo = "$host/assets/repo/$repo";
     }
     else {
         #SUSEMIRROR not set, zdup from ftp source for online migration
@@ -98,6 +101,11 @@ sub run {
     my $nr = 1;
     foreach my $r (split(/,/, get_var('ZDUPREPOS', $defaultrepo))) {
         $r =~ s/^\s+|\s+$//g;
+        # Split repodata functionality in Leap 16.0
+        # https://code.opensuse.org/leap/features/issue/193
+        if (get_var('SPLIT_REPODATA')) {
+            $r .= "/\\\$basearch";
+        }
         zypper_call("--no-gpg-checks ar \"$r\" repo$nr");
         $nr++;
     }
@@ -112,8 +120,14 @@ sub run {
                 record_info 'workaround dependencies';
                 send_key '1';
                 send_key 'ret';
-            }
-            else {
+            } else {
+                # if we found a conflict and solved it, keep looping, update $out too
+                if (solve_conflicts($out)) {
+                    save_screenshot;
+                    $out = wait_serial([$zypper_dup_continue, $zypper_dup_conflict, $zypper_dup_error], 120);
+                    next;
+                }
+
                 $self->result('fail');
                 save_screenshot;
                 return;
@@ -176,6 +190,33 @@ sub run {
     }
 
     assert_screen "zypper-dup-finish";
+}
+
+sub solve_conflicts {
+    my ($output) = @_;
+    my $conflict_solved = 0;
+    my %conflict_solutions = (
+        'star-rmt' => qr{.*Solution (\d+):\s*deinstallation of star-rmt},
+        'gstreamer-plugins-bad' => qr{.*Solution (\d+):\s*install gstreamer-plugins-bad},
+    );
+
+    my @lines = split /\n/, $output;
+    foreach my $package_name (keys %conflict_solutions) {
+        my $regex = $conflict_solutions{$package_name};
+        foreach my $line (@lines) {
+            if ($line =~ /$regex/) {
+                record_info $package_name;
+                send_key $1;
+                wait_still_screen 1;
+                send_key 'ret';
+                $conflict_solved = 1;
+                save_screenshot;
+                return $conflict_solved;
+            }
+        }
+    }
+
+    return $conflict_solved;
 }
 
 sub post_fail_hook {

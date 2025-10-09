@@ -5,19 +5,19 @@
 
 # Summary: helper class for azure
 #
-# Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::azure;
 use Mojo::Base 'publiccloud::provider';
 use Mojo::JSON qw(decode_json encode_json);
 use Term::ANSIColor 2.01 'colorstrip';
-use Data::Dumper;
 use testapi qw(is_serial_terminal :DEFAULT);
 use mmapi 'get_current_job_id';
-use utils qw(script_output_retry);
+use utils qw(script_retry script_output_retry);
 use publiccloud::azure_client;
 use publiccloud::ssh_interactive 'select_host_console';
 use Data::Dumper;
+use DateTime;
 
 has resource_group => 'openqa-upload';
 has container => 'sle-images';
@@ -152,25 +152,28 @@ sub get_image_version {
     my $gallery = $self->image_gallery;
     my $version = generate_img_version();
     my $definition = $self->generate_azure_image_definition();
-    my $json = script_output("az sig image-version show --resource-group '$resource_group' --gallery-name '$gallery' " .
-          "--gallery-image-definition '$definition' --gallery-image-version '$version'", proceed_on_failure => 1, timeout => 60 * 30);
-    record_info('IMG VER', $json);
-    eval { $image = decode_azure_json($json)->{id}; };
+    eval { $image = script_output("az sig image-version show --resource-group '$resource_group' --gallery-name '$gallery' " .
+              "--gallery-image-definition '$definition' --gallery-image-version '$version' | jq -Mr '.id'", timeout => 60 * 30); };
     if ($@) {
-        record_info('IMG VER NOT-FOUND', "Cannot find image-version $version in definition image definition. Need to upload it.\n$@");
+        record_info('IMG VER NOT-FOUND', "Cannot find image-version $version in definition image definition. Need to upload it.\n$@", result => 'fail');
         return undef;
     }
     record_info('IMG VER FOUND', "Found $image image version.");
 
-    my $regions = decode_azure_json($json)->{publishingProfile}->{targetRegions};
+    my $regions = script_output("az sig image-version show --resource-group '$resource_group' --gallery-name '$gallery' " .
+          "--gallery-image-definition '$definition' --gallery-image-version '$version' | jq -Mr '.publishingProfile.targetRegions'", timeout => 60 * 30);
+    $regions = decode_json($regions);
     my @regions_list = map { lc($_->{name} =~ s/[-\s]//gr) } @$regions;
+    diag("Azure regions list:\n" . Dumper(@regions_list));
     if (!grep(/^$self->{provider_client}->{region}$/, @regions_list)) {
-        record_info('REGION MISMATCH', 'The ' . $self->provider_client->region . ' is not listed in the targetRegions(' . join(',', @regions_list) . ') of this image version.');
+        record_info('REGION MISMATCH', 'The ' . $self->provider_client->region . ' is not listed in the targetRegions(' . join(',', @regions_list) . ') of this image version.', result => 'fail');
         return undef;
     }
     record_info('REGION OK', 'The ' . $self->provider_client->region . ' is listed in the targetRegions(' . join(',', @regions_list) . ') of this image version.');
 
-    die("Image version $image Found in failed state") if (decode_azure_json($json)->{provisioningState} eq "Failed");
+    my $state = script_output("az sig image-version show --resource-group '$resource_group' --gallery-name '$gallery' " .
+          "--gallery-image-definition '$definition' --gallery-image-version '$version' | jq -Mr '.provisioningState'", timeout => 60 * 30);
+    die("Image version $image Found in failed state") if ($state eq "Failed");
 
     return $image;
 }
@@ -505,49 +508,45 @@ sub terraform_apply {
     $args{vars}->{offer} = $offer if ($offer);
     $args{vars}->{sku} = $sku if ($sku);
 
-    my @instances = $self->SUPER::terraform_apply(%args);
-    $self->upload_boot_diagnostics('resource_group' => $self->get_resource_group_from_terraform_show());
-    return @instances;
+    return $self->SUPER::terraform_apply(%args);
 }
 
 sub on_terraform_apply_timeout {
     my ($self) = @_;
-
-    my $resgroup = $self->get_resource_group_from_terraform_show();
-    return if (!defined($resgroup));
-
-    eval { $self->upload_boot_diagnostics('resource_group' => $resgroup) }
-      or record_info('Bootlog upl error', 'Failed to upload bootlog');
-    assert_script_run("az group delete --yes --no-wait --name $resgroup") unless get_var('PUBLIC_CLOUD_NO_CLEANUP_ON_FAILURE');
-}
-
-sub get_resource_group_from_terraform_show {
-    my $resgroup;
-    my $out = script_output('terraform show -json');
-    eval {
-        my $json = decode_azure_json($out);
-        for my $resource (@{$json->{values}->{root_module}->{resources}}) {
-            next unless ($resource->{type} eq 'azurerm_resource_group');
-            $resgroup = $resource->{values}->{name};
-            last;
-        }
-    };
-    if ($@ || !defined($resgroup)) {
-        record_info('ERROR', "Unable to get resource-group:\n$out", result => 'fail');
-    }
-    return $resgroup;
+    my $resource_group = $self->get_terraform_output('.resource_group_name.value[0]');
+    assert_script_run("az group delete --yes --no-wait --name $resource_group") unless get_var('PUBLIC_CLOUD_NO_CLEANUP');
 }
 
 sub upload_boot_diagnostics {
     my ($self, %args) = @_;
-    return if !defined($args{resource_group});
+    my $instance_id = $self->get_terraform_output('.instance_id.value[0]');
+    $instance_id =~ s/.*\/(.*)/$1/;
+    my $resource_group = $self->get_terraform_output('.resource_group_name.value[0]');
+    return if (check_var('PUBLIC_CLOUD_SLES4SAP', 1));
+    unless (defined($instance_id) && defined($resource_group)) {
+        record_info('UNDEF. diagnostics', 'upload_boot_diagnostics: on azure, undefined instance or resource_group');
+        return;
+    }
 
-    my $bootlog_name = '/tmp/azure-bootlog.txt';
-    my $cmd_enable = 'az vm boot-diagnostics enable --ids $(az vm list -g ' . $args{resource_group} . ' --query \'[].id\' -o tsv)';
+    my $names = "--name $instance_id --resource-group $resource_group";
+    my $cmd_enable = "az vm boot-diagnostics enable $names";
     my $out = script_output($cmd_enable, 60 * 5, proceed_on_failure => 1);
     record_info('INFO', $cmd_enable . $/ . $out);
-    assert_script_run('az vm boot-diagnostics get-boot-log --ids $(az vm list -g ' . $args{resource_group} . ' --query \'[].id\' -o tsv) | jq -r "." > ' . $bootlog_name);
-    upload_logs($bootlog_name, failok => 1);
+
+    # Wait until the bootlog blob is created
+    script_retry("az vm boot-diagnostics get-boot-log-uris $names", delay => 15, retry => 12, die => 1);
+
+    my $dt = DateTime->now;
+    my $time = $dt->hms;
+    $time =~ s/:/-/g;
+    my $asset_path = "/tmp/console-$time.txt";
+    script_run("timeout 110 az vm boot-diagnostics get-boot-log $names | jq -Mr '.' > $asset_path", timeout => 120);
+    if (script_output("du $asset_path | cut -f1") < 8) {
+        record_soft_failure("poo#155116 - The console log is empty.");
+        record_info($asset_path, script_output("cat $asset_path"));
+    } else {
+        upload_logs($asset_path, failok => 1);
+    }
 }
 
 sub on_terraform_destroy_timeout {
@@ -561,8 +560,7 @@ sub on_terraform_destroy_timeout {
     assert_script_run("az group delete --yes --no-wait --name $resgroup");
 }
 
-sub get_state_from_instance
-{
+sub get_state_from_instance {
     my ($self, $instance) = @_;
     my $id = $instance->instance_id();
     my $out = decode_azure_json(script_output("az vm get-instance-view --ids '$id' --query instanceView.statuses[1] --output json", quiet => 1));
@@ -570,25 +568,26 @@ sub get_state_from_instance
     return $1;
 }
 
-sub get_ip_from_instance
-{
-    my ($self, $instance) = @_;
-    my $id = $instance->instance_id();
+sub get_public_ip {
+    my ($self) = @_;
 
-    my $out = decode_azure_json(script_output("az vm list-ip-addresses --ids '$id'", quiet => 1));
-    return $out->[0]->{virtualMachine}->{network}->{publicIpAddresses}->[0]->{ipAddress};
+    my $instance_id = $self->get_terraform_output('.instance_id.value[0]');
+    $instance_id =~ s/.*\/(.*)/$1/;
+    my $resource_group = $self->get_terraform_output('.resource_group_name.value[0]');
+
+    return script_output("az vm list-ip-addresses --name '$instance_id' --resource-group '$resource_group' | jq -Mr '.[0].virtualMachine.network.publicIpAddresses[0].ipAddress'", quiet => 1);
 }
 
-sub stop_instance
-{
+sub stop_instance {
     my ($self, $instance) = @_;
     # We assume that the instance_id on azure is actually the name
     # which is equal to the resource group
     # TODO maybe we need to change the azure.tf file to retrieve the id instead of the name
     my $id = $instance->instance_id();
+    my $resource_group = $instance->resource_group();
     my $attempts = 60;
 
-    die('Outdated instance object') if ($self->get_ip_from_instance($instance) ne $instance->public_ip);
+    die('Outdated instance object') if ($self->get_public_ip() ne $instance->public_ip);
 
     assert_script_run("az vm stop --ids '$id'", quiet => 1);
     while ($self->get_state_from_instance($instance) ne 'stopped' && $attempts-- > 0) {
@@ -601,11 +600,12 @@ sub start_instance
 {
     my ($self, $instance, %args) = @_;
     my $id = $instance->instance_id();
+    my $resource_group = $instance->resource_group();
 
     die("Try to start a running instance") if ($self->get_state_from_instance($instance) ne 'stopped');
 
     assert_script_run("az vm start --ids '$id'", quiet => 1);
-    $instance->public_ip($self->get_ip_from_instance($instance));
+    $instance->public_ip($self->get_public_ip());
 }
 
 =head2
@@ -631,18 +631,28 @@ sub parse_instance_id
 This method is called called after each test on failure or success to revoke the credentials
 =cut
 
-sub cleanup {
+sub teardown {
     my ($self, $args) = @_;
-    select_host_console(force => 1);
 
     $self->get_image_version() if (get_var('PUBLIC_CLOUD_BUILD'));
+    $self->SUPER::teardown();
+    return 1;
+}
 
-    if (!check_var('PUBLIC_CLOUD_SLES4SAP', 1) && defined($args->{my_instance}->{instance_id})) {
-        my $id = $args->{my_instance}->{instance_id};
-        script_run("az vm boot-diagnostics get-boot-log --ids $id | jq -r '.' > bootlog.txt", timeout => 120, die_on_timeout => 0);
-        upload_logs("bootlog.txt", failok => 1);
-    }
-    $self->SUPER::cleanup();
+sub query_metadata {
+    my ($self, $instance, %args) = @_;
+    my $ifNum = $args{ifNum};
+    my $addrCount = $args{addrCount};
+
+    # Cloud metadata service API is reachable at local destination
+    # 169.254.169.254 in case of all public cloud providers.
+    my $pc_meta_api_ip = '169.254.169.254';
+
+    my $query_meta_ipv4_cmd = qq(curl -sw "\\n" -H Metadata:true "http://$pc_meta_api_ip/metadata/instance/network/interface/$ifNum/ipv4/ipAddress/$addrCount/privateIpAddress?api-version=2023-07-01&format=text");
+    my $data = $instance->ssh_script_output($query_meta_ipv4_cmd);
+
+    die("Failed to get interface IPs from metadata server") unless length($data);
+    return $data;
 }
 
 1;

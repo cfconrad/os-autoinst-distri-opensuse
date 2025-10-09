@@ -1,4 +1,4 @@
-# Copyright 2015-2022 SUSE LLC
+# Copyright 2015-2025 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 package utils;
@@ -11,7 +11,8 @@ use warnings;
 use testapi qw(is_serial_terminal :DEFAULT);
 use lockapi 'mutex_wait';
 use mm_network;
-use version_utils qw(is_sle_micro is_microos is_krypton_argon is_leap is_leap_micro is_public_cloud is_sle is_sle12_hdd_in_upgrade is_storage_ng is_jeos package_version_cmp is_transactional is_bootloader_sdboot);
+use version_utils qw(is_sle_micro is_microos is_krypton_argon is_leap is_leap_micro is_public_cloud is_sle is_sle12_hdd_in_upgrade is_storage_ng is_jeos package_version_cmp is_transactional is_bootloader_grub2_bls is_bootloader_sdboot is_bootloader_grub2);
+use Carp qw(croak);
 use Utils::Architectures;
 use Utils::Systemd qw(systemctl disable_and_stop_service);
 use Utils::Backends;
@@ -21,6 +22,7 @@ use Storable qw(dclone);
 use Getopt::Long qw(GetOptionsFromString);
 use File::Basename;
 use XML::LibXML;
+use security::config;
 
 our @EXPORT = qw(
   generate_results
@@ -73,6 +75,7 @@ our @EXPORT = qw(
   get_root_console_tty
   get_x11_console_tty
   OPENQA_FTP_URL
+  OPENQA_HTTP_URL
   IN_ZYPPER_CALL
   arrays_differ
   arrays_subset
@@ -81,6 +84,8 @@ our @EXPORT = qw(
   exec_and_insert_password
   shorten_url
   reconnect_mgmt_console
+  check_nm_connectivity
+  restart_network
   set_hostname
   show_tasks_in_blocked_state
   show_oom_info
@@ -95,6 +100,7 @@ our @EXPORT = qw(
   is_efi_boot
   install_patterns
   common_service_action
+  ensure_service_disabled
   script_output_retry
   validate_script_output_retry
   get_secureboot_status
@@ -120,6 +126,16 @@ our @EXPORT = qw(
   remove_efiboot_entry
   empty_usb_disks
   upload_y2logs
+  enable_persistent_kernel_log
+  enable_console_kernel_log
+  ensure_testuser_present
+  is_disk_image
+  is_ipxe_with_disk_image
+  is_reboot_needed
+  install_extra_packages
+  render_autoinst_url
+  is_agama_guest
+  upload_folders
 );
 
 our @EXPORT_OK = qw(
@@ -144,6 +160,9 @@ use constant VERY_SLOW_TYPING_SPEED => 4;
 
 # openQA internal ftp server url
 our $OPENQA_FTP_URL = "ftp://openqa.suse.de";
+
+# openQA internal http server url
+our $OPENQA_HTTP_URL = "http://openqa.suse.de/assets/repo";
 
 # set flag IN_ZYPPER_CALL in zypper_call and unset when leaving
 our $IN_ZYPPER_CALL = 0;
@@ -196,12 +215,13 @@ C<$testapi::password> will be used as password.
 
 sub unlock_zvm_disk {
     my ($console) = @_;
+    my $password = check_var('SYSTEM_ROLE', 'Common_Criteria') ? $security::config::strong_password : $testapi::password;
     eval { $console->expect_3270(output_delim => 'Please enter passphrase', timeout => 30) };
     if ($@) {
         diag 'No passphrase asked, continuing';
     }
     else {
-        $console->sequence_3270("String(\"$testapi::password\")", "ENTER");
+        $console->sequence_3270("String(\"$password\")", "ENTER");
         diag 'Passphrase entered';
     }
 
@@ -332,16 +352,16 @@ C<$check_typed_password> will default to C<0>.
 sub unlock_if_encrypted {
     my (%args) = @_;
     $args{check_typed_password} //= 0;
+    my $password = check_var('SYSTEM_ROLE', 'Common_Criteria') ? $security::config::strong_password : $testapi::password;
 
     return unless get_var("ENCRYPT");
 
     if (get_var('S390_ZKVM')) {
-        my $password = $testapi::password;
         select_console('svirt');
 
         # enter passphrase twice (before grub and after grub) if full disk is encrypted
         if (get_var('FULL_LVM_ENCRYPT')) {
-            wait_serial("Please enter passphrase for disk.*", 100);
+            wait_serial("Please enter passphrase for disk.*", 300);
             type_line_svirt "$password";
         }
         wait_serial('GNU GRUB') || diag 'Could not find GRUB screen, continuing nevertheless, trying to boot';
@@ -359,13 +379,13 @@ sub unlock_if_encrypted {
     }
     else {
         assert_screen("encrypted-disk-password-prompt", 200);
-        type_password;    # enter PW at boot
+        type_password $password;
         save_screenshot;
         if ($args{check_typed_password}) {
             unless (check_screen "encrypted_disk-typed_password", 30) {
                 record_info("Invalid password", "Not all password characters were typed successfully, retyping");
                 send_key "backspace" for (0 .. 9);
-                type_password;
+                type_password $password;
                 assert_screen "encrypted_disk-typed_password";
             }
         }
@@ -819,6 +839,64 @@ sub fully_patch_system {
     return $ret;
 }
 
+sub _ssh_fully_patch_system_upload_solver {
+    my ($remote) = @_;
+    script_run("ssh $remote 'tar -czvf /tmp/solver.tar.gz /var/log/zypper.solverTestCase /var/log/zypper.log'");
+    script_run("scp $remote:/tmp/solver.tar.gz /tmp/solver.tar.gz");
+    upload_logs('/tmp/solver.tar.gz', failok => 1);
+}
+
+sub _ssh_fully_patch_system_run_patch {
+    my (%args) = @_;
+    my $remote = $args{remote};
+    my $timeout = $args{timeout};
+    my $with_solver = $args{with_solver} // 0;
+    my $label = $args{label};
+
+    my $solver_opt = $with_solver ? '--debug-solver' : '';
+    my $cmd = "ssh $remote 'sudo zypper -n patch $solver_opt --with-interactive -l'";
+
+    my $t0 = time();
+    my $ret = script_run($cmd, $timeout);
+    record_info('zypper patch', "$label took " . (time() - $t0) . "s (exit $ret)");
+    return $ret;
+}
+
+sub _ssh_fully_patch_system_pass {
+    my (%args) = @_;
+    my $remote = $args{remote};
+    my $timeout = $args{timeout};
+    my $label = $args{label};
+    my $accept_codes = $args{accept_codes};
+    my $gen_resolver = $args{gen_resolver};
+
+    my $ret = -1;
+    my $attempt = 0;
+
+    unless ($gen_resolver) {
+        $attempt++;
+        $ret = _ssh_fully_patch_system_run_patch(
+            remote => $remote,
+            timeout => $timeout,
+            with_solver => $gen_resolver,
+            label => "$label attempt $attempt"
+        );
+    }
+
+    if ($gen_resolver || !grep { $_ == $ret } @$accept_codes) {
+        $attempt++;
+        $ret = _ssh_fully_patch_system_run_patch(
+            remote => $remote,
+            timeout => $timeout,
+            with_solver => $gen_resolver,
+            label => "$label attempt $attempt (debug-solver)"
+        );
+        _ssh_fully_patch_system_upload_solver($remote);
+    }
+
+    croak("Zypper failed with $ret") unless grep { $_ == $ret } @$accept_codes;
+}
+
 =head2 ssh_fully_patch_system
 
  ssh_fully_patch_system($host);
@@ -830,18 +908,26 @@ the second run will update the system.
 =cut
 
 sub ssh_fully_patch_system {
-    my $remote = shift;
-    my $cmd_time = time();
-    # first run, possible update of packager -- exit code 103
-    my $ret = script_run("ssh $remote 'sudo zypper -n patch --with-interactive -l'", 1500);
-    record_info('zypper patch', 'The command zypper patch took ' . (time() - $cmd_time) . ' seconds.');
-    die "Zypper failed with $ret" if ($ret != 0 && $ret != 102 && $ret != 103);
+    my ($remote) = @_;
+    my $gen_resolver = get_var('PUBLIC_CLOUD_GEN_RESOLVER', 0);
 
-    $cmd_time = time();
-    # second run, full system update
-    $ret = script_run("ssh $remote 'sudo zypper -n patch --with-interactive -l'", 6000);
-    record_info('zypper patch', 'The second command zypper patch took ' . (time() - $cmd_time) . ' seconds.');
-    die "Zypper failed with $ret" if ($ret != 0 && $ret != 102);
+    # First run — allow 103 (zypper updated itself)
+    _ssh_fully_patch_system_pass(
+        remote => $remote,
+        timeout => 1500,
+        label => 'zypper patch (first run)',
+        accept_codes => [0, 102, 103],
+        gen_resolver => $gen_resolver
+    );
+
+    # Second run — system update, only 0/102 allowed
+    _ssh_fully_patch_system_pass(
+        remote => $remote,
+        timeout => 6000,
+        label => 'zypper patch (second run)',
+        accept_codes => [0, 102],
+        gen_resolver => $gen_resolver
+    );
 }
 
 =head2 minimal_patch_system
@@ -918,7 +1004,7 @@ sub zypper_search {
         @fields = ('status', 'name', 'type', 'version', 'arch', 'repository');
     }
 
-    my $output = script_output("zypper -n se $params");
+    my $output = script_output("zypper -in se $params");
     return parse_zypper_table($output, \@fields);
 }
 
@@ -1038,7 +1124,11 @@ that the boot partition is encrypted.
 =cut
 
 sub is_boot_encrypted {
-    return 0 if get_var('UNENCRYPTED_BOOT');
+    my $is_enc_cc_s390x = check_var('SYSTEM_ROLE', 'Common_Criteria') && check_var('FULL_LVM_ENCRYPT', '1') && is_s390x;
+
+    # systemd-boot and grub-bls don't support encrypted bootloader
+    return 0 if !is_bootloader_grub2;
+    return 0 if get_var('UNENCRYPTED_BOOT') && !$is_enc_cc_s390x;
     return 0 if !get_var('ENCRYPT') && !get_var('FULL_LVM_ENCRYPT');
     # for Leap 42.3 and SLE 12 codestream the boot partition is not encrypted
     # Only aarch64 needs separate handling, it has unencrypted boot for fresh
@@ -1072,10 +1162,12 @@ without LVM configuration (cr_swap,cr_home etc).
 =cut
 
 sub need_unlock_after_bootloader {
-    my $need_unlock_after_bootloader = is_leap('<15.6') || is_sle('<15-sp6') || is_leap_micro || is_sle_micro || (!get_var('LVM', '0') && !get_var('FULL_LVM_ENCRYPT', '0'));
+    my $is_enc_cc_s390x = check_var('SYSTEM_ROLE', 'Common_Criteria') && check_var('FULL_LVM_ENCRYPT', '1') && is_s390x;
+
+    my $need_unlock_after_bootloader = is_leap('<15.6') || is_sle('<15-sp6') || is_leap_micro || is_sle_micro || (!get_var('LVM', '0') && !get_var('FULL_LVM_ENCRYPT', '0')) || $is_enc_cc_s390x;
     return 0 if is_boot_encrypted && !$need_unlock_after_bootloader;
     # MicroOS with sdboot supports automatic TPM based unlocking.
-    return 0 if is_microos && is_bootloader_sdboot && get_var('QEMUTPM');
+    return 0 if is_microos && (is_bootloader_sdboot || is_bootloader_grub2_bls) && get_var('QEMUTPM');
     return 1;
 }
 
@@ -1124,6 +1216,77 @@ sub print_ip_info {
     script_run('ip neigh');
 }
 
+=head2 check_nm_connectivity
+
+  check_nm_connectivity();
+
+helper function to check NetworkManager connectivity
+
+=cut
+
+sub check_nm_connectivity {
+    my $attempts = shift // 5;
+    my $state;
+
+    for (my $i = 0; $i < $attempts; $i++) {
+        $state = script_output("nmcli -w 5 networking connectivity check", proceed_on_failure => 1);
+        last if $state =~ /full/;
+        sleep 1;
+    }
+    return $state;
+}
+
+=head2 restart_network
+
+  restart_network();
+
+helper function to restart network
+
+=cut
+
+sub restart_network {
+    if (is_qemu && systemctl('is-active NetworkManager', ignore_failure => 1) == 0) {
+        my $state = check_nm_connectivity(1);
+
+        if (!($state =~ /full/)) {
+            systemctl('restart NetworkManager');
+        }
+
+        if ($state =~ /full/) {
+            my @devs = split("\n", script_output('nmcli device'));
+
+            foreach my $indx (keys @devs) {
+                my $line = $devs[$indx];
+
+                if (!($line =~ /^([a-z0-9_-]+)/i)) {
+                    record_info('nmcli output error', 'device id did not match: ' . $devs[$indx], result => 'fail');
+                    next;
+                }
+                my $dev = $1;
+
+                next if ($indx == 0 && $dev eq 'DEVICE');
+                next if ($dev eq 'lo');
+
+                # poo#184165 By default sle16 qcow created in openqa will not bring up all interface automaticly.
+                # Try to connect if interface status is disconnected.
+                script_run 'nmcli device connect ' . $dev if ($line =~ /disconnected/);
+
+                next if !($line =~ /\bconnected\b/);
+
+                # poo#169726 Increasing timeout to 120s and adding DEBUG logs for future investigation
+                script_run("nmcli general logging level DEBUG");
+                assert_script_run("nmcli -w 120 device disconnect $dev");
+                script_run("journalctl -u NetworkManager -b >> /var/log/nmcli_logs");
+                record_info("Logs", script_output("cat /var/log/nmcli_logs"));
+                assert_script_run 'nmcli device connect ' . $dev;
+            }
+        }
+        check_nm_connectivity();
+    } else {
+        assert_script_run "if systemctl -q is-active network.service; then systemctl reload-or-restart network.service; fi";
+    }
+}
+
 =head2 set_hostname
 
  set_hostname($hostname);
@@ -1149,52 +1312,7 @@ sub set_hostname {
     systemctl 'status network.service';
     save_screenshot;
 
-    if (is_qemu && systemctl('is-active NetworkManager', ignore_failure => 1) == 0) {
-        my $state = script_output 'nmcli networking connectivity check', proceed_on_failure => 1;
-
-        if (!($state =~ /full/)) {
-            systemctl('restart NetworkManager');
-
-            for (my $i = 0; $i < 10; $i++) {
-                $state = script_output 'nmcli -w 5 networking connectivity check';
-                last if $state =~ /full/;
-                sleep 1;
-            }
-        }
-
-        if ($state =~ /full/) {
-            my @devs = split("\n", script_output('nmcli device'));
-
-            foreach my $indx (keys @devs) {
-                my $line = $devs[$indx];
-
-                if (!($line =~ /^([a-z0-9_-]+)/i)) {
-                    record_info('nmcli output error', 'device id did not match: ' . $devs[$indx], result => 'fail');
-                    next;
-                }
-                my $dev = $1;
-
-                next if ($indx == 0 && $dev eq 'DEVICE');
-                next if ($dev eq 'lo');
-                next if !($line =~ /connected/);
-
-                # Default timeout (10 seconds) may be too short with qemu NO kvm, so increase to 20s - poo#131366
-                my $nmcli = get_var('QEMU_NO_KVM') ? 'nmcli -w 20' : 'nmcli';
-                assert_script_run "$nmcli device disconnect $dev";
-                assert_script_run 'nmcli device connect ' . $dev;
-            }
-
-            for (my $i = 0; $i < 5; $i++) {
-                $state = script_output 'nmcli -w 5 networking connectivity check';
-
-                last if $state =~ /full/;
-
-                sleep 1;
-            }
-        }
-    } else {
-        assert_script_run "if systemctl -q is-active network.service; then systemctl reload-or-restart network.service; fi";
-    }
+    restart_network();
 
     print_ip_info;
     script_run("dig +short $hostname.openqa.test");
@@ -1509,6 +1627,7 @@ the session.
 
 sub get_x11_console_tty {
     my $new_sddm = (!is_sle('<15-SP6') && !is_leap('<15.6')) || is_krypton_argon;
+    # Agama uses tty7 for graphical install
     if (check_var('DESKTOP', 'kde') || check_var('DESKTOP', 'lxqt')) {
         return $new_sddm ? 2 : 7;
     }
@@ -1570,6 +1689,19 @@ sub arrays_subset {
     return @result;
 }
 
+=head2 ensure_testuser_present
+Ensure testuser (UID 1000) is present on the system.
+
+If the user is not present, it will create it with the default password
+=cut
+
+sub ensure_testuser_present {
+    if ($testapi::username ne 'root' && script_run("id $testapi::username") != 0) {
+        assert_script_run("useradd -u 1000 -m $testapi::username");
+        assert_script_run("echo '$testapi::username:$testapi::password' | chpasswd");
+    }
+}
+
 =head2 ensure_serialdev_permissions
 
  ensure_serialdev_permissions();
@@ -1583,6 +1715,9 @@ test user as well as root.
 sub ensure_serialdev_permissions {
     my ($self) = @_;
     return if get_var('ROOTONLY');
+
+    ensure_testuser_present;
+
     # ownership has effect immediately, group change is for effect after
     # reboot an alternative https://superuser.com/a/609141/327890 would need
     # handling of optional sudo password prompt within the exec
@@ -1914,7 +2049,8 @@ sub svirt_host_basedir {
 
  script_retry($cmd, [expect => $expect], [retry => $retry], [delay => $delay], [timeout => $timeout], [die => $die]);
 
-Repeat command until expected result or timeout.
+Repeat a command until the expected result is found or the overall timeout is
+hit.
 
 C<$expect> refers to the expected command exit code and defaults to C<0>.
 
@@ -1924,7 +2060,7 @@ C<$delay> is the time between retries and defaults to C<30>.
 
 C<$fail_message> is an optional error message in case of failure. Defaults to "Waiting for Godot".
 
-The command must return within C<$timeout> seconds (default: 25).
+The command must return within C<$timeout> seconds (default: 30).
 
 If the command doesn't return C<$expect> after C<$retry> retries,
 this function will die, if C<$die> is set.
@@ -1944,19 +2080,18 @@ sub script_retry {
     my $option = $args{option} // '';
     my $die = $args{die} // 1;
     my $fail_msg = $args{fail_message} // "Waiting for Godot: $cmd";
-
-    my $ret;
-
-    my $exec = "timeout $option $timeout $cmd";
+    my $negate;
     # Exclamation mark needs to be moved before the timeout command, if present
     if (substr($cmd, 0, 1) eq "!") {
         $cmd = substr($cmd, 1);
         $cmd =~ s/^\s+//;    # left trim spaces after the exclamation mark
-        $exec = "! timeout $option $timeout $cmd";
+        $negate = '!';
     }
+    my $exec = join ' ', grep { defined && length } ($negate, 'timeout -k 5', $option, $timeout, $cmd);
+    my $ret;
     for (1 .. $retry) {
         # timeout for script_run must be larger than for the 'timeout ...' command
-        $ret = script_run($exec, ($timeout + 3));
+        $ret = script_run($exec, ($timeout + 10));
         last if defined($ret) && $ret == $ecode;
 
         die($fail_msg) if $retry == $_ && $die == 1;
@@ -2336,13 +2471,19 @@ This functions checks if ca-certificates-suse is installed and if it is not it a
 sub ensure_ca_certificates_suse_installed {
     return unless is_sle || is_sle_micro;
     if (script_run('rpm -qi ca-certificates-suse') == 1) {
-        my $host_version = get_var("HOST_VERSION") ? 'HOST_VERSION' : 'VERSION';
-        my $distversion = get_required_var($host_version) =~ s/-SP/_SP/r;    # 15 -> 15, 15-SP1 -> 15_SP1
-        zypper_call("ar --refresh http://download.suse.de/ibs/SUSE:/CA/SLE_$distversion/SUSE:CA.repo");
+        my $version = "openSUSE_Tumbleweed";
+        # Given that our primary need was simply to install certificates, we decided to abandon
+        # the complex logic that determined which package version to select for each run.
+        # Our new approach is to install the TW package universally. Regrettably,
+        # this has presented a challenge with SLE 12 SP5, as the TW package utilizes an unsupported compression method.
+        # For more details, please see https://forums.opensuse.org/t/error-rpm-failed-error-unpacking-of-archive-failed-cpio-bad-magic/142434
+        $version = "SLE_12_SP5" if (is_sle('=12-SP5'));
+        zypper_call("ar --refresh https://download.opensuse.org/repositories/SUSE:/CA/$version/SUSE:CA.repo");
         if (is_sle_micro) {
+            transactional::trup_call("--continue run zypper --gpg-auto-import-keys refresh");
             transactional::trup_call('--continue pkg install ca-certificates-suse');
         } else {
-            zypper_call("in ca-certificates-suse");
+            zypper_call("--gpg-auto-import-keys in ca-certificates-suse");
         }
     }
 }
@@ -2471,6 +2612,10 @@ sub install_patterns {
         next if (($pt =~ /wsl_base|wsl_gui|wsl_systemd/) && check_var('PATTERNS', 'all'));
         # if pattern is common-criteria and PATTERNS is all, skip, poo#73645
         next if (($pt =~ /common-criteria/) && check_var('PATTERNS', 'all'));
+        # if pattern is fips or fips-certified and PATTERNS is all, skip
+        next if (($pt =~ /fips|fips-certified/) && check_var('PATTERNS', 'all'));
+        # if pattern is x11_raspberrypi and PATTERNS is all for aarch64, skip
+        next if (($pt =~ /x11_raspberrypi/) && check_var('PATTERNS', 'all') && is_aarch64);
         zypper_call("in -t pattern $pt", timeout => 1800);
     }
 }
@@ -2492,6 +2637,21 @@ sub common_service_action {
         systemctl $action . ' ' . $service;
     } else {
         die "Unsupported service type, please check it again.";
+    }
+}
+
+=head2 ensure_service_disabled
+    ensure_service_disabled();
+
+Make sure service is disabled before test.
+
+=cut
+
+sub ensure_service_disabled {
+    my ($service) = @_;
+    unless (systemctl "is-active " . $service, ignore_failure => 1) {    # 0 if active, unless to revert
+        systemctl "disable --now " . $service;
+        record_info $service, "disabled";
     }
 }
 
@@ -2920,6 +3080,8 @@ sub ping_size_check {
     my $target = shift;
     my $size = shift;
     # Check connectivity with different packet size to target
+    assert_script_run('command -v ping >/dev/null', fail_message => 'ping application not found. Needed for ping_size_check');
+    assert_script_run("ping -M do -s 0 -c 1 $target", fail_message => "ping failed trying to reach target '$target'. Check network configuration on worker host'");
     # Fragmentation is disabled, maximum size is 1352 to fit in 1380 MTU in GRE tunel
     my $max_mtu = get_var('MM_MTU', 1380);
     my @sizes = $size ? $size : (100, 1000, 1252, 1350, 1352, 1400, 1430);
@@ -3029,7 +3191,9 @@ sub empty_usb_disks {
     my %args = @_;
     $args{usb_disks} //= '';
 
-    my @usb_disks = $args{usb_disks} ? split(' ', $args{usb_disks}) : split('\n', script_output("ls /dev/disk/by-id/ -l | grep -i usb | grep -i -v -E \"generic|part|Virtual\" | sed \'s#^.*\\\/##\'"));
+    my $usb_disk_filter = get_var('USB_DISK_FILTER') ? get_var('USB_DISK_FILTER') : "grep -i usb | grep -i -v -E 'generic|part|Virtual'";
+    my $filter_cmd = "ls -l /dev/disk/by-id/ | " . $usb_disk_filter . " | sed 's#^.*\\/##'";
+    my @usb_disks = $args{usb_disks} ? split(' ', $args{usb_disks}) : split('\n', script_output($filter_cmd));
     record_info("USB disks to be emptied are @usb_disks", "All plugged-in usb disks are " . script_output("ls /dev/disk/by-id/ -l; fdisk -l"));
     foreach (@usb_disks) {
         assert_script_run("echo y | mkfs.ext4 /dev/$_", timeout => 120);
@@ -3054,6 +3218,239 @@ sub upload_y2logs {
     script_retry("save_y2logs $args{file}", timeout => 180, retry => 3);
     upload_logs($args{file}, failok => $args{failok});
     save_screenshot;
+}
+
+=head2 enable_persistent_kernel_log
+
+  enable_persistent_kernel_log(service => 'log_service_name',
+      config => 'config_file_path', log => 'log_file_path');
+
+For system that uses rsyslog to manage log facility, kernel log by default is not
+stored on persistent storage. In order to enable persistent kernel log, loading
+imklog.so module and specifying desired log file in config file /etc/rsyslog.conf
+should be performed. Arguments service, config and log provide flexibility to use
+different log management appliances. 
+=cut
+
+sub enable_persistent_kernel_log {
+    my %args = @_;
+    $args{service} //= 'rsyslog';
+    $args{config} //= '/etc/rsyslog.conf';
+    $args{log} //= '/var/log/kern.log';
+
+    assert_script_run("ls $args{config}");
+    if (script_run("grep -e \"^\\\$ModLoad imklog.so\$\" /etc/rsyslog.conf") != 0) {
+        assert_script_run("echo \"\\\$ModLoad imklog.so\" >> /etc/rsyslog.conf");
+    }
+
+    if (script_run("grep -e \"^kern.*\$\" /etc/rsyslog.conf") != 0) {
+        assert_script_run("rm -f -r $args{log}");
+        assert_script_run("echo \"kern.*                                  $args{log}\" >> /etc/rsyslog.conf");
+    }
+    record_info("Content of log config file $args{config}", script_output("cat $args{config}"));
+    systemctl("enable $args{service}.service");
+    systemctl("restart $args{service}.service");
+}
+
+=head2 enable_console_kernel_log
+
+ enable_console_kernel_log;
+
+By default only those kernel logs level of which is lower than default value will
+be printed out onto serial console. If user prefers to have all kernel messages
+printed out onto serial console, ignore_loglevel, loglvl or guest_loglvl setting
+should be put onto kernel command line and setting /proc/sys/kernel/printk should
+have value like 8 which is greater than the highest kernel log level. 
+=cut
+
+sub enable_console_kernel_log {
+    if (virt_autotest::utils::is_kvm_host()) {
+        assert_script_run("sed -i -r \'/linux\\s*.*boot/ s/\$/ ignore_loglevel/;\' /boot/grub2/grub.cfg");
+    }
+    elsif (virt_autotest::utils::is_xen_host()) {
+        assert_script_run("sed -i -r \'/module\\s*.*vmlinuz/ s/(loglvl|guest_loglvl)=[^ ]*//g;\' /boot/grub2/grub.cfg");
+        assert_script_run("sed -i -r \'/module\\s*.*vmlinuz/ s/\$/ loglvl=all guest_loglvl=all/;\' /boot/grub2/grub.cfg");
+    }
+    record_info("Content of /boot/grub2/grub.cfg", script_output("cat /boot/grub2/grub.cfg"));
+    assert_script_run("echo 8 > /proc/sys/kernel/printk");
+    record_info("Content of /proc/sys/kernel/printk", script_output("cat /proc/sys/kernel/printk"));
+}
+
+=head2 is_disk_image
+
+ is_disk_image;
+
+Identify whether test runs with linux disk image built by kiwi or similar programs.
+HDD_1 is usually used if disk image is available on openQA server. Test run attempts
+downloading HDD_1, failure of which leads to failed test run. INSTALL_HDD_IMAGE is
+introduced for installation with disk image which might be located somewhere else
+and also more flexibility.
+=cut
+
+sub is_disk_image {
+    return 1 if ((get_var('HDD_1') or get_var('INSTALL_HDD_IMAGE')) and get_var('BOOT_HDD_IMAGE'));
+    return 0;
+}
+
+=head2 is_ipxe_with_disk_image
+
+ is_ipxe_with_disk_image;
+
+Identify whether test runs boots from ipxe and deploy linux disk image built by kiwi or similar programs
+=cut
+
+sub is_ipxe_with_disk_image {
+    return 1 if (is_ipxe_boot and is_disk_image);
+    return 0;
+}
+
+=head2 is_reboot_needed
+
+ is_reboot_needed(username => 'name', address => 'address');
+
+Identify whether rebooting needed after system being changed. Arguments username
+and address can be used to specify remote user and host if operation is not local.
+=cut
+
+sub is_reboot_needed {
+    my %args = @_;
+    $args{username} //= 'root';
+    $args{address} //= 'localhost';
+
+    my $check_reboot_needed = "zypper needs-rebooting";
+    $check_reboot_needed = "ssh $args{username}\@$args{address} \"$check_reboot_needed\"" if ($args{address} ne 'localhost');
+    if (script_run("$check_reboot_needed") == 102 or get_var('_NEEDS_REBOOTING')) {
+        set_var('_NEEDS_REBOOTING', 0);
+        return 1;
+    }
+    return 0;
+}
+
+=head2 install_extra_packages
+
+ install_extra_packages(repos => 'repositories', packages => 'packages');
+
+Install extra packages that are only available in extra repositories. User may
+need to install some useful utilities from other repositories to facilitate test
+run. At the same time, it also needs to ensure such operations will not alter
+existing system. Althought user should not be prevented from installing legitimate
+tools and utilities, it is expected that use of additional packages should be
+limited to the minimum and their impact should be paid attention to. User can
+specify required repositories and pacakges via arguments, repos and packages or
+settings INSTALL_OTHER_REPOS and INSTALL_OTHER_PACKAGES.
+=cut
+
+sub install_extra_packages {
+    my %args = @_;
+    $args{repos} //= get_var('INSTALL_OTHER_REPOS', '');
+    $args{packages} //= get_var('INSTALL_OTHER_PACKAGES', '');
+
+    if (!$args{repos} or !$args{packages}) {
+        record_info("No repositories/packags to be installed", "Specify arguments repos/packages or settings INSTALL_OTHER_REPOS/INSTALL_OTHER_PACKAGES");
+        return;
+    }
+
+    my @repos_to_install = split(/,/, $args{repos});
+    my @repos_names = ();
+    my $repo_name = "";
+    foreach (@repos_to_install) {
+        $repo_name = (split(/\//, $_))[-1] . "-" . bmwqemu::random_string(8);
+        push(@repos_names, $repo_name);
+        zypper_call("--gpg-auto-import-keys ar --enable --refresh $_ $repo_name");
+        save_screenshot;
+    }
+    zypper_call("--gpg-auto-import-keys refresh");
+    save_screenshot;
+    my $cmd = "install --no-allow-downgrade --no-allow-name-change --no-allow-vendor-change";
+    $cmd = $cmd . " $_" foreach (split(/,/, $args{packages}));
+    zypper_call($cmd);
+    save_screenshot;
+    $cmd = "rr";
+    $cmd = $cmd . " $_" foreach (@repos_names);
+    zypper_call($cmd);
+    save_screenshot;
+}
+
+=head2 render_autoinst_url
+
+ render_autoinst_url(url => 'openQA url');
+
+In order to avoid downloading resources directly from openQA instance, rendering
+autoinst url from given openQA url is necessary. Argument url accetps legal HTTP
+url addresses, but it will be returned directly without rendering if it is not an
+openQA url.
+=cut
+
+sub render_autoinst_url {
+    my %args = @_;
+    $args{url} //= '';
+
+    croak("Can not render autoinst url from empty url") if (!$args{url});
+    if ($args{url} =~ /^(http|https)\:\/\/openqa\./im) {
+        if ($args{url} =~ /^(http|https)\:\/\/openqa\.[^\s]+\/assets\/repo\//im) {
+            record_info("Can not render autoinst url for repo assets", "openQA only syncs iso/hdd assets.Return original $args{url}");
+            return $args{url};
+        }
+        my $openqa_instance = get_required_var('OPENQA_HOSTNAME');
+        $openqa_instance =~ s/\./\\\./g;
+        if ($args{url} !~ /(http|https)\:\/\/$openqa_instance\//im) {
+            record_info("Not url on running openQA $openqa_instance", "Can not render running openQA autoinst url from $args{url}", result => 'fail');
+            return $args{url};
+        }
+        my $autoinst_url = autoinst_url('/' . join('/', (split('/', $args{url}, -1))[3 .. (scalar split('/', $args{url}, -1)) - 1]));
+        record_info("Rendered autoinst url from running openQA instance", "Rendered url $autoinst_url from $args{url}");
+        return $autoinst_url;
+    }
+    else {
+        record_info("Can not render autoinst url from non-openQA url", "Return original url $args{url}", result => 'fail');
+        return $args{url};
+    }
+}
+
+=head2 is_agama_guest
+
+ is_agama_guest(guest => 'guest or domain name');
+
+Determine whether virtual machine under test uses Agama installer. Must provide
+virtual machine or domain name to argument guest to judge whether agama string
+is present.
+=cut
+
+sub is_agama_guest {
+    my %args = @_;
+    $args{guest} //= '';
+
+    croak("Guest or domain name must be given") if (!$args{guest});
+    return $args{guest} =~ /agama/img;
+}
+
+=head2 upload_folders
+
+ upload_folders(folders => 'absolute path to folder separated by commas');
+
+Compress folders to files and call upload_logs to upload. The arguments are folders
+which accept absolute path to folders and store which indicates the absolute path to
+a folder that stores compressed files
+=cut
+
+sub upload_folders {
+    my %args = @_;
+    $args{folders} //= '';
+    $args{store} //= '/var/log';
+    $args{failok} //= 1;
+    $args{cleanup} //= 1;
+
+    croak("Absolute path to folders must be given") if (!$args{folders});
+    foreach my $folder (split(/,/, $args{folders})) {
+        my $file = $folder;
+        $file =~ s|/$|| if ($file ne '/');
+        $file =~ s/\//_/g;
+        $file =~ s/^_+//g if ($file ne '_');
+        $args{store} =~ s|/$|| if ($args{store} ne '/');
+        script_run("tar -I 'gzip -9' -cvf $args{store}/$file.tar.gz $folder");
+        upload_logs("$args{store}/$file.tar.gz", failok => $args{failok});
+        script_run("rm -f -r $args{store}/$file.tar.gz") if ($args{cleanup});
+    }
 }
 
 1;

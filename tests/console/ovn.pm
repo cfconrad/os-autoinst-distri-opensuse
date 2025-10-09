@@ -20,8 +20,6 @@
 use base "consoletest";
 use testapi;
 use serial_terminal 'select_serial_terminal';
-use strict;
-use warnings;
 use utils;
 use version_utils qw(is_sle is_leap is_tumbleweed);
 
@@ -37,7 +35,7 @@ sub run {
     assert_script_run "ovn-sbctl set-connection ptcp:6642";
 
     my $ovn_encap_ip = "";
-    if (is_tumbleweed) {
+    if (is_tumbleweed || is_sle('>=16') || is_leap('>=16.0')) {
         $ovn_encap_ip = script_output(q(ip address | awk '/inet/ && /\/24/ { split($2, ip, "/"); print ip[1] }'));
     }
     else {

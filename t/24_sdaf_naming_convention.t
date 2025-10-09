@@ -126,6 +126,33 @@ subtest '[convert_region_to_short] Test invalid input' => sub {
     dies_ok { convert_region_to_short($_) } "Croak with invalid region name: $_" foreach @invalid_region_names;
 };
 
+subtest '[get_workload_vnet_code] ' => sub {
+    my $mock_lib = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::naming_conventions', no_auto => 1);
+    dies_ok { get_workload_vnet_code() } 'Die with with no job id found';
 
+    $mock_lib->redefine(find_deployment_id => sub { return '0079'; });
+    is get_workload_vnet_code(), '0079', 'Return correct VNET code with default values';
+    is get_workload_vnet_code(job_id => '0087'), '0087', 'Return correct VNET code defined by named argument';
+};
+
+subtest '[get_tfvars_path] Test passing scenarios' => sub {
+    is get_sdaf_inventory_path(sap_sid => 'ZETA', config_root_path => '/Project/Zeta'),
+      '/Project/Zeta/ZETA_hosts.yaml', 'Return correct inventory path.';
+    dies_ok { get_sdaf_inventory_path(sap_sid => 'ZETA') } 'Fail with missing config root path argument';
+    dies_ok { get_sdaf_inventory_path(config_root_path => '/Project/Zeta') } 'Fail with missing SAP sid argument';
+};
+
+subtest '[get_sut_sshkey_path]' => sub {
+    is get_sut_sshkey_path(config_root_path => '/Project/Zeta'), '/Project/Zeta/sshkey', 'Return correct ssh key path.';
+    dies_ok { get_sut_sshkey_path() } 'Fail with missing config root path argument';
+};
+
+subtest '[get_sizing_filename]' => sub {
+    set_var('SDAF_DEPLOYMENT_SCENARIO', 'db,nw');
+    is get_sizing_filename(), 'custom_sizes_default.json', 'Return correct default file';
+
+    set_var('SDAF_DEPLOYMENT_SCENARIO', 'db,nw,ensa');
+    is get_sizing_filename(), 'custom_sizes_S4HANA.json', 'Return filename for ENSA2 scenario';
+};
 
 done_testing;

@@ -30,11 +30,22 @@ sub load_kernel_tests {
         load_bootloader_s390x();
     }
 
-    loadtest_kernel "../installation/bootloader" if is_pvm;
+    # Schedule bootloader only for PowerVM non-installation tests
+    loadtest_kernel "../installation/bootloader" if (is_pvm && !get_var('LTP_BAREMETAL'));
 
     if (get_var('INSTALL_LTP')) {
         if (is_transactional) {
-            is_s390x ? loadtest 'boot/boot_to_desktop' : loadtest 'microos/disk_boot';
+            # Handle specific boot requirements for different backends and architectures
+            if (is_s390x) {
+                loadtest 'boot/boot_to_desktop';
+            }
+            elsif ((is_ipmi || is_pvm)) {
+                loadtest 'installation/ipxe_install' if is_ipmi;
+                loadtest 'microos/install_image';
+            }
+            else {
+                loadtest 'microos/disk_boot';
+            }
             replace_opensuse_repos_tests if is_repo_replacement_required;
             loadtest 'transactional/host_config';
             loadtest 'console/suseconnect_scc' if is_sle_micro;
@@ -48,13 +59,24 @@ sub load_kernel_tests {
             get_var('ASSET_CHANGE_KERNEL_RPM')) {
             loadtest_kernel 'change_kernel';
         }
-        if (get_var('FLAVOR', '') =~ /Incidents-Kernel/) {
+        if (get_var('FLAVOR', '') =~ /Incidents-Kernel|Online-Kernel-Updates-Staging|Online-Increments/) {
             loadtest_kernel 'update_kernel';
         }
-        if (is_transactional && (get_var('FLAVOR', '') =~ /-Staging/)) {
+
+        # transactional needs to first run install_ltp due broken grub menu
+        # counting detection in add_custom_grub_entries():
+        # Test died: Unexpected number of grub entries: 5, expected: 3 at lib/bootloader_setup.pm line 166.
+        my $needs_update = is_transactional && (get_var('FLAVOR', '') =~ /-Staging|-Updates/);
+
+        if ($needs_update && get_var('KGRAFT')) {
+            loadtest_kernel 'update_kernel';
+        }
+
+        loadtest_kernel 'install_ltp';
+
+        if ($needs_update && !get_var('KGRAFT')) {
             loadtest 'transactional/install_updates';
         }
-        loadtest_kernel 'install_ltp';
 
         if (get_var('LIBC_LIVEPATCH')) {
             die 'LTP_COMMAND_FILE and LIBC_LIVEPATCH are mutually exclusive'
@@ -126,6 +148,9 @@ sub load_kernel_tests {
     elsif (get_var('LIBC_LIVEPATCH')) {
         loadtest_kernel 'boot_ltp';
         loadtest_kernel 'ulp_openposix';
+    }
+    elsif (get_var('KDUMP')) {
+        loadtest_kernel 'kdump';
     }
 
     if (is_svirt && get_var('PUBLISH_HDD_1')) {

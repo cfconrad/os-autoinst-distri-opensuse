@@ -56,7 +56,7 @@ sub setup_sle {
 
     # Enable Y2DEBUG for error debugging
     enter_cmd "echo 'export Y2DEBUG=1' >> /etc/bash.bashrc.local";
-    script_run("source /etc/bash.bashrc.local", die_on_timeout => 0);
+    script_run("source /etc/bash.bashrc.local");
     set_zypp_single_rpmtrans();
 }
 
@@ -107,11 +107,11 @@ sub register_system_in_textmode {
 # need to remove these modules before migration, add the dropped modules to the
 # setting of DROPPED_MODULES.
 sub deregister_dropped_modules {
-    return unless ((get_var('DROPPED_MODULES')) || (get_var('SCC_ADDONS', '') =~ /ltss/));
+    return unless ((get_var('DROPPED_MODULES')) || ((get_var('SCC_ADDONS', '') =~ /ltss/) && (get_var('SCC_ADDONS', '') !~ /ltss_es/)));
 
     my $droplist = get_var('DROPPED_MODULES', '');
-    $droplist .= ',ltss' if (get_var('SCC_ADDONS', '') =~ /ltss/);
     my @all_addons = grep($_, split(/,/, get_var('SCC_ADDONS', '')));
+    $droplist .= ',ltss' if (grep { $_ eq 'ltss' } @all_addons);
     for my $name (grep($_, split(/,/, $droplist))) {
         record_info "deregister $name", "deregister $name module and remove it from SCC_ADDONS";
         if ($name eq 'ltss') {

@@ -48,6 +48,9 @@ for test in $MODULES ; do
 done | \
     # Whitelist
 
+    # Some tests are loaded dynamically via CONTAINER_TESTS or BATS_PACKAGE
+    grep -v 'containers' |\
+
     # https://progress.opensuse.org/issues/31750
     grep -vE '(fetchmail_ssl|mailx_ssl|mutt_ssl|postfix_tls)' |\
 
@@ -69,6 +72,9 @@ done | \
 
     # Scheduled with s390x_tests/consoletest_${testset}${tc}
     grep -v 's390x_tests' |\
+
+    # running on a development job group https://openqa.suse.de/group_overview/616
+    grep -v 'velociraptor_client_event_collect' |\
 
     grep -vE '(fetchmail_ssl|mailx_ssl|mutt_ssl|postfix_tls|qa_automation/|hpc/|slepos/|caasp/stack_admin|wicked|sles4sap/|s390x_tests/)' \
     && { exit 1; } || { exit 0; }

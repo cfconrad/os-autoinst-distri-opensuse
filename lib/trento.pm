@@ -36,7 +36,9 @@ use YAML::PP;
 use Carp;
 use utils qw(script_retry random_string);
 use testapi;
-use qesapdeployment;
+use sles4sap::qesap::qesapdeployment;
+use sles4sap::qesap::azure;
+use sles4sap::azure_cli;
 
 use Exporter 'import';
 
@@ -109,7 +111,7 @@ constant values for Trento tests
 
 Clone gitlab.suse.de/qa-css/trento
 
-=over 1
+=over
 
 =item B<WORK_DIR> - folder where to clone the repo
 
@@ -137,7 +139,7 @@ sub clone_trento_deployment {
 
 Get the set of scripts for the Trento deployment
 
-=over 1
+=over
 
 =item B<WORK_DIR> - folder where to clone the repo
 
@@ -238,7 +240,7 @@ sub get_resource_group {
 
 Create a variable map and prepare the qe-sap-deployment using it
 
-=over 3
+=over
 
 =item B<PROVIDER> - CloudProvider name
 
@@ -289,7 +291,7 @@ sub cluster_config {
 Deploy the main VM for the Trento application
 Based on 00.040-trento_vm_server_deploy_azure.sh
 
-=over 1
+=over
 
 =item B<WORK_DIR> - folder where to clone the repo
 
@@ -321,7 +323,7 @@ sub deploy_vm {
 Create ACR in Azure and upload from IBS needed images
 Based on trento_acr_azure.sh
 
-=over 1
+=over
 
 =item B<WORK_DIR> - folder where to clone the repo
 
@@ -561,7 +563,7 @@ The function optionally accept the VM public IP.
 If not provided, the IP is calculated on the fly with an I<az> query,
 take care that is a time consuming I<az> query.
 
-=over 2
+=over
 
 =item B<CMD_ARG> - String of the command to be executed remotely
 
@@ -590,7 +592,7 @@ sub az_vm_ssh_cmd {
 Install trento-agent on all the nodes.
 Installation is performed using ansible.
 
-=over 3
+=over
 
 =item B<WORK_DIRECTORY> - Working directory, used to eventually download .rpm
 
@@ -627,7 +629,7 @@ sub cluster_install_agent {
 
 Get all relevant info out from the cluster
 
-=over 2
+=over
 
 =item B<CMD_ARG> - String of the command to be executed remotely
 
@@ -759,7 +761,7 @@ sub trento_collect_scenarios {
 
 Get the api-key from the Trento installation
 
-=over 1
+=over
 
 =item B<BASEDIR> - Folder of the trento installer repo clone
 
@@ -834,7 +836,7 @@ the line about vmhana01 match with regexp .+UNDEFINED.+SFAIL
 AND
 the line about vmhana02 match with regexp .+PROMOTED.+PRIM
 
-=over 3
+=over
 
 =item B<HOST> - Ansible name or filter for the remote host where to run 'SAPHanaSR-showAttr'
 
@@ -881,7 +883,7 @@ sub cluster_wait_status {
 
 Remotely run 'SAPHanaSR-showAttr' in a loop on $host, wait output that matches regular expression
 
-=over 3
+=over
 
 =item B<HOST> - Ansible name or filter for the remote host where to run 'SAPHanaSR-showAttr'
 
@@ -930,9 +932,9 @@ sub cluster_trento_net_peering {
     my $cmd = join(' ',
         $basedir . '/00.050-trento_net_peering_tserver-sap_group.sh',
         '-s', $trento_rg,
-        '-n', qesap_az_get_vnet($trento_rg),
+        '-n', az_network_vnet_get(resource_group => $trento_rg, query => "[0].name"),
         '-t', $cluster_rg,
-        '-a', qesap_az_get_vnet($cluster_rg));
+        '-a', az_network_vnet_get(resource_group => $cluster_rg, query => "[0].name"));
     record_info('NET PEERING');
     assert_script_run($cmd, 360);
 }
@@ -980,7 +982,7 @@ Polling state until container Status become Exit or timeout.
 Gently terminate podman in case of timeout.
 Return the container Exit status.
 
-=over 3
+=over
 
 =item B<NAME> - Name of the running container used to filter the podman ps
 
@@ -1064,7 +1066,7 @@ sub podman_wait {
 
 Run a command within the running container
 
-=over 2
+=over
 
 =item B<NAME> - Name of the running container where to exec commands
 
@@ -1079,14 +1081,14 @@ sub podman_exec {
     croak 'Missing mandatory cmd argument' unless $args{cmd};
 
     return script_run("podman exec $args{name} $args{cmd}",
-        timeout => bmwqemu::scale_timeout(10), die_on_timeout => -1);
+        timeout => bmwqemu::scale_timeout(10));
 }
 
 =head3 cypress_configs
 
 Prepare all the configuration files for cypress
 
-=over 1
+=over
 
 =item B<CYPRESS_TEST_DIR> - Cypress test code location.
 
@@ -1145,7 +1147,7 @@ sub cypress_install_container {
 
 Upload to openQA the relevant logs
 
-=over 1
+=over
 
 =item B<LOG_FILTER> - List of strings. List of file extensions (dot needed) 
 
@@ -1166,7 +1168,7 @@ sub cypress_log_upload {
 
 Execute a cypress command within the container
 
-=over 4
+=over
 
 =item B<CYPRESS_TEST_DIR> - String of the path where the cypress Trento code is available.
 It is the I<test> folder within the path used by L<setup_jumphost>
@@ -1231,7 +1233,7 @@ sub cypress_exec {
 Execute a set of cypress tests.
 Execute, one by one, all tests in all .js files in the provided folder.
 
-=over 3 
+=over 
 
 =item B<CYPRESS_TEST_DIR> - String of the path where the cypress Trento code is available.
 It is the I<test> folder within the path used by L<setup_jumphost>

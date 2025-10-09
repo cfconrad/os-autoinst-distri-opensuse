@@ -13,7 +13,7 @@ use version_utils;
 use publiccloud::utils;
 use main_common qw(loadtest);
 use testapi qw(check_var get_var);
-use Utils::Architectures qw(is_aarch64);
+use Utils::Architectures qw(is_aarch64 is_s390x);
 use main_containers qw(load_container_tests);
 require bmwqemu;
 
@@ -22,26 +22,25 @@ our @EXPORT = qw(load_publiccloud_tests load_publiccloud_download_repos);
 sub load_maintenance_publiccloud_tests {
     my $args = OpenQA::Test::RunArgs->new();
 
-    loadtest "publiccloud/download_repos";
+    loadtest "publiccloud/download_repos" unless (check_var('PUBLIC_CLOUD_SKIP_MU', 1));
     loadtest "publiccloud/prepare_instance", run_args => $args;
     if (get_var('PUBLIC_CLOUD_REGISTRATION_TESTS')) {
         loadtest("publiccloud/check_registercloudguest", run_args => $args);
     } else {
         loadtest("publiccloud/registration", run_args => $args);
     }
-    loadtest "publiccloud/transfer_repos", run_args => $args;
+    loadtest "publiccloud/transfer_repos", run_args => $args unless (check_var('PUBLIC_CLOUD_SKIP_MU', 1));
     loadtest "publiccloud/patch_and_reboot", run_args => $args;
     if (get_var('PUBLIC_CLOUD_IMG_PROOF_TESTS')) {
         loadtest "publiccloud/check_services", run_args => $args;
         loadtest("publiccloud/img_proof", run_args => $args);
     } elsif (get_var('PUBLIC_CLOUD_LTP')) {
         loadtest('publiccloud/run_ltp', run_args => $args);
-    } elsif (get_var('PUBLIC_CLOUD_FIO')) {
-        loadtest 'publiccloud/storage_perf';
-    } elsif (get_var('PUBLIC_CLOUD_NETCONFIG')) {
+    } elsif (get_var('PUBLIC_CLOUD_FUNCTIONAL')) {
         loadtest('publiccloud/cloud_netconfig', run_args => $args);
+        loadtest('publiccloud/suspending', run_args => $args) if (is_sle('15-SP6+'));
     } elsif (check_var('PUBLIC_CLOUD_AHB', 1)) {
-        loadtest('publiccloud/ahb');
+        loadtest('publiccloud/ahb', run_args => $args);
     } elsif (get_var('PUBLIC_CLOUD_NEW_INSTANCE_TYPE')) {
         loadtest("publiccloud/bsc_1205002", run_args => $args);
     } elsif (get_var('PUBLIC_CLOUD_REGISTRATION_TESTS')) {
@@ -54,9 +53,7 @@ sub load_maintenance_publiccloud_tests {
         } elsif (get_var('PUBLIC_CLOUD_CONTAINERS')) {
             load_container_tests();
         } elsif (get_var('PUBLIC_CLOUD_XFS')) {
-            loadtest "publiccloud/xfsprepare";
-            loadtest "xfstests/run";
-            loadtest "xfstests/generate_report";
+            loadtest "publiccloud/xfsprepare", run_args => $args;
         } elsif (get_var('PUBLIC_CLOUD_SMOKETEST')) {
             loadtest "publiccloud/smoketest";
             # flavor_check is concentrated on checking things which make sense only for image which is registered
@@ -72,7 +69,7 @@ sub load_maintenance_publiccloud_tests {
             loadtest "publiccloud/nvidia", run_args => $args;
         }
 
-        loadtest("publiccloud/ssh_interactive_end", run_args => $args);
+        loadtest("publiccloud/ssh_interactive_end", run_args => $args) unless get_var('PUBLIC_CLOUD_XFS');
     }
 }
 
@@ -102,37 +99,40 @@ my $should_use_runargs = sub {
       PUBLIC_CLOUD_SMOKETEST
       PUBLIC_CLOUD_AZURE_NFS_TEST
       PUBLIC_CLOUD_NVIDIA
-      PUBLIC_CLOUD_NETCONFIG);
+      PUBLIC_CLOUD_FUNCTIONAL
+      PUBLIC_CLOUD_AHB
+      PUBLIC_CLOUD_NEW_INSTANCE_TYPE);
     return grep { exists $bmwqemu::vars{$_} } @public_cloud_variables;
 };
 
 sub load_latest_publiccloud_tests {
+    my $args = OpenQA::Test::RunArgs->new();
     if (get_var('PUBLIC_CLOUD_IMG_PROOF_TESTS')) {
-        loadtest "publiccloud/img_proof";
+        loadtest "publiccloud/img_proof", run_args => $args;
     }
     elsif (get_var('PUBLIC_CLOUD_LTP')) {
-        loadtest 'publiccloud/run_ltp';
-    }
-    elsif (get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        loadtest 'publiccloud/sles4sap';
+        loadtest 'publiccloud/run_ltp', run_args => $args;
     }
     elsif (get_var('PUBLIC_CLOUD_ACCNET')) {
-        loadtest 'publiccloud/az_accelerated_net';
-    }
-    elsif (get_var('PUBLIC_CLOUD_FIO')) {
-        loadtest 'publiccloud/storage_perf';
+        loadtest 'publiccloud/az_accelerated_net', run_args => $args;
     }
     elsif (get_var('PUBLIC_CLOUD_REGISTRATION_TESTS')) {
-        loadtest("publiccloud/check_registercloudguest");
+        loadtest "publiccloud/check_registercloudguest", run_args => $args;
+    }
+    elsif (get_var('PUBLIC_CLOUD_AZURE_AITL')) {
+        loadtest "publiccloud/azure_aitl", run_args => $args;
     }
     elsif (&$should_use_runargs()) {
-        my $args = OpenQA::Test::RunArgs->new();
         loadtest "publiccloud/prepare_instance", run_args => $args;
         loadtest("publiccloud/registration", run_args => $args);
-        if (get_var('PUBLIC_CLOUD_NETCONFIG')) {
+        if (get_var('PUBLIC_CLOUD_FUNCTIONAL')) {
             loadtest('publiccloud/cloud_netconfig', run_args => $args);
-        }
-        else {
+            loadtest('publiccloud/suspending', run_args => $args) if (is_sle('15-SP6+'));
+        } elsif (check_var('PUBLIC_CLOUD_AHB', 1)) {
+            loadtest('publiccloud/ahb', run_args => $args);
+        } elsif (get_var('PUBLIC_CLOUD_NEW_INSTANCE_TYPE')) {
+            loadtest("publiccloud/bsc_1205002", run_args => $args);
+        } else {
             loadtest("publiccloud/check_services", run_args => $args) if (get_var('PUBLIC_CLOUD_SMOKETEST'));
             loadtest "publiccloud/ssh_interactive_start", run_args => $args;
             loadtest "publiccloud/instance_overview", run_args => $args;
@@ -146,26 +146,22 @@ sub load_latest_publiccloud_tests {
             elsif (get_var('PUBLIC_CLOUD_CONTAINERS')) {
                 load_container_tests();
             } elsif (get_var('PUBLIC_CLOUD_SMOKETEST')) {
-                loadtest "publiccloud/smoketest";
+                loadtest "publiccloud/smoketest", run_args => $args;
                 # flavor_check is concentrated on checking things which make sense only for image which is registered
                 # against internal Public Cloud infra, so whenever we using SUSEConnect whole module does not make much sense
-                loadtest "publiccloud/flavor_check" if (is_ec2() && !check_var('PUBLIC_CLOUD_SCC_ENDPOINT', 'SUSEConnect'));
-                loadtest "publiccloud/sev" if (get_var('PUBLIC_CLOUD_CONFIDENTIAL_VM'));
-                loadtest "publiccloud/xen" if (get_var('PUBLIC_CLOUD_XEN'));
+                loadtest "publiccloud/flavor_check", run_args => $args if (is_ec2() && !check_var('PUBLIC_CLOUD_SCC_ENDPOINT', 'SUSEConnect'));
+                loadtest "publiccloud/sev", run_args => $args if (get_var('PUBLIC_CLOUD_CONFIDENTIAL_VM'));
+                loadtest "publiccloud/xen", run_args => $args if (get_var('PUBLIC_CLOUD_XEN'));
             } elsif (get_var('PUBLIC_CLOUD_XFS')) {
-                loadtest "publiccloud/xfsprepare";
-                loadtest "xfstests/run";
-                loadtest "xfstests/generate_report";
+                loadtest "publiccloud/xfsprepare", run_args => $args;
             } elsif (get_var('PUBLIC_CLOUD_AZURE_NFS_TEST')) {
                 loadtest("publiccloud/azure_nfs", run_args => $args);
             }
-            loadtest("publiccloud/ssh_interactive_end", run_args => $args);
+            loadtest("publiccloud/ssh_interactive_end", run_args => $args) unless get_var('PUBLIC_CLOUD_XFS');
         }
     }
     elsif (get_var('PUBLIC_CLOUD_UPLOAD_IMG')) {
-        loadtest "publiccloud/upload_image";
-    } elsif (check_var('PUBLIC_CLOUD_AHB', 1)) {
-        loadtest('publiccloud/ahb');
+        loadtest "publiccloud/upload_image", run_args => $args;
     } else {
         die "*publiccloud - Latest* expects PUBLIC_CLOUD_* job variable. None is matched from the expected ones.";
     }
@@ -181,6 +177,7 @@ sub load_create_publiccloud_tools_image {
 
 # Test CLI tools for each provider
 sub load_publiccloud_cli_tools {
+    loadtest 'installation/bootloader_zkvm' if (is_s390x);
     loadtest 'boot/boot_to_desktop';
     if (get_var('PUBLIC_CLOUD_AZURE_CLI_TEST')) {
         loadtest 'publiccloud/azure_more_cli';
@@ -188,7 +185,6 @@ sub load_publiccloud_cli_tools {
         loadtest 'publiccloud/azure_cli' if (is_azure());
         loadtest 'publiccloud/aws_cli' if (is_ec2());
     }
-    loadtest 'shutdown/shutdown';
 }
 
 sub load_publiccloud_download_repos {

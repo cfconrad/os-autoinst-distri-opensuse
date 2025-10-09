@@ -22,8 +22,6 @@
 #   - Handle grub to boot on local disk (aarch64)
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
-use strict;
-use warnings;
 use base 'y2_installbase';
 use testapi;
 use Utils::Architectures;
@@ -37,6 +35,7 @@ use scheduler 'get_test_suite_data';
 use autoyast 'test_ayp_url';
 use y2_logs_helper qw(upload_autoyast_profile upload_autoyast_schema);
 use validate_encrypt_utils "validate_encrypted_volume_activation";
+use power_action_utils 'power_action';
 
 my $confirmed_licenses = 0;
 my $stage = 'stage1';
@@ -127,7 +126,9 @@ sub run {
     push @needles, 'autoyast-error' unless get_var('AUTOYAST_EXPECT_ERRORS');
     # Autoyast reboot automatically without confirmation, usually assert 'bios-boot' that is not existing on zVM
     # So push a needle to check upcoming reboot on zVM that is a way to indicate the stage done
-    push @needles, 'autoyast-stage1-reboot-upcoming' if is_s390x || (is_pvm && !is_upgrade);
+    # For bsc#1231522, need match reboot popup on powerVM to reboot after installation.
+    # For bsc#1231522, for xen-hvm autoyast, we need to match reboot popup.
+    push @needles, 'autoyast-stage1-reboot-upcoming' if is_s390x || (is_pvm && !is_upgrade && is_sle('<15-SP7')) || (check_var('VIRSH_VMM_FAMILY', 'xen') && check_var('VIRSH_VMM_TYPE', 'hvm') && is_sle('<15-SP7'));
     # Similar situation over IPMI backend, we can check against PXE menu
     push @needles, qw(prague-pxe-menu qa-net-selection) if is_ipmi and !get_var('IPXE');
     # Import untrusted certification for SMT
@@ -156,6 +157,8 @@ sub run {
     push(@needles, 'inst-bootmenu') if (is_aarch64 && get_var('UPGRADE'));
     # If we have an encrypted root or boot volume, we reboot to a grub password prompt.
     push(@needles, 'encrypted-disk-password-prompt') if get_var("ENCRYPT_ACTIVATE_EXISTING");
+    # Yast is now honoring reboot_timeout=0, the popup needs to be handled
+    push(@needles, 'reboot_now');
     # Kill ssh proactively before reboot to avoid half-open issue on zVM, do not need this on zKVM
     prepare_system_shutdown if is_backend_s390x;
     my $postpartscript = 0;
@@ -178,8 +181,11 @@ sub run {
         #Verify timeout and continue if there was a match
         next unless verify_timeout_and_check_screen(($timer += $check_time), \@needles);
         if (match_has_tag('autoyast-boot')) {
-            send_key 'ret';    # press enter if grub timeout is disabled, like we have in reinstall scenarios
-            last;    # if see grub, we get to the second stage, as it appears after bios-boot which we may miss
+            # press enter if grub timeout is disabled, like we have in reinstall scenarios
+            send_key 'ret';
+            # if see grub, we get to the second stage, as it appears after bios-boot which we may miss
+            # for case with startshell we need to back to the shell after reboot page shows
+            last unless (get_var('EXTRABOOTPARAMS', '') =~ m/startshell=1/);
         }
         elsif (match_has_tag('import-untrusted-gpg-key')) {
             handle_untrusted_gpg_key;
@@ -304,6 +310,9 @@ sub run {
         elsif (match_has_tag 'expired-gpg-key') {
             send_key 'alt-y';
         }
+        elsif (match_has_tag('reboot_now')) {
+            send_key 'alt-o';
+        }
     }
 
     if (get_var("USRSCR_DIALOG")) {
@@ -320,6 +329,12 @@ sub run {
         }
     }
 
+    # For xen, need set hard-disk as the boot device, then reboot and connect to existing VNC.
+    if (check_var('VIRSH_VMM_FAMILY', 'xen') && check_var('VIRSH_VMM_TYPE', 'hvm')) {
+        my $svirt = console('svirt');
+        $svirt->change_domain_element(os => boot => {dev => 'hd'});
+        power_action('reboot', observe => 1, keepconsole => 1, first_reboot => 1);
+    }
     # Cannot verify second stage properly on s390x, so reconnect to already installed system
     if (is_s390x) {
         reconnect_mgmt_console(timeout => 1400, grub_timeout => 360);

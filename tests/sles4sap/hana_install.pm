@@ -9,57 +9,19 @@
 # Maintainer: QE-SAP <qe-sap@suse.de>
 
 use base 'sles4sap';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use Utils::Backends;
 use utils qw(file_content_replace zypper_call);
 use Utils::Systemd 'systemctl';
-use version_utils 'is_sle';
+use version_utils qw(is_sle has_selinux);
 use POSIX 'ceil';
 use Utils::Logging 'save_and_upload_log';
+use repo_tools 'add_qa_head_repo';
 
 sub is_multipath {
     return (get_var('MULTIPATH') and (get_var('MULTIPATH_CONFIRM') !~ /\bNO\b/i));
 }
-
-=head2 download_hana_assets_from_server
-
-  download_hana_assets_from_server()
-
-Download and extract HANA installation media to /sapinst directory of the SUT.
-The media location must be provided as ASSET_0 in the job settings and be
-available as an uncompressed tar in the factory/other directory of the openQA
-server
-
-=cut
-
-sub download_hana_assets_from_server {
-    my $target = $_{target} // '/sapinst';
-    my $nettout = $_{nettout} // 2700;
-    assert_script_run "mkdir $target";
-    assert_script_run "cd $target";
-    my $filename = get_required_var('ASSET_0');
-    my $hana_location = data_url('ASSET_0');
-    # Each HANA asset is about 16GB. A ten minute timeout assumes a generous
-    # 27.3MB/s download speed. Adjust according to expected server conditions.
-    assert_script_run "wget -O - $hana_location | tar -xf -", timeout => $nettout;
-    # Skip checksum check if DISABLE_CHECKSUM is set, or if checksum file is not
-    # part of the archive
-    my $sap_chksum_file = 'MD5FILE.DAT';
-    my $chksum_file = 'checksum.md5sum';
-    my $no_checksum_file = script_run "[[ -f $target/$chksum_file || -f $target/$sap_chksum_file ]]";
-    return 1 if (get_var('DISABLE_CHECKSUM') || $no_checksum_file);
-
-    # Switch to $target to verify copied contents are OK
-    assert_script_run "pushd $target";
-    # If SAP provided MD5 sum file is present convert it to the md5sum format
-    assert_script_run "[[ -f $sap_chksum_file ]] && awk '{print \$2\" \"\$1}' $target/$sap_chksum_file > $target/$chksum_file";
-    assert_script_run "md5sum -c --quiet $chksum_file", $nettout;
-    assert_script_run "popd";
-}
-
 
 sub get_hana_device_from_system {
     my ($self, $disk_requirement) = @_;
@@ -127,6 +89,13 @@ sub get_test_summary {
     return $info;
 }
 
+sub restorecon_rootfs {
+    # restorecon does not behave too well with btrfs, so exclude /.snapshots in btrfs rootfs
+    my $restorecon_cmd = 'restorecon -R /';
+    $restorecon_cmd .= ' -e /.snapshots' unless (script_run('test -d /.snapshots'));
+    assert_script_run "$restorecon_cmd";
+}
+
 sub run {
     my ($self) = @_;
     my ($proto, $path) = $self->fix_path(get_required_var('HANA'));
@@ -139,7 +108,41 @@ sub run {
     my $RAM = $self->get_total_mem();
     die "RAM=$RAM. The SUT needs at least 24G of RAM" if $RAM < 24000;
 
-    zypper_call('in SAPHanaSR SAPHanaSR-doc ClusterTools2') if get_var('HA_CLUSTER');
+    if (get_var('HA_CLUSTER')) {
+        my @zypper_in = ('install');
+        # Check for SAPHanaSR-angi package going to be used
+        if (get_var('USE_SAP_HANA_SR_ANGI')) {
+            foreach ('SAPHanaSR-doc', 'SAPHanaSR') {
+                assert_script_run("rpm -e --nodeps $_") if (script_run("rpm -q $_") == 0);
+            }
+            push @zypper_in, 'SAPHanaSR-angi', 'supportutils-plugin-ha-sap';
+        }
+        else {
+            push @zypper_in, 'SAPHanaSR', 'SAPHanaSR-doc';
+        }
+        zypper_call(join(' ', @zypper_in));
+    }
+
+    # Workaround for SLE16 if variable WORKAROUND_BSC1234806 set
+    if (get_var("WORKAROUND_BSC1234806")) {
+        record_soft_failure("bsc#1234806: workaround by installing hana_insserv_compat package from QA:HEAD");
+        add_qa_head_repo;
+        zypper_call("in hana_insserv_compat");
+    }
+
+    # Modify SELinux mode
+    if (get_var("WORKAROUND_BSC1239148")) {
+        record_soft_failure("bsc#1239148: workaround by changing mode to Permissive");
+        $self->modify_selinux_setenforce('selinux_mode' => 'Permissive');
+    }
+
+    # On SLES for SAP 16.0 and newer, we need to do further SELinux setup for HANA
+    if (has_selinux) {
+        assert_script_run 'semanage boolean -m --on selinuxuser_execmod';
+        assert_script_run 'semanage boolean -m --on unconfined_service_transition_to_unconfined_user';
+        assert_script_run 'semanage permissive -a snapper_grub_plugin_t';
+        restorecon_rootfs();
+    }
 
     # Add host's IP to /etc/hosts
     $self->add_hostname_to_hosts;
@@ -156,7 +159,7 @@ sub run {
         # If the ASSET_0 variable is defined, the test will attempt to download
         # the HANA media from the factory/other directory of the openQA server.
         record_info "Dowloading using ASSET_0";
-        download_hana_assets_from_server(target => $target, nettout => $tout);
+        $self->download_hana_assets_from_server(target => $target, nettout => $tout);
     }
     elsif (get_required_var 'HANA') {
         # If not, the media will be retrieved from a remote server.
@@ -265,18 +268,28 @@ sub run {
     }
     assert_script_run "df -h";
 
-    # hdblcm is used for installation, verify if it exists
-    my $hdblcm = '/sapinst/' . get_var('HANA_HDBLCM', "DATA_UNITS/HDB_SERVER_LINUX_" . uc(get_required_var('ARCH')) . "/hdblcm");
+    # Run restorecon again on SLES for SAP 16.0 and newer as we have created and mounted new
+    # FS since the last run
+    restorecon_rootfs() if has_selinux;
+
+    # hdblcm is used for installation, verify if it exists.
+    # hdblcm can be provided from the external with HANA_HDBLCM
+    # variable, that is a relative path to /sapinst
+    my $hdblcm = join('/', $target,
+        get_var(
+            'HANA_HDBLCM',
+            "DATA_UNITS/HDB_SERVER_LINUX_" . uc(get_required_var('ARCH')) . '/hdblcm'));
     die "hdblcm is not in [$hdblcm]. Set HANA_HDBLCM to the appropiate relative path. Example: DATA_UNITS/HDB_SERVER_LINUX_X86_64/hdblcm"
       if (script_run "ls $hdblcm");
 
-    # Install hana
-    # Prepare hdblcm args.
-    # Note: set "--components=server,client" as other test moudle (monitoring_services.pm) installs shared pkgs from dir 'hdbclient'
+    # Install hana: Prepare hdblcm args.
+    # Note: set "--components=server,client" as other test moudle (monitoring_services.pm)
+    # installs shared pkgs from dir 'hdbclient'
     my @hdblcm_args = qw(--autostart=n --shell=/bin/sh --workergroup=default --system_usage=custom --batch
       --hostname=$(hostname) --db_mode=multiple_containers --db_isolation=low --restrict_max_mem=n
-      --userid=1001 --groupid=79 --use_master_password=n --skip_hostagent_calls=n --system_usage=production
+      --groupid=79 --use_master_password=n --skip_hostagent_calls=n --system_usage=production
     );
+    push @hdblcm_args, "--userid=" . get_var('SIDADM_UID', '1001');
     push @hdblcm_args,
       "--components=" . get_var("HDBLCM_COMPONENTS", 'server'),
       "--sid=$sid",
@@ -289,7 +302,8 @@ sub run {
       "--logpath=$mountpts{hanalog}->{mountpt}/$sid",
       "--sapmnt=$mountpts{hanashared}->{mountpt}";
     push @hdblcm_args, "--pmempath=$pmempath", "--use_pmem" if get_var('NVDIMM');
-    push @hdblcm_args, "--component_dirs=/sapinst/" . get_var('HDB_CLIENT_LINUX') if get_var('HDB_CLIENT_LINUX');
+    push @hdblcm_args, "--component_dirs=$target/" . get_var('HDB_CLIENT_LINUX') if get_var('HDB_CLIENT_LINUX');
+    push @hdblcm_args, get_var('HDBLCM_EXTRA_ARGS') if get_var('HDBLCM_EXTRA_ARGS');
 
     my $cmd = join(' ', $hdblcm, @hdblcm_args);
     record_info 'hdblcm command', $cmd;
@@ -312,6 +326,9 @@ sub run {
     $self->upload_hana_install_log;
     save_and_upload_log('rpm -qa', 'packages.list');
     save_and_upload_log('systemctl list-units --all', 'systemd-units.list');
+
+    # On SLES for SAP 16.0 and newer, we need to do further SELinux setup for HANA
+    restorecon_rootfs() if has_selinux;
 
     # Quick check of block/filesystem devices after installation
     assert_script_run 'mount';

@@ -8,16 +8,21 @@
 use base 'opensusebasetest';
 use power_action_utils "power_action";
 use bootloader_setup 'replace_grub_cmdline_settings';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
+use version_utils 'has_selinux';
 use Utils::Backends 'is_pvm';
 
 sub run {
     my ($self) = @_;
     select_serial_terminal;
+
+    if (has_selinux) {
+        # make sure SELinux is in "enforcing" mode already
+        validate_script_output("sestatus", sub { m/.*Current\ mode:\ .*enforcing/sx });
+        return 1;
+    }
 
     # make sure SELinux in "permissive" mode
     validate_script_output("sestatus", sub { m/.*Current\ mode:\ .*permissive.*/sx });
@@ -29,8 +34,8 @@ sub run {
 
     # label system
     assert_script_run("semanage boolean --modify --on selinuxuser_execmod");
-    script_run("restorecon -R /", timeout => 1800, die_on_timeout => 0);
-    script_run("restorecon -R /*", timeout => 1800, die_on_timeout => 0);
+    script_run("timeout 1780 restorecon -R /", timeout => 1800);
+    script_run("timeout 1780 restorecon -R /*", timeout => 1800);
 
     # enable enforcing mode from SELinux
     replace_grub_cmdline_settings('security=selinux selinux=1 enforcing=0', 'security=selinux selinux=1 enforcing=1', update_grub => 1);

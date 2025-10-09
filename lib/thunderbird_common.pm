@@ -44,6 +44,10 @@ sub tb_setup_account {
     my $mail_recvport = $config->{$account}->{$port_key};
     my $new_gui = 0;
 
+    # wait for tab to appear and close tabs like donation or privacy notice until account setup tab is in focus
+    wait_still_screen(2);
+    send_key_until_needlematch('thunderbird-new-gui', 'ctrl-w', 4, 1);
+
     if (check_screen 'thunderbird-new-gui') {
         $new_gui = 1;
         wait_still_screen(2, 4);
@@ -98,7 +102,7 @@ sub tb_setup_account {
         # If use multimachine, select correct needles to configure thunderbird.
         if ($hostname eq 'client') {
             $self->server_hostname_workaround;
-            if (check_screen 'thunderbird_username') {
+            if (check_screen 'thunderbird_username', 2) {
                 record_info 'bsc#1191853';
                 assert_and_click 'thunderbird_username';
                 send_key 'ctrl-a';
@@ -132,7 +136,7 @@ sub tb_setup_account {
             assert_and_click 'thunderbird_startssl-selected-for-smtp';
             wait_still_screen(1);
             assert_and_click 'thunderbird_security-select-none';
-            if (check_screen 'thunderbird_username') {
+            if (check_screen 'thunderbird_username', 2) {
                 record_info 'bsc#1191853';
                 assert_and_click 'thunderbird_username';
                 send_key 'ctrl-a';

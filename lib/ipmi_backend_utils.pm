@@ -19,7 +19,7 @@ use power_action_utils 'prepare_system_shutdown';
 use Utils::Architectures;
 use Carp;
 use Socket;
-use virt_autotest::utils qw(is_xen_host check_port_state);
+use virt_autotest::utils;
 use Utils::Backends;
 
 our @EXPORT = qw(set_grub_on_vh switch_from_ssh_to_sol_console adjust_for_ipmi_xen set_pxe_efiboot ipmitool enable_sev_in_kernel add_kernel_options set_grub_terminal_and_timeout reconnect_when_ssh_console_broken set_ipxe_bootscript set_floppy_boot set_disk_boot);
@@ -48,7 +48,7 @@ sub switch_from_ssh_to_sol_console {
 
 sub get_dom0_serialdev {
     my $dom0_serialdev;
-    if (is_xen_host) {
+    if (virt_autotest::utils::is_xen_host()) {
         $dom0_serialdev = "hvc0";
     }
     else {
@@ -74,7 +74,7 @@ sub setup_console_in_grub {
     if (${virt_type} eq "xen") {
 
         # Setting grub menuentry selection on sol console with grub2-set-default as xen, during host installation
-        if (is_xen_host && get_var('XEN_DEFAULT_BOOT_IS_SET')) {
+        if (virt_autotest::utils::is_xen_host() && get_var('XEN_DEFAULT_BOOT_IS_SET')) {
             $cmd = "sed -i '/### END \\\/etc\\\/grub.d\\\/00_header ###/iset default=2' $grub_cfg_file";
             assert_script_run($cmd);
         }
@@ -121,8 +121,8 @@ sub setup_console_in_grub {
     elsif (${virt_type} eq "kvm") {
         #enable Intel VT-d for SR-IOV test running on intel SUTs
         my $intel_option = "";
-        if (get_var("ENABLE_SRIOV_NETWORK_CARD_PCI_PASSTHROUGH") && script_run("grep Intel /proc/cpuinfo") == 0) {
-            $intel_option = "intel_iommu=on";
+        if (get_var("ENABLE_SRIOV_NETWORK_CARD_PCI_PASSTHROUGH") or get_var("VGPU_TEST")) {
+            $intel_option = "intel_iommu=on" if script_run("grep Intel /proc/cpuinfo") == 0;
         }
 
         $cmd
@@ -136,7 +136,7 @@ sub setup_console_in_grub {
         die "Host Hypervisor is not xen or kvm";
     }
 
-    if (!script_run('grep HPE /sys/class/dmi/id/board_vendor') == 0) {
+    if (script_run('grep HPE /sys/class/dmi/id/board_vendor') != 0) {
         $cmd = "sed -ri '/^terminal.*\$/ {:mylabel; n; s/^terminal.*\$//;b mylabel;}' $grub_cfg_file";
         assert_script_run($cmd);
         $cmd = "sed -ri '/^[[:space:]]*\$/d' $grub_cfg_file";
@@ -359,7 +359,8 @@ sub set_grub_on_vh {
 sub ipmitool {
     my ($cmd) = @_;
 
-    my @cmd = ('ipmitool', '-I', 'lanplus', '-H', $bmwqemu::vars{IPMI_HOSTNAME}, '-U', $bmwqemu::vars{IPMI_USER}, '-P', $bmwqemu::vars{IPMI_PASSWORD});
+    my $ipmi_options = $bmwqemu::vars{IPMI_OPTIONS} // '-I lanplus';
+    my @cmd = ('ipmitool', split(' ', $ipmi_options), '-H', $bmwqemu::vars{IPMI_HOSTNAME}, '-U', $bmwqemu::vars{IPMI_USER}, '-P', $bmwqemu::vars{IPMI_PASSWORD});
     push(@cmd, split(/ /, $cmd));
 
     my ($stdin, $stdout, $stderr, $ret);
@@ -400,7 +401,10 @@ sub enable_sev_in_kernel {
     $args{root_dir} //= '';
     $args{root_dir} .= '/' unless $args{root_dir} =~ /\/$/;
     croak("No AMD EPYC cpu on $args{dst_machine}, so sev can not be enabled in kernel.") unless (script_run("lscpu | grep -i \'AMD EPYC\'") == 0);
-    add_kernel_options(dst_machine => $args{dst_machine}, root_dir => $args{root_dir}, kernel_opts => 'mem_encrypt=on kvm_amd.sev=1');
+    # Do not add mem_encrypt=on option on 15-SP6 KVM host due to bsc#1224107
+    my $kernel_opts = "kvm_amd.sev=1";
+    $kernel_opts .= " mem_encrypt=on" if (!check_var('VERSION', '15-SP6'));
+    add_kernel_options(dst_machine => $args{dst_machine}, root_dir => $args{root_dir}, kernel_opts => $kernel_opts);
 }
 
 =head2 add_kernel_options
@@ -516,6 +520,8 @@ sub set_grub_terminal_and_timeout {
     if (($args{grub_to_change} == 1) or ($args{grub_to_change} == 3)) {
         my $grub_default_file = "$args{root_dir}etc/default/grub";
         $cmd = "sed -i -r \'s/^#{0,}GRUB_TERMINAL=.*\$/GRUB_TERMINAL=\"$args{terminals}\"/' $grub_default_file; "
+          . "sed -i -r \'s/^#{0,}GRUB_TERMINAL_INPUT=.*\$/GRUB_TERMINAL_INPUT=\"$args{terminals}\"/' $grub_default_file; "
+          . "sed -i -r \'s/^#{0,}GRUB_TERMINAL_OUTPUT=.*\$/GRUB_TERMINAL_OUTPUT=\"$args{terminals}\"/' $grub_default_file; "
           . "sed -i -r \'s/^#{0,}GRUB_TIMEOUT=.*\$/GRUB_TIMEOUT=$args{timeout}/' $grub_default_file";
         $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
         assert_script_run($cmd);
@@ -563,7 +569,7 @@ sub set_ipxe_bootscript {
 
     $url =~ s/^\s+|\s+$//g;
 
-    diag "setting iPXE bootscript to:\n$content";
+    diag "setting iPXE bootscript on $http_server for $ip to:\n$content";
     my $response = HTTP::Tiny->new->request('POST', $url,
         {content => $content, headers => {'content-type' => 'text/plain'}});
     diag "$response->{status} $response->{reason}\n";

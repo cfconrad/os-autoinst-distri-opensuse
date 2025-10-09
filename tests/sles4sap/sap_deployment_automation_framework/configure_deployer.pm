@@ -10,15 +10,12 @@
 # Required OpenQA variables:
 #     'SDAF_ENV_CODE'  Code for SDAF deployment env.
 #     'SDAF_DEPLOYER_VNET_CODE' Deployer virtual network code.
-#     'SDAF_WORKLOAD_VNET_CODE' Virtual network code for workload zone.
 #     'PUBLIC_CLOUD_REGION' SDAF internal code for azure region.
 #     'SAP_SID' SAP system ID.
 #     'SDAF_DEPLOYER_RESOURCE_GROUP' Existing deployer resource group - part of the permanent cloud infrastructure.
 
 use parent 'sles4sap::sap_deployment_automation_framework::basetest';
 
-use strict;
-use warnings;
 use sles4sap::sap_deployment_automation_framework::deployment;
 use sles4sap::console_redirection;
 use serial_terminal qw(select_serial_terminal);
@@ -34,7 +31,6 @@ sub check_required_vars {
     my @variables = qw(
       SDAF_ENV_CODE
       SDAF_DEPLOYER_VNET_CODE
-      SDAF_WORKLOAD_VNET_CODE
       PUBLIC_CLOUD_REGION
       SAP_SID
       SDAF_DEPLOYER_RESOURCE_GROUP
@@ -43,6 +39,8 @@ sub check_required_vars {
 }
 
 sub run {
+    # Skip module if existing deployment is being re-used
+    return if sdaf_deployment_reused();
     serial_console_diag_banner('Module sdaf_deployer_setup.pm : start');
     select_serial_terminal();
 
@@ -52,6 +50,9 @@ sub run {
     my $subscription_id = az_login();
     set_common_sdaf_os_env(subscription_id => $subscription_id);
     prepare_sdaf_project();
+    my $tf_version_out = script_output('terraform -v');
+    $tf_version_out =~ /Terraform\s(v\.*)/;
+    record_info("Terraform $1", $tf_version_out);
     record_info('Jumphost ready');
 
     # Do not leave connection hanging around between modules.

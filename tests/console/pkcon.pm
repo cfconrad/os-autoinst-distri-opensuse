@@ -10,8 +10,6 @@
 # Maintainer: Zaoliang Luo <zluo@suse.com>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use utils;
 use registration;
@@ -23,7 +21,7 @@ sub run {
 
     select_console 'root-console';
     # need to add required product at first
-    add_suseconnect_product('sle-module-desktop-applications', undef, undef, undef, 300, 1) if is_sle(">=15");
+    add_suseconnect_product('sle-module-desktop-applications', undef, undef, undef, 300, 1) if (is_sle(">=15") && is_sle("<16"));
 
     zypper_call('in PackageKit');
     # on sles and tw we need to unmask packagekit service because it got masked on the qcow2 image

@@ -17,9 +17,30 @@
 #
 set -euxo pipefail
 
+# look for a drive that has no partition table or other information that blkid would return
+detect_free_drive() {
+    declare -a drives
+    drives=( $(ls /sys/block/) )
+
+    for d in ${drives[@]}; do
+        # 64bit worker boots the image with cd-rom (sr0) device
+        # vmware adds floppy drive
+        # microos has loop devices present
+        # skip any of this device in case it is detected
+        [[ "$d" =~ ^(sr|fd|loop)[0-9]$ ]] && continue
+        blkid /dev/"$d" &> /dev/null
+        if [[ "$?" -eq 2 ]]; then
+            printf "%s" "/dev/$d"
+            return 0
+        fi
+    done
+}
+
 create_fs() {
-    DRIVE='/dev/vdc'
-    PART='/dev/vdc1'
+    local DRIVE=$(detect_free_drive)
+    test -n "$DRIVE" || exit 2
+
+    local PART="${DRIVE}1"
 
     # create partition and filesystem on additional drive
     echo "label: gpt" | sfdisk "$DRIVE"
@@ -30,6 +51,9 @@ create_fs() {
 
     # mount new partition
     mount -t ext4 "$PART" /home
+
+    # Tell the kernel about the new layout
+    partx -u "$DRIVE"
 
     # DEBUG
     blkid
@@ -59,13 +83,103 @@ test_prepare() {
     echo "combustion: test_prepare function ran OK" > /dev/kmsg
 }
 
+fde_in_service() {
+cat > /opt/reencrypt.sh <<'EOF'
+#!/bin/bash
+set -eux
+
+# define fde data
+luks_keyfile=/root/.root.keyfile
+luks_dev=$(blkid -t TYPE=crypto_LUKS --output=device)
+newpass=$(mktemp /tmp/fde.XXXXXX)
+echo -n bm90czNjcjN0Cg== | base64 -d > "${newpass}"
+
+if [ -f /run/.kiwi_reencrypt.keyfile ]; then
+    oldpass=/run/.kiwi_reencrypt.keyfile
+else
+    oldpass=$(mktemp /tmp/fde.XXXXXX)
+    echo -n "1234" > "${oldpass}"
+fi
+
+sed -i "s,${luks_keyfile},/.virtual-root.key,g" /etc/crypttab
+sed -i "s,${luks_keyfile},/.virtual-root.key,g" /etc/dracut.conf.d/99-luks-boot.conf
+cryptsetup --key-file "${oldpass}" luksChangeKey --pbkdf pbkdf2 "${luks_dev}" "${newpass}"
+cryptsetup reencrypt --key-slot 0 --key-file "${newpass}" "${luks_dev}"
+fdectl --passfile "${newpass}" regenerate-key
+systemctl enable fde-tpm-enroll.service
+transactional-update initrd grub.cfg
+rm -f "${newpass}" "${oldpass}" "${luks_keyfile}"
+systemctl --message="Combustion triggered FDE" reboot
+EOF
+
+chmod 755 /opt/reencrypt.sh
+
+cat > /etc/systemd/system/reencrypt.service <<'EOF'
+[Unit]
+Description=Run FDE reencrypt configured by combustion
+
+ConditionPathExists=/root/.root.keyfile
+
+After=local-fs.target systemd-firstboot.service basic.target
+Before=getty.target network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/reencrypt.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable reencrypt.service
+}
+
 if [ "${1-}" = "--prepare" ]; then
     test_prepare
+
+    if [ -c "/dev/tpm0" ] && command -v disk-encryption-tool &> /dev/null; then
+        mkdir -p /run/credstore
+        echo "force" > /run/credstore/disk-encryption-tool-dracut.encrypt
+        echo "cr_root /dev/vda3" >> /run/credstore/disk-encryption-tool-dracut.partitions
+    fi
+
     exit 0
 fi
 
 # Redirect output to the console
 exec > >(exec tee -a /dev/console) 2>&1
+
+if command -v mkfs.ext4 &> /dev/null; then
+    create_fs
+    systemd_mount
+else
+    mount /home
+fi
+
+if [ -c "/dev/tpm0" ] && command -v fdectl &> /dev/null; then
+    fde_in_service
+fi
+
+if [ -c "/dev/tpm0" ] && command -v disk-encryption-tool &> /dev/null; then
+    systemd-machine-id-setup
+    [ -z "${TRANSACTIONAL_UPDATE+x}" ] || mount /var
+    mkdir -p /etc/credstore.encrypted
+    credential="$(mktemp disk-encryption-tool.XXXXXXXXXX)"
+    # Enroll recovery key
+    echo "1" > "$credential"
+    systemd-creds encrypt --name=sdbootutil-enroll.rk "$credential" /etc/credstore.encrypted/sdbootutil-enroll.rk
+    # Enroll TPM2
+    echo "1" > "$credential"
+    systemd-creds encrypt --name=sdbootutil-enroll.tpm2 "$credential" /etc/credstore.encrypted/sdbootutil-enroll.tpm2
+    shred -u "$credential"
+    # hack as heck, skip jeos-firstboot
+    # https://github.com/openSUSE/jeos-firstboot/issues/128
+    rm -f /sysroot/var/lib/YaST2/reconfig_system
+    # Umount back /var to not confuse tukit later
+    [ -z "${TRANSACTIONAL_UPDATE+x}" ] || umount /var
+fi
 
 ### set locale, keyboard and timezone
 # exception: sle-micro comes with symlink /etc/localtime, thus systemd-firstboot fails
@@ -73,11 +187,6 @@ exec > >(exec tee -a /dev/console) 2>&1
 rm -f /etc/localtime
 systemd-firstboot --force --timezone=UTC --locale=en_US.UTF-8 --keymap=us
 echo 'FONT=eurlatgr.psfu' >> /etc/vconsole.conf
-
-if ! grep -q tumbleweed /etc/os-release; then
-    create_fs
-    systemd_mount
-fi
 
 #
 ### users and groups
@@ -127,5 +236,9 @@ if command -v wicked &> /dev/null && ! grep -q 'dhcp' "$IF_CFG" &> /dev/null; th
     echo -e "BOOTPROTO=dhcp\nSTARTMODE=auto" > "$IF_CFG"
 fi
 
+# leave a marker that combustion configure the system
 echo Combustion was here > /usr/share/combustion-welcome
 curl conncheck.opensuse.org
+
+# close outputs and wait for tee to finish
+exec 1>&- 2>&-; wait;

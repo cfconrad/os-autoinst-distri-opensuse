@@ -10,8 +10,6 @@
 use base "virt_feature_test_base";
 use virt_autotest::common;
 use virt_autotest::utils;
-use strict;
-use warnings;
 use testapi;
 use utils;
 use virt_utils;
@@ -28,7 +26,8 @@ sub test_add_virtual_disk {
     my $disk_image = get_disk_image_name($guest, $disk_format);
 
     assert_script_run("rm -f $disk_image");
-    assert_script_run "qemu-img create -f $disk_format $disk_image 10G";
+    # Set disk size=9.5G to make it to be found more easily within the guest
+    assert_script_run "qemu-img create -f $disk_format $disk_image 9.5G";
     my $domblk_target = 'vdz';
     $domblk_target = 'xvdz' if (is_xen_host);
     script_run("virsh detach-disk $guest ${domblk_target}", 240);
@@ -36,7 +35,7 @@ sub test_add_virtual_disk {
         assert_script_run "virsh domblklist $guest | grep ${domblk_target}";
         assert_script_run("ssh root\@$guest lsblk");
         # Attach disk check
-        assert_script_run("ssh root\@$guest lsblk | grep -iE '[x]?vd[b-z]'", timeout => 60, fail_message => "Failed to attach disk for guest $guest");
+        assert_script_run("ssh root\@$guest lsblk | grep -iE '[x]?vd[a-z] +.*9.5G'", timeout => 60, fail_message => "Failed to attach disk for guest $guest");
         assert_script_run("virsh detach-disk $guest ${domblk_target}", 240);
         # Detach disk check
         assert_script_run("! ssh root\@$guest lsblk | grep -iE '[x]?vd[b-z]'", timeout => 60, fail_message => "Failed to detach disk for guest $guest");

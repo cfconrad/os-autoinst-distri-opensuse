@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021 SUSE LLC
+# Copyright 2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: Two workers deployed by rke1 Kubernetes cluster.
@@ -8,8 +8,6 @@
 # Maintainer: Pavel Dostal <pdostal@suse.com>
 
 use base 'x11test';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use lockapi;
@@ -25,8 +23,7 @@ sub run {
     prepare_mm_network();
     barrier_wait('networking_prepared');
 
-    my ($running_version, $sp, $host_distri) = get_os_release;
-    install_docker_when_needed($host_distri);
+    install_docker_when_needed();
 
     barrier_wait('cluster_prepared');
 

@@ -5,21 +5,30 @@
 #
 # Summary: This module provides metadata which will be used by guest installation
 # and configuration program using guest_installation_and_configuration_base.pm
-# as base module at the lowest level. Metadata includes global %guest_params which
+# as base module at the lowest level. Metadata includes global %_guest_params which
 # contains all parameters and arguments to generate virt-install command for guest
-# installation and global %guest_network_matrix which contains all supported types
-# of network configuration to create guest network.
+# installation, global %_host_params which contains all parameters for host setup
+# and common configuration and  global %_guest_network_matrix which contains all
+# supported types of network configuration to create guest network.
 #
 # Maintainer: Wayne Chen <wchen@suse.com> or <qe-virt@suse.de>
 package guest_installation_and_configuration_metadata;
 
 use strict;
 use warnings;
+use testapi;
+use Exporter qw(import);
+
+our @EXPORT = qw(
+  %_host_params
+  %_guest_params
+  %_guest_network_matrix
+);
 
 # Global data structure %guest_params to specify desired guest to be configured
 # and installed. Specifying desired guest by placing guest profile in xml format
 # in data/virt_autotest/guest_params_xml_files folder.
-our %guest_params = (
+our %_guest_params = (
     'guest_os_name' => '',    # [guest_os_name]:sles,opensuse,oraclelinux or others.Not virt-install argument.
     'guest_os_word_length' => '',    # [guest_os_word_length]:64 or 32.Not virt-install argument.
     'guest_version' => '',    # [guest_version]:15-sp3 or others.not virt-install argument.
@@ -38,12 +47,13 @@ our %guest_params = (
     'guest_name' => '',    # virt-install --name [guest_name]
     'guest_domain_name' => '',    # this will be used for dns configuration, not virt-install argument
     'guest_memory' => '',    # virt-install --memory [guest_memory]
+    'guest_numatune' => '',    # virt-install --numatune [guest_numatune]
     'guest_vcpus' => '',    # virt-install --vcpus [guest_vcpus]
     'guest_cpumodel' => '',    # virt-install --cpu [guest_cpumodel]
     'guest_metadata' => '',    # virt-install --metadata [guest_metadata]
     'guest_xpath' => '',    # virt-install --xml [guest_xpath].it can contain multiple items seperated by hash key
-    'guest_installation_automation_method' => '',    # This indicates whether guest uses autoyast, kickstart, ignition, combustion or
-                                                     # ignition+combustion for installation, not virt-install argument
+    'guest_installation_automation_method' => '',    # This indicates whether guest uses autoyast, kickstart, ignition, combustion,
+                                                     # ignition+combustion or autoagama for installation, not virt-install argument
     'guest_installation_automation_platform' => '',    # This indicates ignition/combustion platform, not virt-install argument. Please
                                                        # refer to https://coreos.github.io/ignition/supported-platforms
     'guest_installation_automation_file' => '',    # virt-install --extra-args "autoyast=[guest_installation_automation_file] or
@@ -59,7 +69,17 @@ our %guest_params = (
     'guest_installation_wait' => '',    # virt-install --wait [guest_installation_wait]
     'guest_installation_media' => '',    # virt-install --location [guest_installation_media] or --cdrom [guest_installation_media]
                                          # It can also specify the imported virtual disk image to be used for installation.
-    'guest_installation_fine_grained' => '',    # virt-install --install [guest_installation_fine_grained]
+    'guest_installation_fine_grained_media' => '',    # [guest_installation_media] will still be used as installation media. But matching
+                                                      # kernel/initrd files will be retrieved from [guest_installation_fine_grained_media].
+                                                      # virt-install --install kernel=x,initrd=y,root=live:[guest_installation_media]
+    'guest_installation_fine_grained_repos' => '',    # Additonal installation repositories can also be provided besides installation media.
+                                                      # Multiple repositories are separated by comma. Example command is as below:
+                                                      # virt-install --install agama.install_url=[guest_installation_fine_grained_repos]
+    'guest_installation_fine_grained_kernel_args' => '',    # virt-install --install kernel_args=[guest_installation_fine_grained_kernel_args]
+    'guest_installation_fine_grained_kernel_args_overwrite' => '',    # Set it to true, if provided kernel arguments will overwrite existing ones.
+                                                                      # virt-install --install kernel_args_overwrite=yes|no
+    'guest_installation_fine_grained_others' => '',    # virt-install --install [guest_installation_fine_grained_others], for example:
+                                                       # guest_installation_fine_grained_others can be os=x,bootdev=y,no_install=yes|no,zzzzz
     'guest_boot_settings' => '',    # virt-install --boot [guest_boot_settings]
     'guest_secure_boot' => '',    # This indicates whether uefi secure boot is enabled(true, false or empty) during
                                   # installation in unattended installation file, not virt-install argument
@@ -183,6 +203,7 @@ our %guest_params = (
     'guest_name_options' => '',    # [guest_name_options] = "--name [guest_name]"
     'guest_memory_options' => '',    # [guest_memory_options] = "--memory [guest_memory] --memballoon [guest_memballoon]
                                      # --memdev [guest_memdev] --memtune [guest_memtune] --memorybacking [guest_memorybacking]"
+    'guest_numa_options' => '',    # [guest_numa_options] = "--numatune [guest_numatune]"
     'guest_vcpus_options' => '',    # [guest_vcpus_options] = "--vcpus [guest_vcpus]"
     'guest_cpumodel_options' => '',    # [guest_cpumodel_options] = "--cpu [guest_cpumodel]"
     'guest_metadata_options' => '',    # [guest_metadata_options] = "--metadata [guest_metadata]"
@@ -238,7 +259,9 @@ our %guest_params = (
 # Global data structure %host_params contains all parameters not pertinent to
 # any specific guest and only relating to operations on host. All parameters
 # in this structure are only initialized once in a single test run.
-our %host_params = (
+our %_host_params = (
+    'common_log_folder' => get_var('COMMON_LOG_FOLDER', '/var/log/') . 'guest_installation_and_configuration',    # Common folder for storing logs
+    'common_environment_prepared' => get_var('COMMON_ENV_PREPARED', 'false'),    # Whether common environment prepartion is done (true or false)
     'host_sutip' => '',    # This is get_required_var('SUT_IP')
     'host_ipaddr' => '',    # This is ip addr of default host network device
     'host_name' => '',    # This is script_output('hostname')
@@ -246,19 +269,21 @@ our %host_params = (
     'host_version_major' => '',    # Major version of host os release from /etc/os-release on host
     'host_version_minor' => '',    # Minor version of host os release from /etc/os-release on host
     'host_version_id' => '',    # Version ID of host os release from /etc/os-release on host
+    'ssh_key_file' => get_var('GUEST_SSH_KEYFILE', '/root/.ssh/id_rsa'),    # SSH key file used for guest installation and login
     'ssh_public_key' => '',    # Public key used for ssh login to guest
     'ssh_private_key' => '',    # Private key used for ssh login to guest
-    'ssh_command' => ''    # SSH command used for ssh login, for example, "ssh -vvv -i identity_file username"
+    'ssh_command' => '',    # SSH command used for ssh login, for example, "ssh -vvv -i identity_file username"
+    'reconsole_counter' => get_var('RESELECT_CONSOLE_COUNTER', 180)    # Reselect disconnected console if condition triggered in counter
 );
 
 # Global data structure %guest_network_matrix to specify network devices to be
 # used for guest configuring and installing. Virtual networks, including nat,
 # route, bridge and default modes, and bridge networks, including host and bridge
 # modes, are covered.
-our %guest_network_matrix = (
+our %_guest_network_matrix = (
     vnet => {    # Virtual networks to be created by using virsh net-define. [guest_network_type] = vnet
         nat => {    # Virtual network in NAT mode. [guest_network_mode] = nat
-            device => 'virbr124',
+            device => 'vn_nat_vbr124',
             ipaddr => '192.168.124.1',
             netmask => '255.255.255.0',
             masklen => '24',
@@ -266,7 +291,7 @@ our %guest_network_matrix = (
             endaddr => '192.168.124.254'
         },
         route => {    # Virtual network in ROUTE mode. [guest_network_mode] = route
-            device => 'virbr125',
+            device => 'vn_route_vbr125',
             ipaddr => '192.168.125.1',
             netmask => '255.255.255.0',
             masklen => '24',

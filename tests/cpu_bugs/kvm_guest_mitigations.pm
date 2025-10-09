@@ -6,8 +6,6 @@
 # Summary: CPU BUGS on Linux kernel check
 # Maintainer: Qi Wang <qwang@suse.com>
 package kvm_guest_mitigations;
-use strict;
-use warnings;
 use base "consoletest";
 use bootloader_setup;
 use Mitigation;
@@ -35,10 +33,10 @@ my $mitigations_auto_on_skylake_passthrough = {"mitigations=auto" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=auto'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: IBRS, IBPB: conditional, RSB filling.*'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: IBRS; IBPB: conditional; STIBP: disabled; RSB filling; PBRSB-eIBRS: Not affected; BHI: SW loop, KVM: SW loop'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Mitigation: PTI'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Mitigation: Clear CPU buffers; SMT Host state unknown'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl and seccomp'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl'],
                 'cat /sys/devices/system/cpu/vulnerabilities/tsx_async_abort' => ['Mitigation: Clear CPU buffers; SMT Host state unknown'],
                 'cat /sys/devices/system/cpu/vulnerabilities/itlb_multihit' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spectre_v1' => ['Mitigation: usercopy/swapgs barriers and __user pointer sanitization'],
@@ -51,10 +49,10 @@ my $mitigations_auto_on_custom = {"mitigations=auto" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=auto'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Retpolines,.*IBPB: conditional, IBRS_FW*'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Retpolines; IBPB: conditional; IBRS_FW; STIBP: disabled; RSB filling; PBRSB-eIBRS: Not affected; BHI: Retpoline'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Mitigation: PTI'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Mitigation: Clear CPU buffers; SMT Host state unknown'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl and seccomp'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl'],
                 'cat /sys/devices/system/cpu/vulnerabilities/tsx_async_abort' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/itlb_multihit' => ['KVM: Mitigation: VMX unsupported'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spectre_v1' => ['Mitigation: usercopy/swapgs barriers and __user pointer sanitization'],
@@ -67,10 +65,10 @@ my $mitigations_auto_nosmt_on_skylake_passthrough = {"mitigations=auto,nosmt" =>
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=auto,nosmt'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: IBRS, IBPB: conditional, RSB filling.*'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: IBRS; IBPB: conditional; STIBP: disabled; RSB filling; PBRSB-eIBRS: Not affected; BHI: SW loop, KVM: SW loop'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Mitigation: PTI'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Mitigation: Clear CPU buffers; SMT Host state unknown'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl and seccomp'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl'],
                 'cat /sys/devices/system/cpu/vulnerabilities/tsx_async_abort' => ['Mitigation: Clear CPU buffers; SMT Host state unknown'],
                 'cat /sys/devices/system/cpu/vulnerabilities/itlb_multihit' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spectre_v1' => ['Mitigation: usercopy/swapgs barriers and __user pointer sanitization'],
@@ -83,10 +81,10 @@ my $mitigations_auto_nosmt_on_custom = {"mitigations=auto,nosmt" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=auto,nosmt'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Retpolines,.*IBPB: conditional, IBRS_FW*'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Retpolines; IBPB: conditional; IBRS_FW; STIBP: disabled; RSB filling; PBRSB-eIBRS: Not affected; BHI: Retpoline'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Mitigation: PTI'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Mitigation: Clear CPU buffers; SMT Host state unknown'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl and seccomp'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl'],
                 'cat /sys/devices/system/cpu/vulnerabilities/tsx_async_abort' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/itlb_multihit' => ['KVM: Mitigation: VMX unsupported'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spectre_v1' => ['Mitigation: usercopy/swapgs barriers and __user pointer sanitization'],
@@ -99,7 +97,7 @@ my $mitigations_off_on_skylake_passthrough = {"mitigations=off" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=off'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Vulnerable,.*IBPB: disabled,.*STIBP: disabled'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Vulnerable'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Vulnerable'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Vulnerable; SMT Host state unknown'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Vulnerable'],
@@ -115,7 +113,7 @@ my $mitigations_off_on_custom = {"mitigations=off" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=off'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Vulnerable,.*IBPB: disabled,.*STIBP: disabled'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Vulnerable'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Vulnerable'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Vulnerable; SMT Host state unknown'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Vulnerable'],
@@ -132,10 +130,10 @@ my $mitigations_auto_on_icelake_passthrough = {"mitigations=auto" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=auto'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Enhanced IBRS, IBPB: conditional, RSB filling'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Enhanced / Automatic IBRS; IBPB: conditional; RSB filling; PBRSB-eIBRS: SW sequence; BHI: SW loop, KVM: SW loop'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Not affected'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl and seccomp'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl'],
                 'cat /sys/devices/system/cpu/vulnerabilities/tsx_async_abort' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/itlb_multihit' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spectre_v1' => ['Mitigation: usercopy/swapgs barriers and __user pointer sanitization'],
@@ -148,10 +146,10 @@ my $mitigations_auto_nosmt_on_icelake_passthrough = {"mitigations=auto,nosmt" =>
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=auto,nosmt'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Enhanced IBRS, IBPB: conditional, RSB filling'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Enhanced / Automatic IBRS; IBPB: conditional; RSB filling; PBRSB-eIBRS: SW sequence; BHI: SW loop, KVM: SW loop'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Not affected'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl and seccomp'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl'],
                 'cat /sys/devices/system/cpu/vulnerabilities/tsx_async_abort' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/itlb_multihit' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spectre_v1' => ['Mitigation: usercopy/swapgs barriers and __user pointer sanitization'],
@@ -164,7 +162,7 @@ my $mitigations_off_on_icelake_passthrough = {"mitigations=off" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=off'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Vulnerable,.*IBPB: disabled,.*STIBP: disabled'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Vulnerable; BHI: Vulnerable'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Vulnerable'],
@@ -182,10 +180,10 @@ my $mitigations_auto_on_cascadelake_passthrough = {"mitigations=auto" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=auto'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Enhanced IBRS, IBPB: conditional, RSB filling'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Actual:Mitigation: Enhanced / Automatic IBRS, IBPB: conditional, RSB filling'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Not affected'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl and seccomp'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl'],
                 'cat /sys/devices/system/cpu/vulnerabilities/tsx_async_abort' => ['Mitigation: Clear CPU buffers; SMT Host state unknown'],
                 'cat /sys/devices/system/cpu/vulnerabilities/itlb_multihit' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spectre_v1' => ['Mitigation: usercopy/swapgs barriers and __user pointer sanitization'],
@@ -198,10 +196,10 @@ my $mitigations_auto_nosmt_on_cascadelake_passthrough = {"mitigations=auto,nosmt
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=auto,nosmt'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Enhanced IBRS, IBPB: conditional, RSB filling'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Mitigation: Enhanced / Automatic IBRS; IBPB: conditional; RSB filling; PBRSB-eIBRS: SW sequence; BHI: SW loop, KVM: SW loop'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Not affected'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl and seccomp'],
+                'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Mitigation: Speculative Store Bypass disabled via prctl'],
                 'cat /sys/devices/system/cpu/vulnerabilities/tsx_async_abort' => ['Mitigation: Clear CPU buffers; SMT Host state unknown'],
                 'cat /sys/devices/system/cpu/vulnerabilities/itlb_multihit' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spectre_v1' => ['Mitigation: usercopy/swapgs barriers and __user pointer sanitization'],
@@ -214,7 +212,7 @@ my $mitigations_off_on_cascadelake_passthrough = {"mitigations=off" => {
         default => {
             expected => {
                 'cat /proc/cmdline' => ['mitigations=off'],
-                'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Vulnerable,.*IBPB: disabled,.*STIBP: disabled'],
+'cat /sys/devices/system/cpu/vulnerabilities/spectre_v2' => ['Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Vulnerable; BHI: Vulnerable (Syscall hardening enabled)'],
                 'cat /sys/devices/system/cpu/vulnerabilities/meltdown' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/mds' => ['Not affected'],
                 'cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass' => ['Vulnerable'],
@@ -296,6 +294,7 @@ sub get_expect_script {
     my $expect_script_name = 'get_guest_ip.sh';
     assert_script_run("curl -s -o ~/$expect_script_name " . data_url("mitigation/xen/$expect_script_name"));
     assert_script_run("chmod a+x " . $expect_script_name);
+    assert_script_run("sed -i 's/ROOT_PASSWORD/$testapi::password/g' $expect_script_name");
 }
 sub get_guest_ip {
     return script_output("./get_guest_ip.sh \"${guest_name}\"", timeout => 3600);

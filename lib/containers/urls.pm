@@ -50,44 +50,44 @@ sub get_opensuse_registry_prefix {
 
 my %sles_containers = (
     '12-SP5' => {
-        released => sub { 'registry.suse.com/suse/sles12sp5' },
+        released => sub { 'registry.suse.com/suse/ltss/sle12.5/sles12sp5' },
         totest => sub {
-            'registry.suse.de/suse/sle-12-sp5/docker/update/cr/totest/images/suse/sles12sp5';
-        },
-        available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x']
-    },
-    '15-SP2' => {
-        released => sub { 'registry.suse.com/suse/sle15:15.2' },
-        totest => sub {
-            'registry.suse.de/suse/sle-15-sp2/update/cr/totest/images/suse/sle15:15.2';
+            'registry.suse.de/suse/containers/sle-server/12-sp5/containers/suse/ltss/sle12.5/sles12sp5';
         },
         available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x']
     },
     '15-SP3' => {
-        released => sub { 'registry.suse.com/suse/sle15:15.3' },
+        released => sub { 'registry.suse.com/suse/ltss/sle15.3/sle15:15.3' },
         totest => sub {
-            'registry.suse.de/suse/sle-15-sp3/update/cr/totest/images/suse/sle15:15.3';
+            'registry.suse.de/suse/sle-15-sp3/update/bci/images/suse/ltss/sle15.3/sle15:latest';
         },
         available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x']
     },
     '15-SP4' => {
-        released => sub { 'registry.suse.com/suse/sle15:15.4' },
+        released => sub { 'registry.suse.com/suse/ltss/sle15.4/sle15:15.4' },
         totest => sub {
-            'registry.suse.de/suse/sle-15-sp4/ga/test/images/suse/sle15:15.4';
+            'registry.suse.de/suse/sle-15-sp4/update/bci/images/suse/ltss/sle15.4/sle15:latest';
         },
         available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x']
     },
     '15-SP5' => {
-        released => sub { 'registry.suse.com/suse/sle15:15.5' },
+        released => sub { 'registry.suse.com/suse/ltss/sle15.5/sle15:15.5' },
         totest => sub {
-            'registry.suse.de/suse/sle-15-sp5/ga/test/containers/suse/sle15:15.5';
+            'registry.suse.de/suse/sle-15-sp5/update/bci/images/suse/ltss/sle15.5/sle15:latest';
         },
         available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x']
     },
     '15-SP6' => {
         released => sub { 'registry.suse.com/suse/sle15:15.6' },
         totest => sub {
-            'registry.suse.de/suse/sle-15-sp6/ga/test/containers/suse/sle15:15.6';
+            'registry.suse.de/suse/sle-15-sp6/update/cr/totest/images/suse/sle15:15.6';
+        },
+        available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x']
+    },
+    '15-SP7' => {
+        released => sub { 'registry.suse.com/suse/sle15:15.7' },
+        totest => sub {
+            'registry.suse.de/suse/sle-15-sp7/ga/test/containers/suse/sle15:15.7';
         },
         available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x']
     }
@@ -99,7 +99,7 @@ my %opensuse_containers = (
         totest => sub {
             'registry.opensuse.org/' . get_opensuse_registry_prefix . 'opensuse/tumbleweed';
         },
-        available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x', 'arm']
+        available_arch => ['x86_64', 'aarch64', 'ppc64le', 's390x', 'arm', 'riscv64']
     },
     '15.4' => {
         released => sub { 'registry.opensuse.org/opensuse/leap:15.4' },
@@ -155,22 +155,24 @@ sub supports_image_arch {
 sub get_3rd_party_images {
     my $registry = get_var('REGISTRY', 'docker.io');
     my @images = (
-        "registry.opensuse.org/opensuse/leap",
         "registry.opensuse.org/opensuse/tumbleweed",
-        "$registry/library/alpine",
-        "$registry/library/debian"
+        "$registry/library/alpine"
+    );
+
+    push @images, (
+        "registry.opensuse.org/opensuse/leap",
+        "$registry/library/debian",
         # Temporarily disabled as it needs x86-64-v2
         # "quay.io/centos/centos:stream9"
-    );
+    ) unless (is_riscv);
 
     # Following images are not available on 32-bit arm
     push @images, (
-        "registry.fedoraproject.org/fedora",
         "registry.access.redhat.com/ubi8/ubi",
         "registry.access.redhat.com/ubi8/ubi-minimal",
         "registry.access.redhat.com/ubi8/ubi-micro",
         "registry.access.redhat.com/ubi8/ubi-init"
-    ) unless (is_arm);
+    ) unless (is_arm || is_riscv);
 
     # - ubi9 images require z14+ s390x machine, they are not ready in OSD yet.
     #     on z13: "Fatal glibc error: CPU lacks VXE support (z14 or later required)".
@@ -181,19 +183,16 @@ sub get_3rd_party_images {
         "registry.access.redhat.com/ubi9/ubi",
         "registry.access.redhat.com/ubi9/ubi-minimal",
         "registry.access.redhat.com/ubi9/ubi-micro",
-        "registry.access.redhat.com/ubi9/ubi-init"
-    ) unless (is_arm || is_s390x || is_ppc64le || !is_x86_64_v2);
+        "registry.access.redhat.com/ubi9/ubi-init",
+        "registry.access.redhat.com/ubi10/ubi",
+        "registry.access.redhat.com/ubi10/ubi-minimal",
+        "registry.access.redhat.com/ubi10/ubi-micro",
+        "registry.access.redhat.com/ubi10/ubi-init"
+    ) unless (is_arm || is_s390x || is_ppc64le || is_riscv || !is_x86_64_v2);
 
     push @images, (
         "$registry/library/ubuntu"
     ) if (is_x86_64);
-
-    # RedHat UBI7 images are not built for aarch64 and 32-bit arm
-    push @images, (
-        "registry.access.redhat.com/ubi7/ubi",
-        "registry.access.redhat.com/ubi7/ubi-minimal",
-        "registry.access.redhat.com/ubi7/ubi-init"
-    ) unless (is_arm || is_aarch64 || check_var('PUBLIC_CLOUD_ARCH', 'arm64'));
 
     return (\@images);
 }

@@ -15,8 +15,6 @@
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base 'y2_installbase';
-use strict;
-use warnings;
 use lockapi;
 use testapi;
 use Utils::Architectures;
@@ -80,7 +78,8 @@ sub run {
         assert_screen("inst-packageinstallationstarted", $started_timeout);
     }
     else {
-        wait_still_screen(3);    # wait so alt-i is pressed when installation overview is not being generated
+        my $time_out = is_ipmi ? 10 : 3;
+        wait_still_screen($time_out);    # wait so alt-i is pressed when installation overview is not being generated
         send_key $cmd{install};
         if (check_var('FAIL_EXPECTED', 'SMALL-DISK')) {
             assert_screen 'installation-proposal-error';
@@ -96,7 +95,7 @@ sub run {
                 send_key 'alt-o';
             }
         }
-        assert_screen "startinstall";
+        assert_screen "startinstall", 90;
 
         # confirm
         send_key $cmd{install};

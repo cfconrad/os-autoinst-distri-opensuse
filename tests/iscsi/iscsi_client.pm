@@ -18,8 +18,6 @@
 # Maintainer: Jozef Pupava <jpupava@suse.com>
 
 use base "y2_module_guitest";
-use strict;
-use warnings;
 use testapi;
 use lockapi qw(mutex_create mutex_wait);
 use version_utils qw(is_sle is_leap);
@@ -42,10 +40,16 @@ sub initiator_service_tab {
                 after_reboot => {start_on_boot => 'alt-b'}
             );
         } else {
-            change_service_configuration(
-                after_writing => {start => 'alt-f'},
-                after_reboot => {start_on_demand => 'alt-a'}
-            );
+            if (is_sle('>=15-SP6')) {
+                change_service_configuration(
+                    after_writing => {start => 'alt-t'},
+                    after_reboot => {start_on_demand => 'alt-a'}
+                ); }
+            else {
+                change_service_configuration(
+                    after_writing => {start => 'alt-f'},
+                    after_reboot => {start_on_demand => 'alt-a'}
+                ); }
         }
     }
     # go to initiator name field
@@ -56,10 +60,18 @@ sub initiator_service_tab {
 
 sub initiator_discovered_targets_tab {
     # go to discovered targets tab
-    send_key "alt-v";
+    if (is_sle('>=15-SP6')) {
+        send_key "alt-d";
+    } else {
+        send_key "alt-v";
+    }
     assert_screen 'iscsi-discovered-targets', 120;
     # press discovery button
-    send_key "alt-d";
+    if (is_sle('>=15-SP6')) {
+        send_key "alt-i";
+    } else {
+        send_key "alt-d";
+    }
     wait_still_screen(2);
     assert_screen 'iscsi-discovery';
     # go to IP address field
@@ -111,7 +123,6 @@ sub run {
     zypper_call("in open-iscsi yast2-iscsi-client");
     mutex_wait('iscsi_target_ready', undef, 'Target configuration in progress!');
     record_info 'Target Ready!', 'iSCSI target is configured, start initiator configuration';
-    apply_workaround_bsc1206132() if (is_sle('=15-SP3'));
     my $module_name = y2_module_guitest::launch_yast2_module_x11('iscsi-client', target_match => 'iscsi-client');
     initiator_service_tab;
     initiator_discovered_targets_tab;

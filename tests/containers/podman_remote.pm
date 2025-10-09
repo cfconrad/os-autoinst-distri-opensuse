@@ -1,11 +1,11 @@
 # SUSE's openQA tests
 #
-# Copyright 2023-2024 SUSE LLC
+# Copyright 2023-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: podman
 # Summary: Test podman-remote functionality
-# Maintainer: qe-c <qe-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'containers::basetest';
 use testapi;
@@ -13,9 +13,6 @@ use utils qw(script_retry systemctl zypper_call);
 use serial_terminal qw(select_serial_terminal select_user_serial_terminal);
 use transactional qw(trup_call check_reboot_changes);
 use version_utils qw(is_transactional is_sle is_sle_micro is_staging);
-use containers::utils qw(get_podman_version);
-
-my $podman_version;
 
 sub test_package {
     my $ret;
@@ -28,14 +25,7 @@ sub test_package {
         $ret = zypper_call("in podman-remote", exitcode => [0, 104]);
     }
 
-    if ($ret) {
-        if (is_sle_micro('>=5.1') && is_sle_micro('<=5.4') || is_sle('=15-SP3')) {
-            record_soft_failure("bsc#1226596 - podman-remote is not available");
-        } else {
-            # Fail only if podman > 4.9.0
-            die "podman-remote is not available!" if (version->parse($podman_version) > version->parse('4.9.0'));
-        }
-    }
+    die "podman-remote is not available!" if ($ret);
 }
 
 sub run {
@@ -45,10 +35,6 @@ sub run {
     select_serial_terminal();
     my $podman = $self->containers_factory('podman');
     $self->{podman} = $podman;
-
-    # podman remote is not reliable on older podman 2.x
-    my $podman_version = get_podman_version();
-    return if (version->parse($podman_version) < version->parse('3.0.0'));
 
     test_package unless (is_staging);
 

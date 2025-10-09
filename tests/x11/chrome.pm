@@ -9,8 +9,6 @@
 # Maintainer: Dominique Leuenberger <dimstar@opensuse.org>
 
 use base "x11test";
-use strict;
-use warnings;
 use testapi;
 use Utils::Architectures;
 use utils;
@@ -19,12 +17,16 @@ sub install_google_repo_key {
     become_root;
     assert_script_run "rpm --import https://dl.google.com/linux/linux_signing_key.pub";
     # validate it's properly installed
-    script_run "rpm -qi gpg-pubkey-7fac5991-*";
-    assert_screen 'google-key-installed';
+    assert_script_run "rpm -qi gpg-pubkey-d38b4796-*";
 }
 
 sub avoid_async_keyring_popups {
-    x11_start_program('google-chrome --password-store=basic', target_match => 'chrome-default-browser-query');
+    x11_start_program('google-chrome --password-store=basic', target_match => [qw(chrome-default-browser-query authentication-required)]);
+    if (match_has_tag 'authentication-required') {
+        type_password;
+        assert_and_click "unlock";
+        assert_screen "chrome-default-browser-query";
+    }
 }
 
 sub preserve_privacy_of_non_human_openqa_workers {

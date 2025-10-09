@@ -7,7 +7,6 @@
 # Maintainer: Richard palethorpe <rpalethorpe@suse.com>
 # Usage details are at the end of this file.
 use 5.018;
-use warnings;
 use base 'opensusebasetest';
 use File::Basename 'basename';
 use LWP::Simple 'head';
@@ -20,15 +19,17 @@ use bootloader_setup qw(add_custom_grub_entries add_grub_cmdline_settings);
 use power_action_utils 'power_action';
 use repo_tools 'add_qa_head_repo';
 use upload_system_log;
-use version_utils qw(is_jeos is_opensuse is_released is_sle is_leap is_tumbleweed is_rt is_transactional);
+use version_utils qw(is_jeos is_opensuse is_released is_sle is_leap is_tumbleweed is_rt is_transactional is_sle_micro);
 use Utils::Architectures;
 use Utils::Systemd qw(systemctl disable_and_stop_service);
 use LTP::utils;
+use LTP::install qw(get_required_build_dependencies get_maybe_build_dependencies get_submodules_to_rebuild);
 use rpi 'enable_tpm_slb9670';
 use bootloader_setup 'add_grub_xen_replace_cmdline_settings';
 use virt_autotest::utils 'is_xen_host';
 use Utils::Backends 'get_serial_console';
 use kdump_utils;
+use transactional;
 
 sub add_we_repo_if_available {
     # opensuse doesn't have extensions
@@ -102,6 +103,9 @@ sub install_runtime_dependencies {
     # modprobe refuses to load it.
     push @maybe_deps, 'kernel-default-extra' unless is_sle('<15');
 
+    # exfatprogs create a conflict with exfat-utils on Tumbleweed.
+    push @maybe_deps, 'exfatprogs' unless is_tumbleweed();
+
     zypper_install_available(@maybe_deps);
 }
 
@@ -118,8 +122,6 @@ sub install_debugging_tools {
 sub install_runtime_dependencies_network {
     my @deps;
     @deps = qw(
-      dhcp-client
-      dhcp-server
       diffutils
       dnsmasq
       ethtool
@@ -135,6 +137,8 @@ sub install_runtime_dependencies_network {
     zypper_call('-t in ' . join(' ', @deps));
 
     my @maybe_deps = qw(
+      dhcp-client
+      dhcp-server
       telnet-server
       wireguard-tools
       xinetd
@@ -143,51 +147,8 @@ sub install_runtime_dependencies_network {
 }
 
 sub install_build_dependencies {
-    my @deps = qw(
-      autoconf
-      automake
-      bison
-      expect
-      flex
-      gcc
-      git-core
-      libaio-devel
-      libopenssl-devel
-      make
-    );
-
-    if (is_rt) {
-        push @deps, 'kernel-rt-devel';
-    }
-    elsif (!get_var('KGRAFT')) {
-        push @deps, 'kernel-default-devel';
-    }
-
-    zypper_call('-t in ' . join(' ', @deps));
-
-    my @maybe_deps = qw(
-      keyutils-devel
-      libcap-devel
-      libacl-devel
-      libtirpc-devel
-      libselinux-devel
-      gcc-32bit
-      kernel-default-devel-32bit
-      keyutils-devel-32bit
-      libacl-devel-32bit
-      libaio-devel-32bit
-      libcap-devel-32bit
-      libmnl-devel
-      libnuma-devel
-      libnuma-devel-32bit
-      libselinux-devel-32bit
-      libtirpc-devel-32bit
-    );
-
-    # libopenssl-devel-32bit is blocked by dependency mess on SLE-12 and we
-    # don't use it anyway...
-    push @maybe_deps, 'libopenssl-devel-32bit' if !is_sle('<15');
-    zypper_install_available(@maybe_deps);
+    zypper_call('-t in ' . join(' ', get_required_build_dependencies()));
+    zypper_install_available(get_maybe_build_dependencies());
 }
 
 sub prepare_ltp_git {
@@ -211,15 +172,9 @@ sub prepare_ltp_git {
 
 sub install_selected_from_git {
     prepare_ltp_git;
-    my @paths = qw(commands/insmod
-      kernel/firmware
-      kernel/device-drivers
-      kernel/syscalls/delete_module
-      kernel/syscalls/finit_module
-      kernel/syscalls/init_module);
 
     assert_script_run('pushd testcases');
-    foreach (@paths) {
+    foreach (get_submodules_to_rebuild()) {
         assert_script_run("pushd $_ && make && make install && popd", timeout => 600);
     }
     assert_script_run("popd");
@@ -257,19 +212,24 @@ sub setup_network {
     # boo#1017616: missing link to ping6 in iputils >= s20150815
     assert_script_run('which ping6 >/dev/null 2>&1 || ln -s `which ping` /usr/local/bin/ping6');
 
-    # dhcpd
-    assert_script_run('touch /var/lib/dhcp/db/dhcpd.leases');
-    script_run('touch /var/lib/dhcp6/db/dhcpd6.leases');
+    unless (is_transactional || is_sle('16.0+')) {
+        # dhcpd
+        assert_script_run('touch /var/lib/dhcp/db/dhcpd.leases');
+        script_run('touch /var/lib/dhcp6/db/dhcpd6.leases');
 
-    # echo/echoes, getaddrinfo_01
-    assert_script_run('f=/etc/nsswitch.conf; [ ! -f $f ] && f=/usr$f; sed -i \'s/^\(hosts:\s+files\s\+dns$\)/\1 myhostname/\' $f');
+        # echo/echoes, getaddrinfo_01
+        assert_script_run('f=/etc/nsswitch.conf; [ ! -f $f ] && f=/usr$f; sed -i \'s/^\(hosts:\s+files\s\+dns$\)/\1 myhostname/\' $f');
+    }
 
-    my @services = qw(auditd dnsmasq rpcbind vsftpd);
+    my @services = qw(auditd dnsmasq rpcbind);
+
+    # current sle-micro's default repo has no vsftpd package
+    push @services, 'vsftpd' unless is_transactional;
     # nfsd module is not included in kernel-default-base package
     push @services, 'nfs-server' unless get_var('KERNEL_BASE');
 
     foreach my $service (@services) {
-        if (!is_jeos && is_sle('12+') || is_opensuse) {
+        if (!is_jeos && is_sle('12+') || is_opensuse || is_sle_micro) {
             systemctl("reenable $service");
             assert_script_run("systemctl start $service || { systemctl status --no-pager $service; journalctl -xe --no-pager; false; }");
         }
@@ -315,14 +275,20 @@ sub run {
     select_serial_terminal;
     export_ltp_env;
 
+    # cockpit login message sporadically breaks login in boot_ltp
+    script_run '[ -f /etc/issue.d/cockpit.issue ] && rm /etc/issue.d/cockpit.issue';
+
     if (script_output('cat /sys/module/printk/parameters/time') eq 'N') {
         script_run('echo 1 > /sys/module/printk/parameters/time');
         $grub_param .= ' printk.time=1';
     }
 
+    # this will print /all/ kernel messages to the console. So in case kernel panic we will have some data to analyse
+    assert_script_run('echo 1 | tee /sys/module/printk/parameters/ignore_loglevel');
+
     # check kGraft if KGRAFT=1
     if (check_var("KGRAFT", '1') && !check_var('REMOVE_KGRAFT', '1')) {
-        my $lp_tag = is_sle('>=15-sp4') ? 'lp' : 'lp-';
+        my $lp_tag = (is_sle('>=15-sp4') || is_sle_micro) ? 'lp' : 'lp-';
         assert_script_run("uname -v | grep -E '(/kGraft-|/${lp_tag})'");
     }
 
@@ -332,6 +298,10 @@ sub run {
 
     # Enables repositories on full installation medium
     zypper_enable_install_dvd if (get_var('FLAVOR') eq 'Full-QR');
+
+    # Lock kernel default on transactional system and RT flavors
+    # This is workaround for poo#165036 to prevent kernel-default and kernel-default-base installation
+    zypper_call("al kernel-default kernel-default-base") if (is_transactional && (get_var('FLAVOR', '') =~ /Base-RT-Updates|Base-RT|Base-RT-encrypted|Base-Kernel-RT/));
 
     if ($inst_ltp =~ /git/i) {
         install_build_dependencies;
@@ -372,7 +342,12 @@ sub run {
         add_grub_xen_replace_cmdline_settings("console=${serial_console},115200n", update_grub => 1);
     }
 
-    setup_network unless is_transactional;
+    # Make sure latest installed packages ready before enable service in setup_network
+    if (is_transactional) {
+        reboot_on_changes;
+    }
+
+    setup_network;
 
     # we don't run LVM tests in 32bit, thus not generating the runtest file
     # for 32 bit packages
@@ -505,6 +480,10 @@ will be used.
 =head2 LTP_GIT_URL
 
 Overrides the official LTP GitHub repository URL.
+
+=head2 LTP_INSTALL_REBOOT
+
+Reboot SUT after LTP installation.
 
 =head2 GRUB_PARAM
 

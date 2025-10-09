@@ -20,10 +20,11 @@ use testapi;
 use bootloader_setup;
 use registration 'registration_bootloader_params';
 use utils qw(get_netboot_mirror type_string_slow enter_cmd_slow);
-use version_utils 'is_upgrade';
+use version_utils qw(is_agama is_upgrade);
 use Utils::Backends;
 use YuiRestClient;
 use ntlm_auth;
+use autoyast qw(parse_dud_parameter);
 
 our @EXPORT = qw(
   boot_pvm
@@ -85,11 +86,18 @@ sub reset_lpar_netboot {
     # reset the LPAR manually, another issue is unable to load initrd or linux kernel,
     # so in both cases we need to reset LPAR netboot
     if (match_has_tag('novalink-failed-first-boot')) {
-        enter_cmd "set-default ibm,fw-nbr-reboots";
-        enter_cmd "reset-all";
-        assert_screen 'pvm-firmware-prompt';
-        send_key '1';
-        get_into_net_boot;
+        if (check_screen('novalink-first-boot-encrypted-passwd', 5)) {
+            type_string("$testapi::password");
+            send_key 'ret';
+            assert_screen 'pvm-grub';
+        }
+        else {
+            enter_cmd "set-default ibm,fw-nbr-reboots";
+            enter_cmd "reset-all";
+            assert_screen 'pvm-firmware-prompt';
+            send_key '1';
+            get_into_net_boot;
+        }
     }
 }
 
@@ -123,14 +131,32 @@ sub enter_netboot_parameters {
         record_info("Updated boot path for PPC64LE_GRUB_HTTP defined", $mntpoint);
     }
     my $ntlm_p = get_var('NTLM_AUTH_INSTALL') ? $ntlm_auth::ntlm_proxy : '';
-    type_string_slow "linux $mntpoint/linux vga=normal $ntlm_p install=$mirror ";
-    bootmenu_default_params;
-    bootmenu_network_source;
-    specific_bootmenu_params;
+    if (is_agama) {
+        type_string_slow "linux $mntpoint/linux root=live:http://" . get_var('OPENQA_HOSTNAME') . "/assets/iso/" . get_var('ISO') . " live.password=$testapi::password console=hvc0";
+        # inst.auto and inst.install_url are defined in below function
+        specific_bootmenu_params;
+        type_string_slow " " . get_var('EXTRABOOTPARAMS') . " " if (get_var('EXTRABOOTPARAMS'));
+        # add extra boot params for agama network, e.g. ip=2c-ea-7f-ea-ad-0c:dhcp
+        type_string_slow " " . get_var('AGAMA_NETWORK_PARAMS') . " " if (get_var('AGAMA_NETWORK_PARAMS'));
+
+        # additional parameters requiring parsing
+        type_string_slow parse_dud_parameter(get_var('INST_DUD')) if get_var('INST_DUD');
+    }
+    else {
+        type_string_slow "linux $mntpoint/linux vga=normal $ntlm_p install=$mirror ";
+    }
+    # Skipping this setup due to it triggers general code for openSUSE that breaks powerVM scenario
+    unless (is_agama) {
+        bootmenu_default_params;
+        bootmenu_network_source;
+        specific_bootmenu_params;
+        type_string_slow remote_install_bootmenu_params;
+    }
+
     registration_bootloader_params(utils::VERY_SLOW_TYPING_SPEED) unless get_var('NTLM_AUTH_INSTALL');
-    type_string_slow remote_install_bootmenu_params;
     type_string_slow " fips=1" if (get_var('FIPS_INSTALLATION'));
     type_string_slow " UPGRADE=1" if (get_var('UPGRADE'));
+
     send_key 'ret';
     assert_screen "pvm-grub-command-line-fresh-prompt", 180, no_wait => 1;    # kernel is downloaded while waiting
     enter_cmd_slow "initrd $mntpoint/initrd";
@@ -162,11 +188,20 @@ sub prepare_pvm_installation {
         return (bootloader_pvm::prepare_pvm_installation $boot_attempt);
     }
 
-    assert_screen("run-yast-ssh", 300);
+    if (is_agama) {
+        record_info("Installing", "Please check the expected product is being installed");
+        assert_screen('agama-installer-live-root', 400);
+    }
+    else {
+        assert_screen("run-yast-ssh", 300);
+    }
 
-    if (!is_upgrade && !get_var('KEEP_DISKS')) {
+    # For Agama unattended tests, disks will be formatted by default
+    if (!is_upgrade && !get_var('KEEP_DISKS') && !get_var('INST_AUTO')) {
         prepare_disks;
     }
+
+    return if is_agama;
     # Switch to installation console (ssh or vnc)
     select_console('installation');
     # We need to start installer only if it's pure ssh installation
@@ -228,9 +263,15 @@ sub boot_hmc_pvm {
     my $lpar_id = get_required_var('LPAR_ID');
     my $hmc = select_console 'powerhmc-ssh';
 
+    # print setup information
+    record_info('HMC hostname', get_var('HMC_HOSTNAME'));
+    record_info('HMC machine', "$hmc_machine_name");
+    record_info('LPAR id', "$lpar_id");
+    record_info('SUT ip', get_var('SUT_IP'));
+
     # Print the machine details before anything else, Firmware name might be useful when reporting bugs
-    record_info("Details", "See the next screen to get details on $hmc_machine_name");
-    enter_cmd "lslic -m $hmc_machine_name -t syspower | sed 's/,/\\n/g'";
+    record_info("HMC machine details", "See the next screen to get details on $hmc_machine_name");
+    enter_cmd "lslic -m $hmc_machine_name -t sys | sed 's/,/\\n/g'";
 
     # Fail the job when a lpar is not available
     die 'The managed system is not available' if check_screen('lpar_manage_status_unavailable', 3);
@@ -292,6 +333,11 @@ Boot from spvm backend via novalink and switch to installation console (ssh or v
 sub boot_spvm {
     my $lpar_id = get_required_var('NOVALINK_LPAR_ID');
     my $novalink = select_console 'novalink-ssh';
+
+    # print setup information
+    record_info('NOVALINK hostname', get_var('NOVALINK_HOSTNAME'));
+    record_info('LPAR id', "$lpar_id");
+    record_info('SUT ip', get_var('SUT_IP'));
 
     # detach possibly attached terminals - might be left over
     enter_cmd "rmvterm --id $lpar_id && echo 'DONE'";

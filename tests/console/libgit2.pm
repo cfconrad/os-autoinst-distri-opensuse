@@ -11,42 +11,40 @@
 # Maintainer: QE Core <qe-core@suse.com>
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use version_utils qw(is_sle is_leap);
 use utils 'zypper_call';
 use python_version_utils;
-use registration 'add_suseconnect_product';
+use registration qw(add_suseconnect_product is_phub_ready);
 
-my $python3_version;
 my $python_sub_version;
 
 sub run {
+    # Package 'pygit2' requires PackageHub is available
+    return if (!is_phub_ready() && is_sle('<16'));
+
     select_serial_terminal;
     return if (is_sle('<15-sp6') || is_leap('<15.6'));
 
-    # Install libgit2 and gcc
-    if (is_sle) {
+    if (is_sle('<16')) {
         add_suseconnect_product('sle-module-desktop-applications');
         add_suseconnect_product('sle-module-development-tools');
         add_suseconnect_product('sle-module-python3');
     }
-    my $pkg_ver = script_output("zypper se '/^libgit2-[0-9].*[0-9]\$/' | awk -F '|' '/libgit2-[0-9]/ {gsub(\" \", \"\"); print \$2}' | uniq");
-    zypper_call "in $pkg_ver libgit2-tools libgit2-devel gcc";
-    record_info("Installed libgit2 version", script_output("rpm -q --qf '%{VERSION}\n' $pkg_ver"));
 
-    # Install the latest python3 package
-    $python3_version = get_available_python_versions('1');
-    zypper_call "in $python3_version $python3_version-devel";
-    $python_sub_version = substr($python3_version, 7);
+    # Install the latest pygit2
+    my @pygit2_versions = split(/\n/, script_output(qq[zypper se '/^python3[0-9]{1,2}-pygit2\$/' | awk -F '|' '/python3[0-9]{1,2}/ {gsub(" ", ""); print \$2}' | uniq]));
+    die 'Cannot find any verisons of pygit2' unless (@pygit2_versions);
+    record_info("Available versions", "All available new pygit2 versions are: @pygit2_versions");
+    record_info("The latest version is:", "$pygit2_versions[$#pygit2_versions]");
 
-    # Install pygit2
-    assert_script_run "pip3.$python_sub_version install pygit2 --break-system-packages";
+    zypper_call "in $pygit2_versions[$#pygit2_versions]";
 
     # Run test script
     assert_script_run "wget --quiet " . data_url('libgit2/pygit2_test.py') . " -O pygit2_test.py";
+    my @pkg_version = split(/-/, $pygit2_versions[$#pygit2_versions]);
+    $python_sub_version = substr($pkg_version[0], 7);
     assert_script_run "python3.$python_sub_version pygit2_test.py";
 
     # Cleanup
@@ -54,9 +52,11 @@ sub run {
 }
 
 sub clean_up {
-    assert_script_run "pip3.$python_sub_version uninstall pygit2 -y --break-system-packages";
-    zypper_call "rm $python3_version";
+    zypper_call "rm python3$python_sub_version-pygit2";
+    my $out = script_output "python3.$python_sub_version pygit2_test.py", proceed_on_failure => 1;
+    zypper_call "rm python3$python_sub_version";
     assert_script_run "rm -rf libgit2";
+    die("uninstalling of python3$python_sub_version-pygit2 failed") if (index($out, "ModuleNotFoundError") == -1);
 }
 
 sub post_fail_hook {

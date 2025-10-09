@@ -11,12 +11,11 @@
 # Tags: poo#103644, tc#1769832
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call systemctl package_upgrade_check);
 use Utils::Architectures;
+use version_utils 'is_sle';
 
 sub run {
     select_serial_terminal;
@@ -29,6 +28,9 @@ sub run {
     # Based on bsc#1193350, swtpm 1.2 device is not supported
     # on arch64 platform any more, so skip the test on aarch64
     if (!is_aarch64) {
+        # https://bugzilla.suse.com/show_bug.cgi?id=1236457
+        assert_script_run('udevadm control --reload-rules && udevadm trigger') if (is_sle '<=15-SP7');
+
         # Make sure tpm device can be created
         assert_script_run('ls -l /dev/tpm*');
 
@@ -46,6 +48,8 @@ sub run {
 sub post_fail_hook {
     script_run('dmesg > /var/tmp/dmesg.txt');
     upload_logs('/var/tmp/dmesg.txt');
+    script_run('journalctl -x --no-pager | gzip -9 > /var/tmp/journal_log.txt.gz');
+    upload_logs('/var/tmp/journal_log.txt.gz');
 }
 
 1;

@@ -181,6 +181,29 @@ sub go_to_search_packages {
     }
 }
 
+=head2 go_to_security_settings
+
+    go_to_security_settings();
+
+From the installation overview screen, open the security settings.
+=cut
+
+sub go_to_security_settings {
+    my ($self) = @_;
+    assert_screen "installation-settings-overview-loaded";
+    if (check_var('VIDEOMODE', 'text')) {
+        send_key $cmd{change};
+        assert_screen 'inst-overview-options';
+        send_key 'alt-e';
+    }
+    else {
+        send_key_until_needlematch 'security-section-selected', 'tab', 31, 2;
+        send_key 'ret';
+    }
+
+    wait_still_screen stilltime => 9, timeout => 45;
+}
+
 =head2 move_down
 
     move_down();
@@ -270,6 +293,14 @@ sub select_all_patterns_by_menu {
     wait_screen_change { send_key 'ret'; };
     mouse_hide;
     save_screenshot;
+    if (check_screen('wsl_systemd_conflict', 5)) {
+        send_key 'alt-2';
+        send_key 'alt-o';
+    }
+    if (check_screen('fips_certified_conflict', 5)) {
+        send_key 'alt-1';
+        send_key 'alt-o';
+    }
     send_key 'alt-o';
     $self->accept3rdparty();
     assert_screen 'inst-overview';
@@ -324,7 +355,11 @@ sub deselect_pattern {
     @patterns{split(/,/, get_var('EXCLUDE_PATTERNS'))} = ();
     $self->go_to_patterns();
     for my $p (keys %patterns) {
-        send_key_until_needlematch "$p-selected", 'down';
+        # send Home key to avoid some pattern can't be found
+        # on the sequence of exclude patterns
+        send_key 'home';
+        my $count = $p =~ 'wsl|fips' ? '40' : '20';
+        send_key_until_needlematch "$p-selected", 'down', $count;
         send_key ' ';    #deselect pattern
         assert_screen 'on-pattern';
     }

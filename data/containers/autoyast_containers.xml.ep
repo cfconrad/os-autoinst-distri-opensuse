@@ -31,7 +31,7 @@
         % }
         <arch>{{ARCH}}</arch>
       </addon>
-      % if ($get_var->('VERSION') =~ /15-SP[1-3]/) {
+      % if ($get_var->('VERSION') =~ /12-SP[3-5]|15-SP[1-5]/) {
       <addon>
         <name>SLES-LTSS</name>
         <arch>{{ARCH}}</arch>
@@ -58,7 +58,8 @@
       <boot_root>true</boot_root>
       <generic_mbr>false</generic_mbr>
       % } elsif ($check_var->('ARCH', 'ppc64le')) {
-      <append>showopts plymouth.ignore-serial-consoles console=hvc0 console=tty mitigations=auto crashkernel=201M</append>
+      <!-- *disable_ddw=1 is a workaround for https://bugzilla.suse.com/show_bug.cgi?id=1239691#c34 -->
+      <append>showopts plymouth.ignore-serial-consoles console=hvc0 console=tty mitigations=auto crashkernel=201M disable_ddw=1</append>
       <boot_boot>false</boot_boot>
       % } else {
       <append>splash=verbose</append>
@@ -88,7 +89,7 @@
     <keep_install_network config:type="boolean">true</keep_install_network>
     % }
   </networking>
-  % if ($get_var->('VERSION') =~ /15-SP[456]$/) {
+  % if ($get_var->('VERSION') =~ /15-SP[4567]$/) {
   <firewall>
     <enable_firewall config:type="boolean">true</enable_firewall>
     <start_firewall config:type="boolean">true</start_firewall>
@@ -99,6 +100,7 @@
           <interface>eth0</interface>
         </interfaces>
         <services config:type="list">
+          <service>vnc-server</service>
           <service>ssh</service>
         </services>
         <ports config:type="list">

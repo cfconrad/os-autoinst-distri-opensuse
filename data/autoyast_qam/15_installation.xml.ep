@@ -30,6 +30,9 @@
         % if ($key eq 'ltss') {
         <reg_code><%= $get_var->('SCC_REGCODE_LTSS') %></reg_code>
         % }
+        % if ($key eq 'ltss_td') {
+        <reg_code><%= $get_var->('SCC_REGCODE_LTSS_TD') %></reg_code>
+        % }
       </addon>
       % }
     </addons>
@@ -210,6 +213,9 @@
   <bootloader>
     <global>
       <timeout config:type="integer">45</timeout>
+      % if ($check_var->('BACKEND', 'ipmi')) {
+      <terminal>console</terminal>
+      % }
     </global>
   </bootloader>
   <general>
@@ -228,6 +234,9 @@
   </general>
   <partitioning config:type="list">
   <drive>
+    % if (my $disk_wwn = $get_var->('INSTALL_DISK_WWN')) {
+    <device>/dev/disk/by-id/<%= $disk_wwn %></device>
+    % }
     <initialize config:type="boolean">true</initialize>
     <use>all</use>
     </drive>

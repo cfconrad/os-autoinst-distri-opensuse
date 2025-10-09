@@ -7,9 +7,7 @@
 # Summary: Workarounds after upgrade from cluster with clvmd into lvmlockd only systems
 # Maintainer: QE-SAP <qe-sap@suse.de>, Alvaro Carvajal <acarvajal@suse.com>
 
-use base 'opensusebasetest';
-use strict;
-use warnings;
+use base 'haclusterbasetest';
 use utils qw(zypper_call systemctl zypper_enable_install_dvd);
 use testapi;
 use lockapi;
@@ -46,7 +44,7 @@ sub run {
         # Stop all affected resources, and remove clvm resource from cluster
         for my $rsc (qw(fs_cluster_md vg_cluster_md cluster_md clvm clvmd)) {
             $rsc_not_exists{$rsc} = script_run "crm resource stop $rsc";
-            assert_script_run "crm configure delete $rsc" if ($rsc =~ /clvm/ && !$rsc_not_exists{$rsc});
+            assert_script_run "crm --force configure delete $rsc" if ($rsc =~ /clvm/ && !$rsc_not_exists{$rsc});
         }
 
         # With clvm resource removed from the cluster, configure lvmlockd
@@ -57,7 +55,7 @@ sub run {
         exec_csync;
 
         # Add lvmlockd resource to cluster
-        add_lock_mgr('lvmlockd');
+        add_lock_mgr('lvmlockd', force => 1);
         save_state;
 
         # Restart cluster_md

@@ -35,6 +35,7 @@ our @EXPORT = qw(
   trup_shell
   get_utt_packages
   enter_trup_shell
+  exit_trup_shell
   exit_trup_shell_and_reboot
   reboot_on_changes
   record_kernel_audit_messages
@@ -66,8 +67,12 @@ sub handle_first_grub {
         reconnect_mgmt_console(timeout => 500, grub_expected_twice => 1);
     }
     else {
-        assert_screen 'grub2', 100;
-        wait_screen_change { send_key 'ret' };
+        assert_screen 'grub2', 200;
+        assert_screen_change { send_key('ret') };
+        # Run ppc64le VMs on x86_64 setups is slow since no kvm support,
+        # Wait one more minute to make sure system leaves grub
+        wait_still_screen 60 if (check_var('MACHINE', 'ppc64le-emu') || check_var('MACHINE', 'svirt-vmware70'));
+        save_screenshot;
     }
 }
 
@@ -75,7 +80,7 @@ sub process_reboot {
     my (%args) = @_;
     $args{trigger} //= 0;
     $args{automated_rollback} //= 0;
-    $args{expected_grub} //= 1;
+    $args{expected_grub} //= (is_sle_micro && is_vmware) ? 0 : 1;
     $args{expected_passphrase} //= 0;
 
     if (is_public_cloud) {
@@ -112,8 +117,11 @@ sub process_reboot {
                 unlock_if_encrypted();
             }
             # Replace by wait_boot if possible
-            select_console('sol', await_console => 0) if (is_ipmi);
-            assert_screen 'grub2', 150;
+            if (is_ipmi) {
+                reset_consoles;
+                select_console('sol', await_console => 0);
+            }
+            assert_screen 'grub2', 300;
             wait_screen_change { send_key 'ret' };
         }
         assert_screen 'linux-login', 200;
@@ -152,8 +160,11 @@ sub check_reboot_changes {
 sub check_target_version {
     my $release = script_output "cat /etc/os-release";
     my $expected_version = get_var("TARGET_VERSION", get_required_var("VERSION"));
+    my $selector = is_micro(">=6.2") ?
+      qq|SUSE_SUPPORT_PRODUCT_VERSION="$expected_version"| :
+      "VERSION=\"?$expected_version\"?";
 
-    die "Target version not found! Expected: $expected_version" if ($release !~ "VERSION=\"?$expected_version\"?");
+    die "Target version not found! Expected: $expected_version" if ($release !~ $selector);
 }
 
 =head2 record_kernel_audit_messages
@@ -190,6 +201,10 @@ sub rpmver {
 
     if ($arch eq 'aarch64') {
         $rpm{obs} = {v => '5.1', r => '1.16'};
+    }
+
+    if ($arch eq 'riscv64') {
+        $rpm{obs} = {v => '5.2', r => '1.1'};
     }
 
     if ($arch eq 'ppc64le') {
@@ -242,7 +257,7 @@ sub trup_call {
         $ret = script_finish_io(timeout => $args{timeout});
     }
     else {
-        $ret = script_run($script, timeout => $args{timeout}, die_on_timeout => 0);
+        $ret = script_run($script, timeout => $args{timeout});
     }
 
     if ($args{proceed_on_failure}) {
@@ -320,9 +335,25 @@ sub enter_trup_shell {
 
     $args{global_options} //= '';
     $args{shell_options} //= '';
-    enter_cmd("transactional-update $args{global_options} shell $args{shell_options}; echo trup_shell-status-\$? > /dev/$serialdev");
-    wait_still_screen;
+    my $cmd = "transactional-update $args{global_options} shell $args{shell_options}; echo trup_shell-status-\$?";
+    $cmd .= " >/dev/$serialdev" unless is_serial_terminal;
+    enter_cmd($cmd);
+    wait_still_screen unless is_serial_terminal;
     assert_script_run("uname -a");
+}
+
+=head2 exit_trup_shell
+
+  exit_trup_shell()
+
+Quit transactional update shell without rebooting.
+
+=cut
+
+sub exit_trup_shell {
+    enter_cmd("exit");
+    wait_serial('trup_shell-status-0') || croak("transactional-update shell did not finish");
+    wait_still_screen unless is_serial_terminal;
 }
 
 =head2 exit_trup_shell_and_reboot
@@ -335,9 +366,7 @@ reboot to take effect. This subroutine should be used together with enter_trup_s
 =cut
 
 sub exit_trup_shell_and_reboot {
-    enter_cmd("exit");
-    wait_serial('trup_shell-status-0') || croak("transactional-update shell did not finish");
-    wait_still_screen;
+    exit_trup_shell;
     reboot_on_changes();
 }
 

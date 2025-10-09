@@ -1,6 +1,6 @@
 # SUSE's openjdk fips tests
 #
-# Copyright 2024 SUSE LLC
+# Copyright 2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: FIPS: openjdk
@@ -11,24 +11,29 @@
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base "opensusebasetest";
-use strict;
-use warnings;
 use testapi;
 use utils;
 use openjdktest;
-use version_utils qw(is_sle is_leap is_tumbleweed);
+use registration qw(add_suseconnect_product);
+use version_utils qw(is_sle is_sled is_rt is_sles4sap);
+
+sub get_java_versions {
+    # on newer version we need legacy module for openjdk 11, but is not available
+    # on SLERT/SLED, can't test openjdk 11. On 15-SP7 17 is also in legacy module
+    return '21' if (is_rt || is_sled) && is_sle('>=15-SP7');
+    return '11 17 21' if (is_sle '>=15-SP6');
+    return '17 21' if ((is_rt || is_sled) && is_sle('>=15-SP6'));
+    return '11 17';
+}
 
 sub run {
     my $self = @_;
 
-    my @java_versions = (17);
-    if (is_sle('<=15-SP5') || is_leap('<=15.5')) {
-        push @java_versions, 11;
-    } elsif (is_sle('>=15-SP6') || is_leap('<=15.6') || is_tumbleweed) {
-        push @java_versions, 21;
-    } else {
-        die "Unsupported SLE/openSUSE version for this test.";
-    }
+    my @java_versions = split(' ', get_java_versions);
+
+    # SLED and SLERT do not have legacy module; SLE4SAP needs Development tools for jsch
+    add_suseconnect_product 'sle-module-legacy' unless (is_sle('>=15-SP6') && (is_rt || is_sled));
+    add_suseconnect_product 'sle-module-development-tools' if is_sles4sap;
 
     foreach my $version (@java_versions) {
         configure_java_version $version;

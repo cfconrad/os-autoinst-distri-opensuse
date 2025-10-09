@@ -40,6 +40,7 @@ schedule:
   - boot/boot_to_desktop
   - ha/wait_barriers
   - console/system_prepare
+  - '{{setup_fips}}'
   - console/consoletest_setup
   - console/check_os_release
   - console/hostname
@@ -52,7 +53,6 @@ schedule:
   - '{{wmp_setup}}'
   - '{{cluster_setup}}'
   - sles4sap/hana_cluster
-  - '{{sap_suse_cluster_connector}}'
   - '{{wmp_check_process}}'
   - sles4sap/hana_test
   - ha/fencing
@@ -72,10 +72,6 @@ conditional_schedule:
         - ha/ha_cluster_init
       no:
         - ha/ha_cluster_join
-  sap_suse_cluster_connector:
-    HA_CLUSTER_INIT:
-      yes:
-        - sles4sap/sap_suse_cluster_connector
   boot_to_desktop_node01:
     HA_CLUSTER_INIT:
       yes:
@@ -96,3 +92,7 @@ conditional_schedule:
     WMP:
       1:
         - kernel/wmp_simple
+  setup_fips:
+    FIPS_INSTALLATION:
+      1:
+        - fips/fips_setup

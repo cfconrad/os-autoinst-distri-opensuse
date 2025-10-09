@@ -5,7 +5,7 @@
 
 # Summary: Class with helpers related to SSH Interactive mode
 #
-# Maintainer: qa-c@suse.de
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::ssh_interactive;
 use base Exporter;
@@ -32,7 +32,7 @@ sub establish_tunnel_console {
 }
 
 sub ssh_interactive_tunnel {
-    # Establish the ssh interarctive tunnel to the publiccloud instance.
+    # Establish the ssh interactive tunnel to the publiccloud instance.
     # Optional arguments: 'force => 1' - reestablish tunnel, also if already established.
     #                     'reconnect => 1' - reestablish the tunnel after disconnecting. Use this to re-establish the tunnels after e.g. an instance reboot
 
@@ -49,6 +49,12 @@ sub ssh_interactive_tunnel {
     # Prepare the environment for the SSH tunnel
     my $upload_port = get_required_var('QEMUPORT') + 1;
     my $upload_host = testapi::host_ip();
+
+    # Check that the openQA VM has the serial device present
+    assert_script_run("test -c /dev/$serialdev", fail_message => "File /dev/$serialdev either does not exist or is not character special file.");
+
+    # Test that SSH to 'sut' works
+    assert_script_run('ssh -o BatchMode=yes sut true', fail_message => 'SSH is kaput.');
 
     # Pipe the output of the device fifo to the local serial terminal
 # Note: We run this in a loop so that the ssh tunnel gets automatically re-established after device reboots and such. The sleep helps to avoid unnecessary CPU hogging in case of connection issues

@@ -7,26 +7,38 @@
 # Summary: Create filesystem and check content
 # Maintainer: QE-SAP <qe-sap@suse.de>, Loic Devulder <ldevulder@suse.com>
 
-use base 'opensusebasetest';
-use strict;
-use warnings;
-use utils 'zypper_call', 'write_sut_file';
+use base 'haclusterbasetest';
+use utils qw(zypper_call write_sut_file);
+use version_utils qw(is_sle);
 use testapi;
 use lockapi;
 use hacluster;
+use serial_terminal qw(select_serial_terminal);
 
 sub run {
     # Exit of this module if 'tag=drbd_passive' and if we are in a maintenance update not related to drbd
     my $tag = read_tag;
     return 1 if (($tag eq 'drbd_passive' and is_not_maintenance_update('drbd')) or $tag eq 'skip_fs_test');
 
+    # On older SPs (<=15-SP3), this module has issues when setting up a filesystem HA resource
+    # for drbd_passive using the serial terminal: it times out after the `crm resource move`
+    # operation after 90 seconds; however, when running on the `root-console` it works. To avoid
+    # adding an unnecessary sleep in all scenarios, the lines below move the module to run on the serial
+    # terminal only when setting up a FS for drbd_passive. In other cases we select the root-console by
+    # calling prepare_console_for_fencing
+    ($tag eq 'drbd_passive') ? prepare_console_for_fencing : select_serial_terminal;
+
     my $cluster_name = get_cluster_name;
     my $node = get_hostname;
     my $fs_lun = undef;
     my $fs_rsc = undef;
     my $resource = 'lun';
-    my $fs_type = 'ocfs2';
-    my $fs_opts = '-F -N 16';    # Force the filesystem creation and allows 16 nodes
+    my $fs_type = get_var('HA_CLUSTER_MD_FS_TYPE', is_sle('16+') ? 'gfs2' : 'ocfs2');
+    my %fs_opts = (
+        xfs => '-f',
+        ocfs2 => '-F -N 16',    # Force the filesystem creation and allows 16 nodes
+        gfs2 => '-t hacluster:mygfs2 -p lock_dlm -j 16 -O'    # https://documentation.suse.com/it-it/sle-ha/15-SP6/html/SLE-HA-all/cha-ha-gfs2.html
+    );
 
     # This Filesystem test can be called multiple time
     if ($tag eq 'cluster_md') {
@@ -36,7 +48,6 @@ sub run {
         $resource = 'drbd_passive';
         $fs_lun = '/dev/drbd_passive' if is_node(1);
         $fs_type = 'xfs';
-        $fs_opts = '-f';
     }
     elsif ($tag eq 'drbd_active') {
         $resource = 'drbd_active';
@@ -65,17 +76,22 @@ sub run {
     # DLM process needs to be started
     ensure_process_running 'dlm_controld';
 
-    # ocfs2 package should be installed by default
-    if ($fs_type eq 'ocfs2') {
-        die 'ocfs2-kmp-default kernel package is not installed' unless is_package_installed 'ocfs2-kmp-default';
-    }
-
+    # gfs2-utils is not installed by default, so we need to install it if needed
+    # Not known currently if behaviour will be the same in 16. The below line assumes
+    # gfs2 packages will come pre-installed in 16, so an explicit installation will not
+    # be needed. If this is not the case, we drop the `&& is_sle('<16')` in a later commit
+    zypper_call 'in gfs2-utils gfs2-kmp-default' if ($fs_type eq 'gfs2' && is_sle('<16'));
     # xfsprogs is not installed by default, so we need to install it if needed
     zypper_call 'in xfsprogs' if (!is_package_installed 'xfsprogs' and ($fs_type eq 'xfs'));
 
+    # ocfs2 package should be installed by default. Also check for gfs2-kmp-default if needed
+    if ($fs_type ne 'xfs') {
+        die "$fs_type-kmp-default kernel package is not installed" unless is_package_installed "$fs_type-kmp-default";
+    }
+
     # Format the Filesystem device
     if (is_node(1)) {
-        assert_script_run "mkfs -t $fs_type $fs_opts \"$fs_lun\"", $default_timeout;
+        assert_script_run "mkfs.$fs_type $fs_opts{$fs_type} \"$fs_lun\"", $default_timeout;
     }
     else {
         diag 'Wait until Filesystem device is formatted...';
@@ -90,16 +106,17 @@ sub run {
         my $edit_crm_config_script = "#!/bin/sh
 EDITOR='sed -ie \"\$ a primitive $fs_rsc ocf:heartbeat:Filesystem params device=\'$fs_lun\' directory=\'/srv/$fs_rsc\' fstype=\'$fs_type\'\"' crm configure edit
 ";
-        # Only OCFS2 can be cloned
-        if ($fs_type eq 'ocfs2') {
+        # Only OCFS2 and GFS can be cloned
+        if ($fs_type eq 'ocfs2' || $fs_type eq 'gfs2') {
             $edit_crm_config_script .= "
 EDITOR='sed -ie \"s/^\\(group base-group.*\\)/\\1 $fs_rsc/\"' crm configure edit
 ";
         }
         else {
             if ($resource eq 'drbd_passive') {
+                my $role = is_sle('>=15-SP4') ? "Promoted" : "Master";
                 $edit_crm_config_script .= "
-EDITOR='sed -ie \"\$ a colocation colocation_$fs_rsc inf: $fs_rsc ms_$resource:Master\"' crm configure edit
+EDITOR='sed -ie \"\$ a colocation colocation_$fs_rsc inf: $fs_rsc ms_$resource:$role\"' crm configure edit
 EDITOR='sed -ie \"\$ a order order_$fs_rsc Mandatory: ms_$resource:promote $fs_rsc:start\"' crm configure edit
 ";
             }
@@ -120,7 +137,7 @@ EDITOR='sed -ie \"\$ a order order_$fs_rsc Mandatory: vg_$resource $fs_rsc\"\' c
         rsc_cleanup $fs_rsc if defined($clean_flag) && $clean_flag == 'cleanup';
 
         # Wait to get Filesystem running on all nodes (if applicable)
-        sleep 5;
+        wait_until_resources_started;
     }
     else {
         diag 'Wait until Filesystem resource is added...';
@@ -177,11 +194,12 @@ EDITOR='sed -ie \"\$ a order order_$fs_rsc Mandatory: vg_$resource $fs_rsc\"\' c
                 # Restart of master/slave rsc after fs_rsc configuration
                 foreach my $action ('stop', 'start') {
                     assert_script_run "crm resource $action ms_$resource", $default_timeout;
-                    sleep 5;
+                    wait_for_idle_cluster;
                 }
 
                 # Migrate resource on the node
-                assert_script_run "crm resource migrate ms_$resource $node", $default_timeout;
+                assert_script_run "crm resource move ms_$resource $node", $default_timeout;
+                wait_for_idle_cluster;
                 ensure_resource_running("$fs_rsc", "is running on:[[:blank:]]*$node\[[:blank:]]*\$");
 
                 # Do a check of the cluster with a screenshot

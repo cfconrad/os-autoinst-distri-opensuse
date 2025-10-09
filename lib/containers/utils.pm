@@ -1,10 +1,10 @@
 # SUSE's openQA tests
 #
-# Copyright 2020-2024 SUSE LLC
+# Copyright 2020-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Basic functions for testing docker
-# Maintainer: Anna Minou <anna.minou@suse.de>, qa-c@suse.de
+# Maintainer: qac team <qa-c@suse.de>
 
 package containers::utils;
 
@@ -21,26 +21,12 @@ use version_utils;
 use Mojo::Util 'trim';
 
 our @EXPORT = qw(runtime_smoke_tests get_vars
-  get_docker_version get_podman_version
   check_min_runtime_version container_ip container_route registry_url reset_container_network_if_needed
 );
 
-sub get_docker_version {
-    my $raw = script_output("docker --version");
-    my ($v, undef) = split(',', $raw);
-    my @all = $v =~ /(\d+)/g;
-    $v = join('.', @all);
-    record_info "Docker version", "$v";
-    return $v;
-}
-
-sub get_podman_version {
-    return script_output "podman version | awk '/^Version:/ { print \$2 }'";
-}
-
 sub check_min_runtime_version {
     my ($desired_version) = @_;
-    my $podman_version = get_podman_version();
+    my $podman_version = script_output "podman version | awk '/^Version:/ { print \$2 }'";
     return version->parse($podman_version) >= version->parse($desired_version);
 }
 
@@ -76,18 +62,6 @@ sub test_update_cmd {
     my %args = @_;
     my $runtime = $args{runtime};
     my $container = $args{container};
-
-    # podman update was added to v4.3.0
-    if ($runtime eq 'podman') {
-        my $version = get_podman_version();
-        if (package_version_cmp($version, '4.3.0') <= 0) {
-            record_info("SKIP", "The update command is not supported on podman $version");
-            return;
-        }
-    } elsif ($runtime ne 'docker') {
-        record_info("SKIP", "The update command is not supported on $runtime");
-        return;
-    }
 
     my $old_value = script_output "$runtime container inspect -f '{{.HostConfig.CpuShares}}' $container";
     die "Default for cpu-shares != 0" if ($old_value != 0);
@@ -142,7 +116,7 @@ sub runtime_smoke_tests {
         assert_script_run("$runtime exec sleeper echo 'Hello'");
 
         # Test update command
-        test_update_cmd(runtime => $runtime, container => 'sleeper');
+        test_update_cmd(runtime => $runtime, container => 'sleeper') unless ($runtime eq "nerdctl");
 
         # Stop the container
         assert_script_run("$runtime stop sleeper");

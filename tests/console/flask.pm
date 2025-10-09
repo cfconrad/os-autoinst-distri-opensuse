@@ -10,8 +10,6 @@
 use base "consoletest";
 use testapi;
 use serial_terminal 'select_serial_terminal';
-use strict;
-use warnings;
 use utils 'zypper_call';
 use version_utils 'is_sle';
 use registration qw(add_suseconnect_product get_addon_fullname);
@@ -19,7 +17,7 @@ use registration qw(add_suseconnect_product get_addon_fullname);
 sub run {
     select_serial_terminal;
 
-    add_suseconnect_product(get_addon_fullname('pcm'), (is_sle('<15') ? '12' : undef)) if is_sle;
+    add_suseconnect_product(get_addon_fullname('pcm'), (is_sle('<15') ? '12' : undef)) if is_sle('<16');
 
     zypper_call "in python3-Flask";
 

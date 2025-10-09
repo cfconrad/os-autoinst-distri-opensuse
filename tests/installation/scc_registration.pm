@@ -8,12 +8,10 @@
 # - Otherwise, skip registration
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
-use strict;
-use warnings;
 use parent "y2_installbase";
 
 use testapi;
-use utils qw(assert_screen_with_soft_timeout handle_untrusted_gpg_key);
+use utils qw(assert_screen_with_soft_timeout handle_untrusted_gpg_key is_uefi_boot);
 use version_utils qw(is_sle is_sle_micro);
 use registration qw(skip_registration assert_registration_screen_present fill_in_registration_data verify_scc investigate_log_empty_license);
 

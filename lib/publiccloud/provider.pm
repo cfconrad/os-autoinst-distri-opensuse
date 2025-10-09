@@ -5,7 +5,7 @@
 
 # Summary: Base helper class for public cloud
 #
-# Maintainer: Clemens Famulla-Conrad <cfamullaconrad@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::provider;
 use testapi qw(is_serial_terminal :DEFAULT);
@@ -26,6 +26,8 @@ use version_utils qw(is_openstack is_sle_micro);
 use constant TERRAFORM_DIR => get_var('PUBLIC_CLOUD_TERRAFORM_DIR', '/root/terraform');
 use constant TERRAFORM_TIMEOUT => 30 * 60;
 
+our $instance_counter;    # Package variable tracking create_instance calls
+
 has prefix => 'openqa';
 has terraform_env_prepared => 0;
 has terraform_applied => 0;
@@ -34,6 +36,11 @@ has provider_client => undef;
 
 has ssh_key => get_ssh_private_key_path();
 
+my $runner = get_var('PUBLIC_CLOUD_TERRAFORM_RUNNER', 'tofu');
+unless ($runner eq 'terraform' || $runner eq 'tofu') {
+    die "Unsupported PUBLIC_CLOUD_TERRAFORM_RUNNER: '$runner'. Must be 'terraform' or 'tofu'";
+}
+
 =head1 METHODS
 
 =cut
@@ -41,6 +48,7 @@ has ssh_key => get_ssh_private_key_path();
 sub init {
     my ($self) = @_;
     $self->create_ssh_key();
+    $self->place_ssh_config();
 }
 
 =head2 generate_basename
@@ -162,6 +170,7 @@ sub parse_img_proof_output {
             $ret->{fail} = $4;
             $ret->{error} = $5;
         }
+        $ret->{output} .= $line . "\n";
     }
 
     for my $k (qw(ip logfile results tests pass skip fail error)) {
@@ -185,6 +194,23 @@ sub create_ssh_key {
         assert_script_run('SSH_DIR=`dirname ' . $self->ssh_key . '`; mkdir -p $SSH_DIR');
         assert_script_run('ssh-keygen -t ' . $alg . ' -q -N "" -C "" -m pem -f ' . $self->ssh_key);
     }
+}
+
+=head2 place_ssh_config
+
+Creates ~/.ssh/config file with all the common ssh client settings
+
+=cut
+
+sub place_ssh_config {
+    # configure ssh client
+    # ssh will be configured by a ~/.ssh/config file, the config file come from a template.
+    # By default the template is in publiccloud/ssh_config data directory.
+    # The user can overwrite the template with PUBLIC_CLOUD_SSH_CONFIG variable.
+    # From now on all ssh calls will use this configuration file.
+    my $ssh_config_url = data_url(get_var('PUBLIC_CLOUD_SSH_CONFIG', 'publiccloud/ssh_config'));
+    assert_script_run("curl $ssh_config_url -o ~/.ssh/config");
+    file_content_replace("~/.ssh/config", "%SSH_KEY%" => get_ssh_private_key_path());
 }
 
 =head2 run_img_proof
@@ -212,7 +238,12 @@ sub run_img_proof {
     my $cmd = 'img-proof --no-color test ' . $args{provider};
     $cmd .= ' --debug ';
     $cmd .= "--distro " . $args{distro} . " ";
-    $cmd .= '--region "' . $self->provider_client->region . '" ';
+    if (is_gce()) {
+        $cmd .= '--region "' . $self->provider_client->region . '-' . $self->provider_client->availability_zone . '" ';
+    }
+    else {
+        $cmd .= '--region "' . $self->provider_client->region . '" ';
+    }
     $cmd .= '--results-dir "' . $args{results_dir} . '" ';
     $cmd .= '--no-cleanup ';
     $cmd .= '--collect-vm-info ';
@@ -233,7 +264,10 @@ sub run_img_proof {
     }
 
     # Tell img-proof to generate SCAP report on hardened images
-    $cmd = "SCAP_REPORT=/var/tmp/report.html " . $cmd if is_hardened;
+    if (is_hardened) {
+        my $scap_report = get_var("SCAP_REPORT", "skip");
+        $cmd = "SCAP_REPORT=$scap_report " . $cmd;
+    }
 
     $cmd .= $args{tests};
     record_info("img-proof cmd", $cmd);
@@ -321,6 +355,10 @@ C<instance_type> defines the flavor of the instance. If not specified, it will l
 =cut
 
 sub create_instance {
+    my $max = get_var('PUBLIC_CLOUD_MAX_INSTANCES', 1);
+    if ($max > 0 && ++$instance_counter > $max) {
+        die "Maximum number of instances reached ($instance_counter)";
+    }
     return (shift->create_instances(@_))[0];
 }
 
@@ -340,20 +378,17 @@ C<proceed_on_failure>  Same as timeout.
 sub create_instances {
     my ($self, %args) = @_;
     $args{check_connectivity} //= 1;
-    $args{check_guestregister} //= 1;
     my @vms = $self->terraform_apply(%args);
     my $url = get_var('PUBLIC_CLOUD_PERF_DB_URI', 'http://larry.qe.suse.de:8086');
 
     foreach my $instance (@vms) {
         record_info("INSTANCE", $instance->{instance_id});
         if ($args{check_connectivity}) {
+            # An error in VM-up causes test to stop
             $instance->wait_for_ssh(timeout => $args{timeout},
-                proceed_on_failure => $args{proceed_on_failure});
-            # Install server's ssh publicckeys to prevent authenticity interactions
-            assert_script_run(sprintf('ssh-keyscan %s >> ~/.ssh/known_hosts', $instance->public_ip));
+                proceed_on_failure => $args{proceed_on_failure}, scan_ssh_host_key => 1);
         }
-        # check guestregister conditional, default yes:
-        $instance->wait_for_guestregister() if ($args{check_guestregister});
+        $self->show_instance_details();
 
         # Performance data: boottime
         next if is_openstack;
@@ -412,24 +447,20 @@ sub terraform_prepare_env {
 
     my $file = lc get_var('PUBLIC_CLOUD_PROVIDER');
     assert_script_run('mkdir -p ' . TERRAFORM_DIR);
-    if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        my $cloud_name = $self->conv_openqa_tf_name;
-        # Disable SSL verification only if explicitly asked!
-        assert_script_run('git config --global http.sslVerify false') if get_var('HA_SAP_GIT_NO_VERIFY');
-        assert_script_run('cd ' . TERRAFORM_DIR);
-        assert_script_run('git clone --depth 1 --branch ' . get_var('HA_SAP_GIT_TAG', 'master') . ' ' . get_required_var('HA_SAP_GIT_REPO') . ' .');
-        # Workaround for https://github.com/SUSE/ha-sap-terraform-deployments/issues/810
-        assert_script_run('sed -i "/key_name/s/terraform/&$RANDOM/" aws/infrastructure.tf');
-        # By default use the default provided Salt formula packages
-        assert_script_run('rm -f requirements.yml') unless get_var('HA_SAP_USE_REQUIREMENTS');
-        assert_script_run('cd');    # We need to ensure to be in the home directory
-        assert_script_run('curl ' . data_url("publiccloud/terraform/sap/$file.tfvars") . ' -o ' . TERRAFORM_DIR . "/$cloud_name/terraform.tfvars");
-    }
-    else {
-        $file = get_var('PUBLIC_CLOUD_TERRAFORM_FILE', "publiccloud/terraform/$file.tf");
-        assert_script_run('curl ' . data_url("$file") . ' -o ' . TERRAFORM_DIR . '/plan.tf');
-    }
+    $file = get_var('PUBLIC_CLOUD_TERRAFORM_FILE', "publiccloud/terraform/$file.tf");
+    assert_script_run('curl ' . data_url("$file") . ' -o ' . TERRAFORM_DIR . '/plan.tf');
+    assert_script_run('curl ' . data_url("publiccloud/cloud-init.yaml") . ' -o ' . TERRAFORM_DIR . "/cloud-init.yaml") if (get_var('PUBLIC_CLOUD_CLOUD_INIT'));
     $self->terraform_env_prepared(1);
+}
+
+sub terraform_cmd {
+    my ($prefix, %vars) = @_;
+    my $cmd = $prefix . ' ';
+    for my $var (keys %vars) {
+        $cmd .= sprintf(q(-var '%s=%s' ), $var, $vars{$var});
+    }
+    record_info('TFM cmd', $cmd);
+    return $cmd;
 }
 
 =head2 terraform_apply
@@ -456,106 +487,76 @@ sub terraform_apply {
 
     # 1) Terraform init
 
-    if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        record_info('INFO', "Creating instance $instance_type from $image_id ...");
-        assert_script_run('cd ' . TERRAFORM_DIR . "/$cloud_name");
-        my $sap_media = get_required_var('HANA');
-        my $sap_regcode = get_required_var('SCC_REGCODE_SLES4SAP');
-        my $storage_account_name = get_var('STORAGE_ACCOUNT_NAME');
-        my $storage_account_key = get_var('STORAGE_ACCOUNT_KEY');
-        # Enable specifying resource group name to allow running multiple tests simultaneously
-        my $resource_group = get_var('PUBLIC_CLOUD_RESOURCE_GROUP', 'qesaposd');
-        my $sle_version = get_var('FORCED_DEPLOY_REPO_VERSION') ? get_var('FORCED_DEPLOY_REPO_VERSION') : get_var('VERSION');
-        $sle_version =~ s/-/_/g;
-        my $ha_sap_repo = get_var('HA_SAP_REPO') ? get_var('HA_SAP_REPO') . '/SLE_' . $sle_version : '';
-        my $suffix = get_current_job_id();
-        my $fencing_mechanism = get_var('FENCING_MECHANISM', 'sbd');
-        file_content_replace('terraform.tfvars',
-            q(%MACHINE_TYPE%) => $instance_type,
-            q(%REGION%) => $self->provider_client->region,
-            q(%HANA_BUCKET%) => $sap_media,
-            q(%SLE_IMAGE%) => $image_id,
-            q(%SCC_REGCODE_SLES4SAP%) => $sap_regcode,
-            q(%STORAGE_ACCOUNT_NAME%) => $storage_account_name,
-            q(%STORAGE_ACCOUNT_KEY%) => $storage_account_key,
-            q(%HA_SAP_REPO%) => $ha_sap_repo,
-            q(%SLE_VERSION%) => $sle_version,
-            q(%FENCING_MECHANISM%) => $fencing_mechanism
-        );
-        upload_logs(TERRAFORM_DIR . "/$cloud_name/terraform.tfvars", failok => 1);
-        script_retry('terraform init -no-color', timeout => $terraform_timeout, delay => 3, retry => 6);
-        assert_script_run("terraform workspace new ${resource_group}${suffix} -no-color", $terraform_timeout);
-    } else {
-        assert_script_run('cd ' . TERRAFORM_DIR);
-        script_retry('terraform init -no-color', timeout => $terraform_timeout, delay => 3, retry => 6);
-    }
+    assert_script_run('cd ' . TERRAFORM_DIR);
+    script_retry($runner . ' init -no-color', timeout => $terraform_timeout, delay => 3, retry => 6);
 
     # 2) Terraform plan
 
-    my $cmd = 'terraform plan -no-color ';
+    my %vars = ();
     if (!get_var('PUBLIC_CLOUD_SLES4SAP')) {
         # Some auxiliary variables, requires for fine control and public cloud provider specifics
         for my $key (keys %{$args{vars}}) {
-            my $value = $args{vars}->{$key};
-            $cmd .= sprintf(q(-var '%s=%s' ), $key, escape_single_quote($value));
+            $vars{$key} = escape_single_quote($args{vars}->{$key});
         }
 
-        # image_uri and image_id are mutally exclusive
+        # image_uri and image_id are mutually exclusive
         if ($image_uri && $image_id) {
             die "PUBLIC_CLOUD_IMAGE_URI and PUBLIC_CLOUD_IMAGE_ID are mutually exclusive";
         } elsif ($image_uri) {
-            $cmd .= "-var 'image_uri=" . $image_uri . "' ";
+            $vars{image_uri} = $image_uri;
             record_info('INFO', "Creating instance $instance_type from $image_uri ...");
         } elsif ($image_id) {
-            $cmd .= "-var 'image_id=" . $image_id . "' ";
+            $vars{image_id} = $image_id;
             record_info('INFO', "Creating instance $instance_type from $image_id ...");
         }
         if (is_ec2) {
-            my $vpc_security_group_ids = script_output("aws ec2 describe-security-groups --region '" . $self->provider_client->region . "' --filters 'Name=group-name,Values=tf-sg' --query 'SecurityGroups[0].GroupId' --output text");
-            my $availability_zone = script_output("aws ec2 describe-instance-type-offerings --location-type availability-zone  --filters Name=instance-type,Values=" . $instance_type . "  --region '" . $self->provider_client->region . "' --query 'InstanceTypeOfferings[0].Location' --output 'text'");
-            my $subnet_id = script_output("aws ec2 describe-subnets --region '" . $self->provider_client->region . "' --filters 'Name=tag:Name,Values=tf-subnet' 'Name=availabilityZone,Values=" . $availability_zone . "' --query 'Subnets[0].SubnetId' --output text");
-            my $ipv6_address_count = get_var('PUBLIC_CLOUD_EC2_IPV6_ADDRESS_COUNT', 1);
-            $cmd .= "-var 'vpc_security_group_ids=$vpc_security_group_ids' ";
-            $cmd .= "-var 'availability_zone=$availability_zone' ";
-            $cmd .= "-var 'subnet_id=$subnet_id' ";
-            $cmd .= "-var 'ipv6_address_count=$ipv6_address_count' " if ($ipv6_address_count);
+            $vars{availability_zone} = script_output("aws ec2 describe-instance-type-offerings --location-type availability-zone  --filters Name=instance-type,Values=" . $instance_type . "  --region '" . $self->provider_client->region . "' --query 'InstanceTypeOfferings[0].Location' --output 'text'");
+            die('Instance type not supported by the selected Availability Zone') if ($vars{availability_zone} =~ /None/);
+            $vars{vpc_security_group_ids} = script_output("aws ec2 describe-security-groups --region '" . $self->provider_client->region . "' --filters 'Name=group-name,Values=tf-sg' --query 'SecurityGroups[0].GroupId' --output text");
+            $vars{subnet_id} = script_output("aws ec2 describe-subnets --region '" . $self->provider_client->region . "' --filters 'Name=tag:Name,Values=tf-subnet' 'Name=availabilityZone,Values=" . $vars{availability_zone} . "' --query 'Subnets[0].SubnetId' --output text");
+            $vars{ipv6_address_count} = get_var('PUBLIC_CLOUD_EC2_IPV6_ADDRESS_COUNT', 0);
         } elsif (is_azure) {
             my $subnet_id = script_output("az network vnet subnet list -g 'tf-" . $self->provider_client->region . "-rg' --vnet-name 'tf-network' --query '[0].id' --output 'tsv'");
-            $cmd .= "-var 'subnet_id=$subnet_id' " if ($subnet_id);
+            $vars{subnet_id} = $subnet_id if ($subnet_id);
             # Note: Only the default Azure terraform profiles contains the 'storage-account' variable
             my $storage_account = get_var('PUBLIC_CLOUD_STORAGE_ACCOUNT');
-            $cmd .= "-var 'storage-account=$storage_account' " if ($storage_account);
+            $vars{'storage-account'} = $storage_account if ($storage_account);
         } elsif (is_gce) {
             my $stack_type = get_var('PUBLIC_CLOUD_GCE_STACK_TYPE', 'IPV4_ONLY');
-            $cmd .= "-var 'stack_type=$stack_type' ";
+            $vars{stack_type} = $stack_type;
+            my $nic_type = get_var('PUBLIC_CLOUD_GCE_NIC_TYPE', '');
+            $vars{nic_type} = $nic_type if $nic_type;
+            $vars{availability_zone} = $self->provider_client->availability_zone;
         }
-        $cmd .= "-var 'instance_count=" . $args{count} . "' ";
-        $cmd .= "-var 'type=" . $instance_type . "' ";
-        $cmd .= "-var 'region=" . $self->provider_client->region . "' ";
-        $cmd .= "-var 'name=" . $self->resource_name . "' ";
-        $cmd .= "-var 'project=" . $args{project} . "' " if $args{project};
-        $cmd .= "-var 'enable_confidential_vm=true' " if ($args{confidential_compute} && is_gce());
-        $cmd .= "-var 'enable_confidential_vm=enabled' " if ($args{confidential_compute} && is_ec2());
-        $cmd .= "-var 'vm_create_timeout=" . $terraform_vm_create_timeout . "' " if $terraform_vm_create_timeout;
-        $cmd .= sprintf(q(-var 'tags=%s' ), escape_single_quote($self->terraform_param_tags));
+        $vars{instance_count} = $args{count};
+        $vars{type} = $instance_type;
+        $vars{region} = $self->provider_client->region;
+        $vars{name} = $self->resource_name;
+        $vars{project} = $args{project} if ($args{project});
+        $vars{cloud_init} = TERRAFORM_DIR . "/cloud-init.yaml" if (get_var('PUBLIC_CLOUD_CLOUD_INIT'));
+        $vars{vm_create_timeout} = $terraform_vm_create_timeout if $terraform_vm_create_timeout;
+        $vars{enable_confidential_vm} = 'true' if ($args{confidential_compute} && is_gce());
+        $vars{enable_confidential_vm} = 'enabled' if ($args{confidential_compute} && is_ec2());
+        my $root_size = get_var('PUBLIC_CLOUD_ROOT_DISK_SIZE');
+        $vars{'root-disk-size'} = $root_size if ($root_size);
+        $vars{tags} = escape_single_quote($self->terraform_param_tags);
         if ($args{use_extra_disk}) {
-            $cmd .= "-var 'create-extra-disk=true' ";
-            $cmd .= "-var 'extra-disk-size=" . $args{use_extra_disk}->{size} . "' " if $args{use_extra_disk}->{size};
-            $cmd .= "-var 'extra-disk-type=" . $args{use_extra_disk}->{type} . "' " if $args{use_extra_disk}->{type};
+            $vars{'create-extra-disk'} = 'true';
+            $vars{'extra-disk-size'} = $args{use_extra_disk}->{size} if $args{use_extra_disk}->{size};
+            $vars{'extra-disk-type'} = $args{use_extra_disk}->{type} if $args{use_extra_disk}->{type};
         }
     }
     if (get_var('FLAVOR') =~ 'UEFI') {
-        $cmd .= "-var 'uefi=true' ";
+        $vars{uefi} = 'true';
     }
     if (get_var('PUBLIC_CLOUD_NVIDIA')) {
-        $cmd .= "-var gpu=true ";
+        $vars{gpu} = 'true';
     }
     unless (is_openstack) {
-        $cmd .= "-var 'ssh_public_key=" . $self->ssh_key . ".pub' ";
+        $vars{ssh_public_key} = $self->ssh_key . '.pub';
     }
-    $cmd .= "-out myplan";
-    record_info('TFM cmd', $cmd);
 
+    my $cmd = terraform_cmd($runner . ' plan -no-color -out myplan', %vars);
     script_retry($cmd, timeout => $terraform_timeout, delay => 3, retry => 6);
 
     # 3) Terraform apply
@@ -565,8 +566,38 @@ sub terraform_apply {
     my $tf_log = get_var("TERRAFORM_LOG", "");
 
     # The $terraform_timeout must higher than $terraform_vm_create_timeout (See also var.vm_create_timeout in *.tf file)
-    my $ret = script_run("TF_LOG=$tf_log terraform apply -no-color -input=false myplan", $terraform_timeout);
+    my $ret = script_run("set -o pipefail; TF_LOG=$tf_log $runner apply -no-color -input=false myplan 2>&1 | tee tf_apply_output", timeout => $terraform_timeout);
+    my $tf_apply_output = script_output('cat tf_apply_output', proceed_on_failure => 1);
     $self->terraform_applied(1);    # Must happen here to prevent resource leakage
+
+    record_info("TFM apply output", $tf_apply_output, result => ($ret) ? 'fail' : 'ok');
+    record_info("TFM apply exit code", $ret);
+
+    # when all instances of certain type are booked in one AZ there is a chance that other AZ in same region still have them
+    # to improve test stability let's loop over all available AZ in case initial one throwing error that all instances are booked
+    if ($ret != 0 && is_gce() && ($tf_apply_output =~ /A .* VM instance with 1 .* accelerator\(s\) is currently unavailable in the .* zone|Machine type with name .* does not exist in zone .*|The zone 'projects.*' does not have enough resources available to fulfill the request/)) {
+        my $zones_output = script_output("gcloud compute zones list --filter='region=" . $vars{region} . "' --format=\"value(name.split('-').slice(-1))\" | tr '\n' ','");
+        my @alternative_zones = split /\s*,\s*/, $zones_output;
+        @alternative_zones = grep { $_ ne $vars{availability_zone} } @alternative_zones;
+        record_info('ZONE UNAVAILABLE', "Alternative zones " . join(', ', @alternative_zones));
+        for my $az (@alternative_zones) {
+            # try to apply in all regions before hardfailing
+            record_info('RETRYING', "Attempting with availability_zone: $az");
+            $vars{availability_zone} = $az;
+
+            $cmd = terraform_cmd($runner . ' plan -no-color -out myplan', %vars);
+            script_retry($cmd, timeout => $terraform_timeout, delay => 3, retry => 6);
+            $ret = script_run("set -o pipefail; TF_LOG=$tf_log $runner apply -no-color -input=false myplan 2>&1 | tee tf_apply_output", timeout => $terraform_timeout);
+            $tf_apply_output = script_output('cat tf_apply_output', proceed_on_failure => 1);
+            record_info("TFM apply output", $tf_apply_output);
+            record_info("TFM apply exit code", $ret, result => ($ret) ? 'fail' : 'ok');
+            if ($ret == 0) {
+                $self->provider_client->availability_zone($az);
+                last;
+            }
+        }
+    }
+
     unless (defined $ret) {
         if (is_serial_terminal()) {
             type_string(qq(\c\\));    # Send QUIT signal
@@ -575,7 +606,7 @@ sub terraform_apply {
             send_key('ctrl-\\');    # Send QUIT signal
         }
         assert_script_run('true');    # Make sure we have a prompt
-        script_run("killall -KILL terraform");    # Send SIGKILL in case SIGQUIT doesn't work
+        script_run("killall -KILL $runner");    # Send SIGKILL in case SIGQUIT doesn't work
         record_info('ERROR', 'Terraform apply failed with timeout', result => 'fail');
         assert_script_run('cd ' . TERRAFORM_DIR);
         $self->on_terraform_apply_timeout();
@@ -585,7 +616,7 @@ sub terraform_apply {
 
     # 4) Terraform output
 
-    my $output = decode_json(script_output("terraform output -json"));
+    my $output = decode_json(script_output($runner . ' output -json'));
     my ($vms, $ips, $resource_id);
     if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
         foreach my $vm_type ('hana', 'drbd', 'netweaver') {
@@ -633,34 +664,32 @@ sub terraform_destroy {
 
     select_host_console(force => 1);
 
-    my $cmd = 'terraform destroy -no-color -auto-approve ';
+    my %vars = ();
+
+    assert_script_run('cd ' . TERRAFORM_DIR);
+    $self->show_instance_details();
     record_info('INFO', 'Removing terraform plan...');
-    if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
-        assert_script_run('cd ' . TERRAFORM_DIR . '/' . $self->conv_openqa_tf_name);
+    # Add region variable also to `terraform destroy` (poo#63604) -- needed by AWS.
+    $vars{region} = $self->provider_client->region;
+    $vars{cloud_init} = TERRAFORM_DIR . '/cloud-init.yaml' if (get_var('PUBLIC_CLOUD_CLOUD_INIT'));
+    unless (is_openstack) {
+        $vars{ssh_public_key} = $self->ssh_key . '.pub';
     }
-    else {
-        assert_script_run('cd ' . TERRAFORM_DIR);
-        # Add region variable also to `terraform destroy` (poo#63604) -- needed by AWS.
-        $cmd .= "-var 'region=" . $self->provider_client->region . "' ";
-        unless (is_openstack) {
-            $cmd .= "-var 'ssh_public_key=" . $self->ssh_key . ".pub' ";
-        }
-        # Add image_id, offer and sku on Azure runs, if defined.
-        if (is_azure) {
-            my $image = $self->get_image_id();
-            my $image_uri = $self->get_image_uri();
-            my $offer = get_var('PUBLIC_CLOUD_AZURE_OFFER');
-            my $sku = get_var('PUBLIC_CLOUD_AZURE_SKU');
-            my $storage_account = get_var('PUBLIC_CLOUD_STORAGE_ACCOUNT');
-            $cmd .= "-var 'image_id=$image' " if ($image);
-            $cmd .= "-var 'image_uri=${image_uri}' " if ($image_uri);
-            $cmd .= "-var 'offer=$offer' " if ($offer);
-            $cmd .= "-var 'sku=$sku' " if ($sku);
-            $cmd .= "-var 'storage-account=$storage_account' " if ($storage_account);
-        }
+    # Add image_id, offer and sku on Azure runs, if defined.
+    if (is_azure) {
+        my $image = $self->get_image_id();
+        my $image_uri = $self->get_image_uri();
+        my $offer = get_var('PUBLIC_CLOUD_AZURE_OFFER');
+        my $sku = get_var('PUBLIC_CLOUD_AZURE_SKU');
+        my $storage_account = get_var('PUBLIC_CLOUD_STORAGE_ACCOUNT');
+        $vars{image_id} = $image if ($image);
+        $vars{image_uri} = $image_uri if ($image_uri);
+        $vars{offer} = $offer if ($offer);
+        $vars{sku} = $sku if ($sku);
+        $vars{'storage-account'} = $storage_account if ($storage_account);
     }
-    # Ignore lock to avoid "Error acquiring the state lock"
-    $cmd .= "-lock=false ";
+    # Regarding the use of '-lock=false': Ignore lock to avoid "Error acquiring the state lock"
+    my $cmd = terraform_cmd($runner . ' destroy -no-color -auto-approve -lock=false', %vars);
     # Retry 3 times with considerable delay. This has been introduced due to poo#95932 (RetryableError)
     # terraform keeps track of the allocated and destroyed resources, so its safe to run this multiple times.
     my $ret = script_retry($cmd, retry => 3, delay => 60, timeout => get_var('TERRAFORM_TIMEOUT', TERRAFORM_TIMEOUT), die => 0);
@@ -718,9 +747,12 @@ To get the complete output structure, the call is:
 
 sub get_terraform_output {
     my ($self, $jq_query) = @_;
-    my $res = script_output("terraform output -no-color -json | jq -r '$jq_query' 2>/dev/null", proceed_on_failure => 1);
+    script_run("cd " . TERRAFORM_DIR);
+    my $res = script_output("$runner output -no-color -json | jq -Mr '$jq_query' 2>/dev/null", proceed_on_failure => 1);
     # jq 'null' shall return empty
+    script_run('cd -');
     return $res unless ($res =~ /^null$/);
+    return;
 }
 
 sub escape_single_quote {
@@ -729,16 +761,17 @@ sub escape_single_quote {
     return $s;
 }
 
-=head2 cleanup
+=head2 teardown
 
-This method is called called after each test on failure or success.
+This method is calling the terraform_destroy() subroutine.
 
 =cut
 
-sub cleanup {
+sub teardown {
     my ($self) = @_;
     $self->terraform_destroy();
     assert_script_run "cd";
+    return 1;
 }
 
 =head2 stop_instance
@@ -772,6 +805,16 @@ This function implements a provider specifc get_state call for a given instance.
 sub get_state_from_instance
 {
     die('get_state_from_instance() isn\'t implemented');
+}
+
+sub query_metadata {
+    die('query_metadata() isn\'t implemented');
+}
+
+sub show_instance_details {
+    my ($self) = @_;
+    record_info('NAME', $self->get_terraform_output(".vm_name.value[0]"));
+    record_info('IP', $self->get_public_ip());
 }
 
 1;

@@ -11,10 +11,9 @@
 use base "consoletest";
 use testapi;
 use Utils::Architectures;
+use Utils::Backends 'is_pvm';
 use utils;
 use power_action_utils 'power_action';
-use strict;
-use warnings;
 
 sub run {
     my ($self) = @_;
@@ -23,6 +22,7 @@ sub run {
         $self->wait_boot(bootloader_time => 300);
     }
     else {
+        reconnect_mgmt_console if is_pvm;
         $self->wait_boot;
     }
     select_console 'root-console';

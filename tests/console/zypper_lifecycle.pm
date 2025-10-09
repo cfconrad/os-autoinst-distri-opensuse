@@ -26,13 +26,12 @@
 # Tags: fate#320597
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use utils;
 use version_utils qw(is_sle is_jeos is_upgrade);
 use Utils::Architectures;
 use serial_terminal qw(select_serial_terminal select_user_serial_terminal);
+use registration qw(add_suseconnect_product get_addon_fullname);
 
 our $date_re = qr/[0-9]{4}-[0-9]{2}-[0-9]{2}/;
 
@@ -42,7 +41,7 @@ sub lifecycle_output_check {
         record_info 'poo#129026';
         return;
     }
-    if (get_var('SCC_REGCODE_LTSS')) {
+    if (get_var('SCC_REGCODE_LTSS') || get_var('SCC_REGCODE_LTSS_ES') || get_var('SCC_REGCODE_LTSS_TD')) {
         if ($output =~ /No products.*before/) {
             record_info('Softfail', "poo#95593 https://jira.suse.com/browse/MSC-70");
             return;
@@ -58,6 +57,13 @@ sub run {
     diag('fate#320597: Introduce \'zypper lifecycle\' to provide information about life cycle of individual products and packages');
 
     select_serial_terminal;
+
+    if (get_var('SCC_REGCODE_LIVE')) {
+        # https://progress.opensuse.org/issues/133514
+        my $live_reg_code = get_var('SCC_REGCODE_LIVE');
+        add_suseconnect_product(get_addon_fullname('live'), undef, undef, "-r $live_reg_code");
+    }
+
     # First we'd make sure that we have a clean zypper cache env and all dirs have
     # 0755 and all files have 0644 pemmission.
     # For some reason the system will change the permission on /var/cache/zypp/{solv,raw}
@@ -66,6 +72,7 @@ sub run {
     zypper_call('in curl') if (script_run('rpm -qi curl') == 1);
     # force reinstall release notes, package must not come from expected SLE-Product repo e.g. GMC
     zypper_call('in -f release-notes*');
+    zypper_call('in zypper-lifecycle-plugin') if (is_sle('>=16'));
 
     select_user_serial_terminal;
     my $overview = script_output('zypper lifecycle', 600);
@@ -92,7 +99,14 @@ sub run {
 
     die "Got malformed repo list:\nOutput: '$output'" unless $base_repos;
 
-    $output = script_output 'echo $(for repo in ' . $base_repos . ' ; do zypper -n -x se -t package -i -s -r $repo ; done | grep name= | head -n 1 )', 300;
+    if (is_sle('>=16')) {
+        # For sle16, it has only one repository, see https://progress.opensuse.org/issues/185221
+        $output = script_output('echo $(zypper -n -x se -t package -i -s | grep name= | head -n 1 )', 600);
+    }
+    else {
+        $output = script_output 'echo $(for repo in ' . $base_repos . ' ; do zypper -n -x se -t package -i -s -r $repo ; done | grep name= | head -n 1 )', 600;
+    }
+
     # Parse package name
     if ($output =~ /name="(?<package>[^"]+)"/) {
         $package = $+{package};
@@ -159,6 +173,10 @@ EOF
     # verify that package eol defaults to product eol
     # dash is accepted in prod EOL, despite it does not match zypper lifecycle, see poo#126794
     $output = script_output "zypper lifecycle $package", 300;
+    if (is_sle('=12-sp5') && $output =~ /ImageMagick-config-6-SUSE.*n\/a\*/) {
+        record_info 'bsc#1231125', 'poo#167602';
+        return;
+    }
     unless ($output =~ /$package(-\S+)?\s+($product_eol|-$)/) {
         die "$package lifecycle entry incorrect:\nOutput: '$output', expected: '/$package-\\S+\\s+$product_eol'";
     }

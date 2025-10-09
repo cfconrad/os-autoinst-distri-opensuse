@@ -8,13 +8,11 @@
 # We just register the system, install random package, see the system and network configuration
 # This test module will fail at the end to prove that the test run will continue without rollback
 #
-# Maintainer: qa-c <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use base 'publiccloud::basetest';
 use registration;
-use warnings;
 use testapi;
-use strict;
 use utils;
 use publiccloud::utils;
 use version_utils qw(is_sle is_sle_micro);

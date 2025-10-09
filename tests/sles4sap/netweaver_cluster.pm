@@ -7,14 +7,12 @@
 # Summary: Configure NetWeaver cluster
 # Maintainer: QE-SAP <qe-sap@suse.de>, Loic Devulder <ldevulder@suse.de>
 
-use base "sles4sap";
+use base 'sles4sap';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use lockapi;
 use hacluster;
 use utils 'systemctl';
-use strict;
-use warnings;
 
 sub run {
     my ($self) = @_;
@@ -61,7 +59,7 @@ sub run {
     if ($type eq 'ERS') {
         assert_script_run "rm -rf /usr/sap/$sid/${type}${instance_id}/profile";
         assert_script_run "ln -s /sapmnt/$sid/profile /usr/sap/$sid/${type}${instance_id}/profile";
-        assert_script_run "chown -h ha1adm:sapsys /usr/sap/$sid/${type}${instance_id}/profile";
+        assert_script_run "chown -h $sapadm:sapsys /usr/sap/$sid/${type}${instance_id}/profile";
     }
 
     # Create the resource configuration

@@ -18,12 +18,21 @@ use ipmi_backend_utils qw(ipmitool);
 sub run {
     my ($self) = @_;
 
-    assert_screen 'selfinstall-screen', 180;
-    send_key 'down' unless check_screen 'selfinstall-select-drive';
-    assert_screen 'selfinstall-select-drive';
-    send_key 'ret';
-    assert_screen 'slem-selfinstall-overwrite-drive';
-    send_key 'ret';
+    if (get_var('NUMDISKS') > 1 && !get_var('INSTALL_DISK_WWN', '')) {
+        assert_screen 'selfinstall-screen', 180;
+        send_key 'down' unless check_screen 'selfinstall-select-drive';
+        assert_screen 'selfinstall-select-drive';
+        send_key 'ret';
+    }
+
+    unless (get_var('INSTALL_DISK_WWN')) {
+        assert_screen 'slem-selfinstall-overwrite-drive';
+        send_key 'ret';
+    }
+    else {
+        assert_screen('slem-selfinstall-write-drive', 350 / get_var('TIMEOUT_SCALE', 1));
+        check_screen('slem-selfinstall-verify-drive', 350 / get_var('TIMEOUT_SCALE', 1));
+    }
 
     my $no_cd;
     # workaround failed *kexec* execution on UEFI with SecureBoot
@@ -39,11 +48,17 @@ sub run {
         wait_serial('reboot: Restarting system', 240) or die "SelfInstall image has not rebooted as expected";
         # Avoid booting into selfinstall again
         eject_cd() unless $no_cd;
+        # Reboot again to avoid potential race conditions
+        send_key 'ctrl-alt-delete' unless $no_cd;
         microos_login;
+    } elsif (check_var('FIRST_BOOT_CONFIG', 'wizard')) {
+        wait_serial('The initial configuration', 180) or die "jeos-firstboot has not been reached";
+        eject_cd() unless ($no_cd || is_usb_boot);
+        return 1;
     } else {
         microos_login;
         # The installed system is definitely up now, so the CD can be ejected
-        eject_cd() unless ($no_cd || is_usb_boot);
+        eject_cd() unless ($no_cd || is_usb_boot || is_ipxe_with_disk_image);
     }
 
     # Remove usb boot entry and empty usb disks to ensure installed system boots from hard disk
@@ -52,6 +67,17 @@ sub run {
         empty_usb_disks;
         ipmitool("chassis bootdev disk options=persistent,efiboot") for (0 .. 2);
     }
+}
+
+sub post_run_hook {
+    # The system will continue with jeos-firstboot
+    # the console cannot be cleaned as we expect another dialog
+    # instead of console or login prompt
+    if (check_var('FIRST_BOOT_CONFIG', 'wizard')) {
+        return 1;
+    }
+
+    shift->SUPER::post_run_hook();
 }
 
 sub test_flags {

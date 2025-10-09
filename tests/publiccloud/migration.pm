@@ -15,14 +15,12 @@
 use Mojo::Base 'publiccloud::basetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
-use strict;
-use warnings;
 use utils;
 use publiccloud::utils;
 use File::Basename;
 
 our $target_version = get_required_var('TARGET_VERSION');
-our $not_clean_vm = get_var('PUBLIC_CLOUD_NO_CLEANUP_ON_FAILURE');
+our $not_clean_vm = get_var('PUBLIC_CLOUD_NO_CLEANUP');
 
 sub run {
     my ($self, $args) = @_;
@@ -42,7 +40,12 @@ sub run {
     select_serial_terminal();
     my $provider = $args->{my_provider};
     my $instance = $provider->create_instance();
-    registercloudguest($instance) if is_byos();
+    if (is_byos()) {
+        registercloudguest($instance);
+    }
+    else {
+        $instance->wait_for_guestregister();
+    }
     register_addons_in_pc($instance);
 
     my $versions_info = sprintf("Target version : %s\n DMS package: %s\n Activation package: %s\n PC package: %s",

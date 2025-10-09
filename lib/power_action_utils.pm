@@ -72,7 +72,7 @@ sub prepare_system_shutdown {
 
  reboot_x11();
 
-Reboot from Gnome Desktop and handle authentification scenarios during shutdown.
+Reboot from a desktop session and handle authentication scenarios during shutdown.
 
 Run C<prepare_system_shutdown> if shutdown needs authentification.
 
@@ -116,6 +116,14 @@ sub reboot_x11 {
 
             send_key 'ret';    # Confirm
         }
+    }
+    elsif (check_var('DESKTOP', 'kde')) {
+        # Open the reboot/logout greeter and select the reboot option
+        send_key 'ctrl-alt-delete';
+        assert_and_click 'sddm_reboot_option_btn';
+    }
+    else {
+        die 'Unhandled desktop';
     }
 }
 
@@ -193,7 +201,7 @@ sub poweroff_x11 {
             assert_and_click 'authentication-required_cancel_btn';
         }
         # opens logout dialog
-        x11_start_program('shutdown', target_match => [qw(authentication-required authorization_failed lxqt_shutdowndialog)], match_timeout => 60);
+        x11_start_program('Shutdown', target_match => [qw(authentication-required authorization_failed lxqt_shutdowndialog)], match_timeout => 60);
         # we have typing issue because of poor performance, to record this if happens.
         # Double check for bsc#1137230
         if (match_has_tag 'authorization_failed' || 'authentication-required') {
@@ -252,7 +260,7 @@ sub handle_livecd_reboot_failure {
 
 =head2 power_action
 
- power_action($action [,observe => $observe] [,keepconsole => $keepconsole] [,textmode => $textmode]);
+ power_action($action [,observe => $observe] [,keepconsole => $keepconsole] [,textmode => $textmode] [,force => boolean ]);
 
 Executes the selected power action (e.g. poweroff, reboot).
 
@@ -263,6 +271,7 @@ C<$keepconsole> prevents a console change, which we do by default to make sure t
 desktop which was in text console at the time of C<power_action> call, is switched to the expected
 console, that is 'root-console' for textmode, 'x11' otherwise. The actual execution happens in a shell
 for textmode or with GUI commands otherwise unless explicitly overridden by setting C<$textmode> to either 0 or 1.
+C<$force> sets force option to reboot command in textmode.
 
 =cut
 
@@ -272,6 +281,7 @@ sub power_action {
     $args{keepconsole} //= 0;
     $args{textmode} //= check_var('DESKTOP', 'textmode');
     $args{first_reboot} //= 0;
+    $args{force} //= 0;
     die "'action' was not provided" unless $action;
 
     prepare_system_shutdown;
@@ -282,7 +292,7 @@ sub power_action {
 
     unless ($args{observe}) {
         if ($args{textmode}) {
-            enter_cmd "$action";
+            $args{force} ? enter_cmd "$action -f" : enter_cmd "$action";
         }
         elsif ($action eq 'reboot') {
             reboot_x11;
@@ -347,7 +357,12 @@ sub power_action {
             systemctl 'poweroff';
         }
 
-        assert_shutdown_with_soft_timeout($soft_fail_data) if ($action eq 'poweroff');
+        if ($action eq 'poweroff') {
+            # Swicth back to mgmt console then video can capture some logs in case shutdown fails on PVM setup
+            reconnect_mgmt_console if is_pvm;
+            assert_shutdown_with_soft_timeout($soft_fail_data);
+        }
+
         # We should only reset consoles if the system really rebooted.
         # Otherwise the next select_console will check for a login prompt
         # instead of handling the still logged in system.

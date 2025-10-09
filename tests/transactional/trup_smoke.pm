@@ -8,12 +8,10 @@
 # Maintainer: qa-c team <qa-c@suse.de>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use transactional;
 use Utils::Architectures qw(is_s390x);
-use version_utils qw(is_sle_micro);
+use version_utils qw(is_bootloader_sdboot is_sle_micro is_bootloader_grub2_bls);
 use serial_terminal;
 
 sub action {
@@ -21,7 +19,13 @@ sub action {
     $reboot //= 1;
     record_info('TEST', $text);
     trup_call($target);
-    check_reboot_changes if $reboot;
+
+    if ($target =~ /bootloader/ && get_var('FLAVOR') =~ m/-encrypted/i) {
+        record_soft_failure("Workaround for bsc#1228126");
+        script_run("fdectl tpm-authorize");
+    }
+
+    check_reboot_changes($reboot);
 }
 
 sub run {
@@ -32,7 +36,12 @@ sub run {
     action('bootloader', 'Reinstall bootloader');
     action('grub.cfg', 'Regenerate grub.cfg');
     action('initrd', 'Regenerate initrd');
-    action('kdump', 'Regenerate kdump');
+    if (is_bootloader_sdboot || is_bootloader_grub2_bls) {
+        record_soft_failure("boo#1226676: kdump not yet implemented with sdbootutil");
+    }
+    else {
+        action('kdump', 'Regenerate kdump');
+    }
     action('cleanup', 'Run cleanup', 0);
 }
 

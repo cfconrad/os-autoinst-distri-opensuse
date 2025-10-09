@@ -49,7 +49,7 @@
         <partition>
           <create t="boolean">true</create>
           <create_subvolumes t="boolean">true</create_subvolumes>
-          <crypt_key>nots3cr3t</crypt_key>
+          <crypt_key>{{PASSWORD}}</crypt_key>
           <crypt_method t="symbol">luks2</crypt_method>
           <filesystem t="symbol">btrfs</filesystem>
           <format t="boolean">true</format>
@@ -115,9 +115,9 @@
         <product>openSUSE</product>
     </products>
     <patterns config:type="list">
-      <pattern>apparmor</pattern>
       <pattern>base</pattern>
       <pattern>gnome</pattern>
+      <pattern>selinux</pattern>
     </patterns>
   </software>
   <users config:type="list">

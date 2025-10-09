@@ -1,14 +1,12 @@
 # SUSE's openQA tests
 #
-# Copyright 2021 SUSE LLC
+# Copyright 2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: One master node whene rke1 runs and deploys the cluster and cluster is tested..
 # Maintainer: Pavel Dostal <pdostal@suse.com>
 
 use base 'x11test';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use lockapi;
@@ -27,8 +25,7 @@ sub run {
     assert_script_run("curl -L https://github.com/rancher/rke/releases/download/v1.1.15/rke_linux-amd64 -o ~/rke", 360);
     assert_script_run("chmod +rx ~/rke");
 
-    my ($running_version, $sp, $host_distri) = get_os_release;
-    install_docker_when_needed($host_distri);
+    install_docker_when_needed();
     zypper_call('in kubernetes-client');
 
     barrier_wait('cluster_prepared');

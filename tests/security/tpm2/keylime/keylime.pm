@@ -6,8 +6,6 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#106870, tc#1769823
 
-use strict;
-use warnings;
 use base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
@@ -16,6 +14,10 @@ use version_utils qw(is_sle);
 
 sub run {
     select_serial_terminal;
+    if (is_sle('=15-SP2') || is_sle('=16.0')) {
+        record_info('SKIPPING TEST', "Skipping unsupported test on 15-SP2 and 16.0");
+        return;
+    }
 
     # Install keylime packages
     zypper_call('in keylime-config keylime-firewalld keylime-agent keylime-tpm_cert_store keylime-registrar keylime-verifier', timeout => 240);
@@ -23,12 +25,13 @@ sub run {
     # Copy the keylime configuration files to /etc/keylime if not there
     #  configuration files path changes depending on the product
     my $agent_cfg_path;
-    if (is_sle "<=15-sp6") {
+    if (is_sle "<=15-SP6") {
         # Copy the keylime configuration file to /etc if not there
         $agent_cfg_path = "/etc/keylime.conf";
         script_run("cp -n /usr$agent_cfg_path $agent_cfg_path");
     } else {
-        script_run("mkdir -p /etc/keylime && cp -n /usr/etc/keylime/*.conf /etc/keylime");
+        script_run("mkdir -p /etc/keylime && test -d /usr/etc/keylime && cp -n /usr/etc/keylime/*.conf /etc/keylime");
+        assert_script_run qq{test -f /etc/keylime/agent.conf || cp `rpm -ql keylime-config` /etc/keylime/agent.conf};
         $agent_cfg_path = "/etc/keylime/agent.conf";
     }
 

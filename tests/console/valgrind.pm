@@ -20,8 +20,6 @@
 # Maintainer: QE Core <qe-core@suse.de>
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -127,14 +125,14 @@ sub run {
     assert_present($output, 'heap_tree=', "massif 'heap_tree' mismatch");
 
     assert_script_run 'cd';
-    if (is_sle && !main_common::is_updates_tests()) {
+    if (is_sle('<16') && !main_common::is_updates_tests()) {
         remove_suseconnect_product(get_addon_fullname('sdk'));    # unregister SDK
     }
 }
 
 sub prepare {
     # development module needed for dependencies, released products are tested with sdk module
-    if (is_sle && !main_common::is_updates_tests()) {
+    if (is_sle('<16') && !main_common::is_updates_tests()) {
         cleanup_registration;
         register_product;
         add_suseconnect_product(get_addon_fullname('desktop'));
@@ -146,7 +144,7 @@ sub prepare {
     # Compile the valgrind test program
     assert_script_run 'mkdir -p /var/tmp/valgrind';
     assert_script_run 'cd /var/tmp/valgrind';
-    assert_script_run 'curl -v -o valgrind-test.c ' . data_url('valgrind/valgrind-test.c');
+    script_retry('curl -v -o valgrind-test.c ' . data_url('valgrind/valgrind-test.c'), retry => 10, delay => 30, die => 1);
     # Ignore unititialized errors, as they are expected for this test case
     assert_script_run 'gcc -Wall -Werror -Wextra -Wno-maybe-uninitialized -std=c99 -g2 -O0 -o valgrind-test valgrind-test.c';
 }

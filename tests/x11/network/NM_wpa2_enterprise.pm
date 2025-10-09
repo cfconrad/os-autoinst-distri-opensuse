@@ -9,8 +9,6 @@
 # Tags: poo#20306
 
 use base 'x11test';
-use strict;
-use warnings;
 use testapi;
 use utils;
 use Utils::Logging 'save_and_upload_systemd_unit_log';
@@ -70,6 +68,7 @@ sub enter_NM_credentials {
     send_key 'ret';
 
     # enter anonymous identity
+    assert_and_click "anon_identity";
     type_string 'franz.nord@example.com';
 
     # select 'No CA certificate needed'
@@ -96,7 +95,11 @@ sub handle_polkit_root_auth {
     assert_screen 'Policykit-root';
     wait_still_screen 3;    # the input takes a couple of seconds to be ready
     type_password;
-    send_key 'ret';
+    wait_screen_change { send_key "ret" };
+    if (check_screen('Policykit-root', 20)) {
+        type_password;
+        send_key 'ret';
+    }
 }
 
 sub NM_disable_ip {

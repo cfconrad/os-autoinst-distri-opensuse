@@ -8,8 +8,6 @@
 # Maintainer: Michal Nowak <mnowak@suse.com>
 
 use base "opensusebasetest";
-use strict;
-use warnings;
 use testapi;
 use utils;
 use Utils::Systemd 'disable_and_stop_service';
@@ -46,7 +44,7 @@ sub run {
     else {
         # No need to be fixed to version (that is only for products receiving the yearly gcc update)
         # but it needs to activate development tool module
-        if (is_sle) {
+        if (is_sle("<16")) {
             add_suseconnect_product("sle-module-desktop-applications");
             add_suseconnect_product("sle-module-development-tools");
         }

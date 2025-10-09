@@ -10,27 +10,18 @@
 # Maintainer: Gao Zhiyuan <zgao@suse.com>
 
 use base "x11test";
-use strict;
-use warnings;
 use testapi;
 use utils;
-use version_utils 'is_tumbleweed';
-use x11utils 'handle_relogin';
+use version_utils qw(is_sle is_tumbleweed);
+use x11utils qw(default_gui_terminal handle_relogin);
 
 sub install_ibus {
-    x11_start_program("xterm");
-    become_root;
-    quit_packagekit;
-    wait_still_screen 1;
-    my $ibus_pinyin = is_tumbleweed() ? "ibus-libpinyin" : "ibus-pinyin";
-    zypper_call("in ibus $ibus_pinyin ibus-kkc ibus-hangul");
-    assert_screen 'ibus_installed';
-    send_key 'ctrl-d';
-    send_key 'ctrl-d';
+    my $ibus_pinyin = (is_sle('16+') || is_tumbleweed) ? "ibus-libpinyin" : "ibus-pinyin";
+    ensure_installed("ibus $ibus_pinyin ibus-kkc ibus-hangul");
 }
 
 sub override_i18n {
-    x11_start_program('gnome-terminal');
+    x11_start_program(default_gui_terminal());
     enter_cmd "echo 'export INPUT_METHOD=ibus' > .i18n ";
     enter_cmd "cat .i18n ";
     assert_screen 'ibus_i18n_overrided';
@@ -38,7 +29,8 @@ sub override_i18n {
 }
 
 sub ibus_daemon_started {
-    x11_start_program('gnome-terminal');
+    send_key 'esc';
+    x11_start_program(default_gui_terminal());
     wait_still_screen;
 
     enter_cmd_slow "env | grep ibus ";

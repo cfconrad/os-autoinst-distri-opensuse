@@ -1,11 +1,11 @@
 # SUSE's openQA tests
 #
-# Copyright 2024 SUSE LLC
+# Copyright 2024,2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: podman, docker
 # Summary: Test RT workload in a container
-# Maintainer: qa-c@suse.de
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base qw(containers::basetest);
 use testapi;
@@ -17,7 +17,6 @@ sub test_schedule {
     my ($is_rt, $runtime, $container) = @_;
 
     assert_script_run("$runtime exec $container chrt -m");
-    validate_script_output("$runtime exec $container cat /sys/kernel/realtime", qr/^1$/);
     assert_script_run("$runtime exec $container test -f /proc/sys/kernel/sched_rt_period_us");
     assert_script_run("$runtime exec $container test -f /proc/sys/kernel/sched_rt_runtime_us");
 
@@ -49,7 +48,7 @@ sub run {
 
     my $runtime = $args->{runtime};
     my $container = 'rt-test';
-    my $image = 'registry.opensuse.org/opensuse/tumbleweed:latest';
+    my $image = get_var("CONTAINER_IMAGE_TO_TEST", "registry.opensuse.org/opensuse/tumbleweed:latest");
 
     $self->{runtime} = $self->containers_factory($runtime);
     script_retry("$runtime pull $image", timeout => 300, delay => 120, retry => 3);

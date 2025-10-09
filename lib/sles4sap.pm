@@ -15,27 +15,30 @@ use warnings;
 use testapi;
 use serial_terminal qw(select_serial_terminal);
 use utils;
-use hacluster qw(get_hostname ha_export_logs pre_run_hook save_state wait_until_resources_started script_output_retry_check);
+use hacluster qw(get_hostname ha_export_logs save_state wait_until_resources_started);
 use isotovideo;
 use ipmi_backend_utils;
 use x11utils qw(ensure_unlocked_desktop);
 use power_action_utils qw(power_action);
 use Utils::Backends;
 use registration qw(add_suseconnect_product);
-use version_utils qw(is_sle);
+use version_utils qw(is_sle has_selinux);
 use utils qw(zypper_call);
 use Digest::MD5 qw(md5_hex);
 use Utils::Systemd qw(systemctl);
-use Utils::Logging qw(save_and_upload_log);
+use Utils::Logging qw(save_and_upload_log record_avc_selinux_alerts);
 use Carp qw(croak);
 
 our @EXPORT = qw(
   $instance_password
   $systemd_cgls_cmd
+  $resource_alias
+  $resource_role
   SAPINIT_RE
   SYSTEMD_RE
   SYSTEMCTL_UNITS_RE
   ASE_RESPONSE_FILE
+  download_hana_assets_from_server
   ensure_serialdev_permissions_for_sap
   fix_path
   set_ps_cmd
@@ -64,14 +67,11 @@ our @EXPORT = qw(
   prepare_sapinst_profile
   netweaver_installation_data
   prepare_swpm
-  sapcontrol_process_check
   get_sidadm
-  sap_show_status_info
-  sapcontrol
   get_instance_profile_path
-  get_remote_instance_number
   load_ase_env
   upload_ase_logs
+  modify_selinux_setenforce
 );
 
 =head1 SYNOPSIS
@@ -92,6 +92,8 @@ our $product;
 our $ps_cmd;
 our $instance_password = get_var('INSTANCE_PASSWORD', 'Qwerty_123');
 our $systemd_cgls_cmd = 'systemd-cgls --no-pager -u SAP.slice';
+our $resource_alias = is_sle(">=15-SP4") ? 'cln' : 'msl';
+our $resource_role = is_sle(">=15-SP4") ? "Promoted" : "Master";
 
 =head2 SAPINIT_RE & SYSTEMD_RE
 
@@ -130,6 +132,71 @@ undef by default. Test modules testing for SAP ASE should set this property befo
 =cut
 
 has ASE_RESPONSE_FILE => undef;
+
+=head2 b1_workaround_os_version
+
+    $self->b1_workaround_os_version()
+
+This is a simple workaround to  allow SAP Business One to be installed on
+versions that the_
+installer reports as "unsupported OS" by changing VERSION_ID on /etc/os-release.
+
+=cut
+
+sub b1_workaround_os_version {
+    my $origin_os = script_output(q@grep VERSION_ID /etc/os-release | cut -d '"' -f2@);
+    if (get_var('B1_WORKAROUND')) {
+        record_info("Enabling Business One workaround as SLES" . get_var('B1_WORKAROUND'));
+        file_content_replace("/etc/os-release", $origin_os => get_var('B1_WORKAROUND'));
+    }
+}
+
+=head2 download_hana_assets_from_server
+
+    $self->download_hana_assets_from_server()
+
+Download and extract HANA installation media to /sapinst directory of the SUT.
+The media location must be provided as ASSET_0 in the job settings and be
+available as an uncompressed tar in the factory/other directory of the openQA
+server
+
+=cut
+
+sub download_hana_assets_from_server {
+    my ($self, %params) = @_;
+    my $target = $params{target} // '/sapinst';
+    my $nettout = $params{nettout} // 2700;
+    # Each HANA asset is about 16GB. A ten minute timeout assumes a generous
+    # 27.3MB/s download speed. Adjust according to expected server conditions.
+    my $filename = get_required_var('ASSET_0');
+    my $hana_location = data_url('ASSET_0');
+    script_run "mkdir $target";
+    assert_script_run "cd $target";
+    # checks if asset is already downloaded
+    my $asset_lock = "/tmp/asset_0";
+    my $asset_lock_found = script_run "test -e $asset_lock";    # 0 if asset is already downloaded
+    if ($asset_lock_found) {
+        # Install wget package if its command not found
+        if (script_run "which wget") {
+            zypper_call "in wget";
+        }
+        assert_script_run "wget -O - $hana_location | tar -xf -", timeout => $nettout;
+        assert_script_run "touch $asset_lock";
+        # Skip checksum check if DISABLE_CHECKSUM is set, or if checksum file is not
+        # part of the archive
+        my $sap_chksum_file = 'MD5FILE.DAT';
+        my $chksum_file = 'checksum.md5sum';
+        my $no_checksum_file = script_run "[[ -f $target/$chksum_file || -f $target/$sap_chksum_file ]]";
+        return 1 if (get_var('DISABLE_CHECKSUM') || $no_checksum_file);
+
+        # Switch to $target to verify copied contents are OK
+        assert_script_run "pushd $target";
+        # If SAP provided MD5 sum file is present convert it to the md5sum format
+        assert_script_run "[[ -f $sap_chksum_file ]] && awk '{print \$2\" \"\$1}' $target/$sap_chksum_file > $target/$chksum_file";
+        assert_script_run "md5sum -c --quiet $chksum_file", $nettout;
+        assert_script_run "popd";
+    }
+}
 
 =head2 ensure_serialdev_permissions_for_sap
 
@@ -318,6 +385,7 @@ sub prepare_profile {
 
     if ($has_saptune) {
         assert_script_run 'saptune service takeover';
+        assert_script_run 'saptune revert all' if is_sle('16+');
         assert_script_run "saptune solution apply $profile";
     }
     elsif (is_sle('15+')) {
@@ -372,7 +440,8 @@ sub prepare_profile {
 
     if ($has_saptune) {
         assert_script_run 'saptune service takeover';
-        my $ret = script_run("saptune solution verify $profile", die_on_timeout => 0);
+        enter_cmd "saptune solution verify $profile; echo DONE-$\? > /dev/$serialdev";
+        my $ret = wait_serial qr/DONE-\d/, timeout => 30;
         if (!defined $ret) {
             # Command timed out. 'saptune service takeover' could have caused the SUT to
             # move out of root-console, so select root-console and try again
@@ -397,7 +466,7 @@ sub prepare_profile {
  _do_mount( $proto, $path, $target);
 
 Performs a call to the mount command (used by both C<mount_media> and C<copy_media>) with
-appropiate options depending on the protocol. Function internal to the class.
+appropriate options depending on the protocol. Function internal to the class.
 
 =cut
 
@@ -443,7 +512,7 @@ sub copy_media {
     my $media_path = "$mnt_path/" . get_required_var('ARCH');
 
     # First create $target and copy media there
-    assert_script_run "mkdir $target";
+    assert_script_run "mkdir -p $target";    # create only if dir does not exists
     _do_mount($proto, $path, $mnt_path);
     $media_path = $mnt_path if script_run "[[ -d $media_path ]]";    # Check if specific ARCH subdir exists
     my $rsync = 'rsync -azr --info=progress2';
@@ -515,8 +584,19 @@ and threads that it can create.
 =cut
 
 sub test_pids_max {
+    my ($self) = @_;
     # UserTasksMax should be set to "infinity" in /etc/systemd/logind.conf.d/sap.conf
     my $uid = script_output "id -u $sapadmin";
+
+    # In SLES 16 this test fails with SELinux in enforcing mode. Query current
+    # mode, change to permissive and then rollback after test finishes
+    my $selinux_mode = 'Enforcing';
+    if (has_selinux) {
+        $selinux_mode = script_output q@echo "|$(getenforce)|"@;
+        $selinux_mode =~ /\|(\w+)\|/;
+        $selinux_mode = $1 // 'Enforcing';
+        $self->modify_selinux_setenforce('selinux_mode' => 'Permissive');
+    }
 
     # push the command to SUT by write_sut_file API instead of typing string
     # it is not stable to type long string especially when high load on worker
@@ -558,6 +638,7 @@ systemd-run --slice user -qt su - $sapadmin -c 'ulimit -u' -s /bin/bash | tail -
     my $rc2 = script_run "bash -eox pipefail /root/test_script.sh";
 
     record_soft_failure "bsc#1031355" if ($rc1 or $rc2);
+    $self->modify_selinux_setenforce('selinux_mode' => $selinux_mode) if has_selinux;
 }
 
 =head2 test_forkbomb
@@ -575,7 +656,8 @@ user cannot create as many processes as root.
 sub test_forkbomb {
     my $script = 'forkbomb.pl';
     assert_script_run "curl -f -v " . autoinst_url . "/data/sles4sap/$script -o /tmp/$script; chmod +x /tmp/$script";
-    # The systemd-run command generates syslog output that may end up in the console, so save the output to a file
+    # The systemd-run command generates syslog output that may end up in the console,
+    # so save the output to a file
     assert_script_run "systemd-run --slice user -qt su - $sapadmin -c /tmp/$script | tr -d '\\r' > /tmp/user-procs", 600;
     my $user_procs = script_output "cat /tmp/user-procs";
     my $root_procs = script_output "/tmp/$script", 600;
@@ -618,7 +700,7 @@ sub test_instance_properties {
  $self->test_stop();
 
 Tests with B<sapcontrol> and functions B<Stop> and B<StopService> that the instance
-and services are succesfully stopped. Croaks on failure.
+and services are successfully stopped. Croaks on failure.
 
 =cut
 
@@ -743,11 +825,13 @@ sub check_instance_state {
             die "sapcontrol: GetProcessList: command failed" unless ($output =~ /GetProcessList[\r\n]+OK/);
 
             my $failing_services = 0;
+            my $checked_services = 0;
             for my $line (split(/\n/, $output)) {
                 next if ($line =~ /GetProcessList|OK|^name/);
+                $checked_services++;
                 $failing_services++ if ($line !~ /$uc_state/);
             }
-            last unless $failing_services;
+            last if ($checked_services && !$failing_services);
         }
 
         $time_to_wait -= 10;
@@ -951,7 +1035,8 @@ sub do_hana_takeover {
     }
     sleep bmwqemu::scale_timeout(10);
     if ($args{cluster}) {
-        assert_script_run "crm resource cleanup rsc_SAPHana_${sid}_HDB$instance_id", $args{timeout};
+        my $hana_resource = "rsc_SAPHanaCtl_${sid}_HDB$instance_id";
+        assert_script_run "crm resource cleanup $hana_resource", $args{timeout};
         assert_script_run 'crm_resource --cleanup', $args{timeout};
     }
 }
@@ -993,7 +1078,9 @@ Package and upload HANA installation logs from SUT.
 =cut
 
 sub upload_hana_install_log {
-    script_run 'tar -Jcf /tmp/hana_install.log.tar.xz /var/adm/autoinstall/logs /var/tmp/hdb*';
+    my @hana_logs = qw(/var/adm/autoinstall/logs /var/tmp/hdb*);
+    push(@hana_logs, '/var/log/SAPBusinessOne/B1Installer*') if get_var('BONE');
+    script_run 'tar -Jcf /tmp/hana_install.log.tar.xz ' . join(' ', @hana_logs);
     upload_logs '/tmp/hana_install.log.tar.xz';
 }
 
@@ -1048,7 +1135,8 @@ sub startup_type {
     target_path=>$target_path);
 
 Unpacks and prepares swpm package from specified source dir into target directory using SAPCAR tool.
-After extraction it checks for 'sapinst' executable being present in target path. Croaks if executable is missing.
+After extraction it checks for 'sapinst' executable being present in target path.
+Croaks if executable is missing.
 
 B<sapcar_bin_path> Filename with full path to SAPCAR binary
 
@@ -1074,7 +1162,7 @@ sub prepare_swpm {
     my $sapinst_executable = "$target_path/sapinst";
 
     assert_script_run("mkdir -p $target_path");
-    assert_script_run("cp $sar_archives_dir/* $target_path/");
+    assert_script_run("rsync -azr --info=progress2 --stats $sar_archives_dir/* $target_path/", 600);
     assert_script_run("cd $target_path; $sapcar_bin_path -xvf ./$swpm_sar_filename");
     my $swpm_dir_content = script_output("ls -alitr $target_path");
     record_info("SWPM dir", "$swpm_dir_content");
@@ -1094,7 +1182,7 @@ Copies sapinst profile template from NFS to target dir and fills in required var
 
 B<profile_target_file> Full filename and path for sapinst install profile to be created
 
-B<profile_template_file> Template file location from which will the profile be sceated
+B<profile_template_file> Template file location from which will the profile be created
 
 B<sar_location_directory> Location of SAR files -  this is filled into template
 
@@ -1221,7 +1309,7 @@ sub get_nw_instance_name {
  $self->is_instance_type_supported($instance_type);
 
 Checks if instance type is supported.
-Returns $instance_type with sucess, croaks with missing argument or unsupported value detected.
+Returns $instance_type with success, croaks with missing argument or unsupported value detected.
 
 B<instance_type> Instance type (ASCS, ERS, PAS, AAS)
 
@@ -1308,214 +1396,6 @@ sub get_sidadm {
     return $sidadm;
 }
 
-=head2 sap_show_status_info
-
- $self->sap_show_status_info(cluster=>1, netweaver=>1);
-
-Prints output for standard set of commands to show info about system in various stages of the test for troubleshooting.
-It is possible to activate or deactivate various output sections by named args:
-
-B<cluster> - Shows cluster related outputs
-
-B<netweaver> - Shows netweaver related outputs
-
-=cut
-
-sub sap_show_status_info {
-    my ($self, %args) = @_;
-    my $cluster = $args{cluster};
-    my $netweaver = $args{netweaver};
-    my $instance_id = defined($netweaver) ? $args{instance_id} : get_required_var('INSTANCE_ID');
-    my @output;
-
-    # Netweaver info
-    if (defined($netweaver)) {
-        push(@output, "\n//// NETWEAVER ///");
-        push(@output, "\n### SAPCONTROL PROCESS LIST ###");
-        push(@output, $self->sapcontrol(instance_id => $instance_id, webmethod => 'GetProcessList', return_output => 1));
-        push(@output, "\n### SAPCONTROL SYSTEM INSTANCE LIST ###");
-        push(@output, $self->sapcontrol(instance_id => $instance_id, webmethod => 'GetSystemInstanceList', return_output => 1));
-    }
-
-    # Cluster info
-    if (defined($cluster)) {
-        push(@output, "\n//// CLUSTER ///");
-        push(@output, "\n### CLUSTER STATUS ###");
-        push(@output, script_output('PAGER=/usr/bin/cat crm status'));
-    }
-    record_info('Status', join("\n", @output));
-}
-
-=head2 sapcontrol
-
- $self->sapcontrol(instance_id=>$instance_id,
-    webmethod=>$webmethod,
-    [additional_args=>$additional_args,
-    remote_execution=>$remote_execution]);
-
-Executes sapcontrol webmethod for instance specified in arguments and returns exit code received from command.
-Allows remote execution of webmethods between instances, however not all webmethods are possible to execute in that manner.
-
-Sapcontrol return codes:
-
-    RC 0 = webmethod call was successfull
-    RC 1 = webmethod call failed
-    RC 2 = last webmethod call in progress (processes are starting/stopping)
-    RC 3 = all processes GREEN
-    RC 4 = all processes GREY (stopped)
-
-B<instance_id> 2 digit instance number
-
-B<webmethod> webmethod name to be executed (Ex: Stop, GetProcessList, ...)
-
-B<additional_args> additional arguments to be appended at the end of command
-
-B<return_output> returns output instead of RC
-
-B<remote_hostname> hostname of the target instance for remote execution. Local execution does not need this.
-
-B<sidadm_password> Password for sidadm user. Only required for remote execution.
-
-=cut
-
-sub sapcontrol {
-    my ($self, %args) = @_;
-    my $webmethod = $args{webmethod};
-    my $instance_id = $args{instance_id};
-    my $remote_hostname = $args{remote_hostname};
-    my $return_output = $args{return_output};
-    my $additional_args = $args{additional_args} // '';
-    my $sidadm = $self->get_sidadm();
-    my $current_user = script_output_retry_check(cmd => 'whoami', sleep => 2, regex_string => "^root\$|^$sidadm\$");
-    my $sidadm_password = $args{sidadm_password};
-
-    croak "Mandatory argument 'webmethod' not specified" unless $webmethod;
-    croak "Mandatory argument 'instance_id' not specified" unless $instance_id;
-    croak "Function may be executed under root or sidadm.\nCurrent user: $current_user"
-      unless grep(/$current_user/, ('root', $sidadm));
-
-    my $cmd = join(' ', 'sapcontrol', '-nr', $instance_id);
-    # variables below allow sapcontrol to run under root
-    my $sapcontrol_path_root = '/usr/sap/hostctrl/exe';
-    my $root_env = "LD_LIBRARY_PATH=$sapcontrol_path_root:\$LD_LIBRARY_PATH";
-    $cmd = $current_user eq 'root' ? "$root_env $sapcontrol_path_root/$cmd" : $cmd;
-
-    if ($remote_hostname) {
-        croak "Mandatory argument 'sidadm_password' not specified" unless $sidadm_password;
-        $cmd = join(' ', $cmd, '-host', $remote_hostname, '-user', $sidadm, $sidadm_password);
-    }
-    $cmd = join(' ', $cmd,, '-function', $webmethod);
-    $cmd = join(' ', $cmd, $additional_args) if $additional_args;
-
-    my $result = $return_output ? script_output($cmd, proceed_on_failure => 1) : script_run($cmd);
-
-    return ($result);
-}
-
-=head2 sapcontrol_process_check
-
- $self->sapcontrol_process_check(expected_state=>expected_state,
-    [instance_id=>$instance_id,
-    loop_sleep=>$loop_sleep,
-    timeout=>$timeout,
-    wait_for_state=>$wait_for_state]);
-
-Runs "sapcontrol -nr <INST_NO> -function GetProcessList" via SIDadm and compares RC against expected state.
-Croaks if state is not correct.
-
-Expected return codes are:
-
-    RC 0 = webmethod call was successfull
-    RC 1 = webmethod call failed (This includes NIECONN_REFUSED status)
-    RC 2 = last webmethod call in progress (processes are starting/stopping)
-    RC 3 = all processes GREEN
-    RC 4 = all processes GREY (stopped)
-
-Method arguments:
-
-B<expected_state> State that is expected (failed, started, stopped)
-
-B<instance_id> Instance number - two digit number
-
-B<loop_sleep> sleep time between checks - only used if 'wait_for_state' is true
-
-B<timeout> timeout for waiting for target state, after which function croaks
-
-B<wait_for_state> If set to true, function will wait for expected state until success or timeout
-
-=cut
-
-sub sapcontrol_process_check {
-    my ($self, %args) = @_;
-    my $instance_id = $args{instance_id} // get_required_var('INSTANCE_ID');
-    my $expected_state = $args{expected_state};
-    my $loop_sleep = $args{loop_sleep} // 5;
-    my $timeout = $args{timeout} // bmwqemu::scale_timeout(120);
-    my $wait_for_state = $args{wait_for_state} // 0;
-    my %state_to_rc = (
-        failed => '1',    # After stopping service (ServiceStop method) sapcontrol returns RC1
-        started => '3',
-        stopped => '4'
-    );
-
-    croak "Argument 'expected state' undefined" unless defined($expected_state);
-
-    my @allowed_state_values = keys(%state_to_rc);
-    $expected_state = lc $expected_state;
-    croak "Value '$expected_state' for argument 'expected state' not supported. Allowed values: '@allowed_state_values'"
-      unless (grep(/^$expected_state$/, @allowed_state_values));
-
-    my $rc = $self->sapcontrol(instance_id => $instance_id, webmethod => 'GetProcessList');
-    my $start_time = time;
-
-    while ($rc ne $state_to_rc{$expected_state}) {
-        last unless $wait_for_state;
-        $rc = $self->sapcontrol(instance_id => $instance_id, webmethod => 'GetProcessList');
-        croak "Timeout while waiting for expected state: $expected_state" if (time - $start_time > $timeout);
-        sleep $loop_sleep;
-    }
-
-    if ($state_to_rc{$expected_state} ne $rc) {
-        $self->sap_show_status_info(netweaver => 1, instance_id => $instance_id);
-        croak "Processes are not '$expected_state'";
-    }
-
-    return $expected_state;
-}
-
-=head2 get_remote_instance_number
-
- $self->get_instance_number(instance_type=>$instance_type);
-
-Finds instance number from remote instance using sapcontrol "GetSystemInstanceList" webmethod.
-Local system instance number is required to execute sapcontrol though.
-
-B<instance_type> Instance type (ASCS, ERS) - this can be expanded to other instances
-
-=cut
-
-sub get_remote_instance_number () {
-    my ($self, %args) = @_;
-    my $instance_type = $args{instance_type};
-    my $local_instance_id = get_required_var('INSTANCE_ID');
-
-    croak "Missing mandatory argument '$instance_type'." unless $instance_type;
-    croak "Function is not yet implemented for instance type: $instance_type" unless grep /$instance_type/, ('ASCS', 'ERS');
-
-    # This needs to be expanded for PAS and AAS
-    my %instance_type_features = (
-        ASCS => 'MESSAGESERVER',
-        ERS => 'ENQREP'
-    );
-
-    my @instance_data = grep /$instance_type_features{$instance_type}/,
-      split('\n', $self->sapcontrol(webmethod => 'GetSystemInstanceList', instance_id => $local_instance_id, return_output => 1));
-    my $instance_id = (split(', ', $instance_data[0]))[1];
-    $instance_id = sprintf("%02d", $instance_id);
-
-    return ($instance_id);
-}
-
 =head2 get_instance_profile_path
 
  $self->get_instance_profile_path(instance_type=>$instance_type, instance_id=$instance_id);
@@ -1586,9 +1466,36 @@ sub upload_ase_logs {
     save_and_upload_log('tar -zcf ase_logs.tar.gz $SYBASE/log $SYBASE/$SYBASE_ASE/install/*.log', 'ase_logs.tar.gz');
 }
 
+=head2 modify_selinux_setenforce
+
+  $self->modify_selinux_setenforce
+
+Modify SELinux mode to Enforcing or Permissive.
+
+=cut
+
+sub modify_selinux_setenforce {
+    my ($self, %args) = @_;
+    my $selinux_mode = $args{selinux_mode} // get_var('SLES4SAP_SELINUX_SETENFORCE', 'Enforcing');
+    script_run("sestatus");
+    if (script_output("getenforce") !~ m/$selinux_mode/) {
+        assert_script_run("setenforce " . $selinux_mode);
+        validate_script_output("getenforce", sub { m/$selinux_mode/ });
+    }
+}
+
+sub pre_run_hook {
+    my ($self) = @_;
+    1 if defined $testapi::selected_console;
+    $prev_console = $testapi::selected_console;
+    record_info(__PACKAGE__ . ':' . 'pre_run_hook' . ' ' . "prev_console=$prev_console");
+}
+
 sub post_run_hook {
     my ($self) = @_;
+    record_info(__PACKAGE__ . ':' . 'post_run_hook' . ' ' . "prev_console=$prev_console");
 
+    $self->record_avc_selinux_alerts() if is_sle('16+');
     return unless ($prev_console);
     select_console($prev_console, await_console => 0);
     ensure_unlocked_desktop if ($prev_console eq 'x11');
@@ -1596,6 +1503,7 @@ sub post_run_hook {
 
 sub post_fail_hook {
     my ($self) = @_;
+    record_info(__PACKAGE__ . ':' . 'post_fail_hook');
 
     # We need to be sure that *ALL* consoles are closed, are SUPER:post_fail_hook
     # does not support virtio/serial console yet
@@ -1603,7 +1511,7 @@ sub post_fail_hook {
     select_console('root-console');
 
     # YaST logs
-    upload_y2logs;
+    upload_y2logs if is_sle('<16');
 
     # HANA installation logs, if needed
     $self->upload_hana_install_log if get_var('HANA');

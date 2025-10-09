@@ -4,20 +4,40 @@
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: Executes a single LTP test case
-# Maintainer: Richard Palethorpe <rpalethorpe@suse.com>
+# Maintainer: QE Kernel <kernel-qa@suse.de>
 # More documentation is at the bottom
 
 use 5.018;
-use warnings;
 use base 'opensusebasetest';
 use testapi qw(is_serial_terminal :DEFAULT);
+use serial_terminal 'select_serial_terminal';
+use power_action_utils 'power_action';
 use utils;
+use version_utils 'is_sle';
 use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC);
+use Utils::Backends qw(is_backend_s390x is_pvm);
 use serial_terminal;
 use Mojo::File 'path';
 use Mojo::JSON;
+use LTP::utils 'prepare_ltp_env';
 use LTP::WhiteList;
 require bmwqemu;
+
+sub do_reboot {
+    my $self = shift;
+
+    record_info("reboot");
+    power_action('reboot', textmode => 1, keepconsole => is_pvm || is_backend_s390x);
+    reconnect_mgmt_console if (is_pvm || is_backend_s390x || get_var('LTP_BAREMETAL'));
+
+    if (is_backend_s390x) {
+        $self->wait_boot_past_bootloader(textmode => 1);
+    } else {
+        $self->wait_boot;
+    }
+    select_serial_terminal;
+    prepare_ltp_env;
+}
 
 sub start_result {
     my ($self, $file_name, $title) = @_;
@@ -113,7 +133,7 @@ sub parse_ltp_log {
                 $results->{fail}++;
             }
             else {
-                say $fh "Test process returned unkown none zero value ($1).";
+                say $fh "Test process returned unknown non-zero value ($1).";
                 $results->{brok}++;
             }
         }
@@ -308,7 +328,7 @@ sub upload_tcpdump {
         $old_console = current_console();
         select_console('root-console');
 
-        unless (defined(script_run("kill -s INT $pid && while [ -d /proc/$pid ]; do usleep 100000; done", die_on_timeout => 0))) {
+        unless (defined(script_run("timeout 20 sh -c \"kill -s INT $pid && while [ -d /proc/$pid ]; do sleep 1; done\""))) {
             select_console($old_console, await_console => 0);
             return;
         }
@@ -317,9 +337,38 @@ sub upload_tcpdump {
         assert_script_run("kill -s INT $pid && wait $pid");
     }
 
-    assert_script_run("gzip -f9 /tmp/tcpdump.pcap");
-    upload_logs("/tmp/tcpdump.pcap.gz");
-    upload_logs("/tmp/tcpdump.log");
+    assert_script_run("gzip -f9 /var/tmp/tcpdump.pcap", timeout => 1800);
+    upload_logs("/var/tmp/tcpdump.pcap.gz");
+    upload_logs("/var/tmp/tcpdump.log");
+    script_run('rm /var/tmp/tcpdump.pcap* /var/tmp/tcpdump.log');
+    select_console($old_console) if defined($old_console);
+}
+
+sub upload_oprofile {
+    my $self = shift;
+    my $pid = $self->{oprofile_pid};
+    my $old_console;
+
+    $self->{oprofile_pid} = undef;
+
+    if ($self->{timed_out}) {
+        $old_console = current_console();
+        select_console('root-console');
+
+        unless (defined(script_run("timeout 20 sh -c \"kill -s INT $pid && while [ -d /proc/$pid ]; do sleep 1; done\""))) {
+            select_console($old_console, await_console => 0);
+            return;
+        }
+    }
+    else {
+        assert_script_run("kill -s INT $pid && wait $pid");
+    }
+
+    assert_script_run('cd /tmp');
+    assert_script_run("tar cjf /tmp/ltp_oprofile_data.tar.bz2 ltp_oprofile");
+    assert_script_run('cd -');
+    upload_logs("/tmp/ltp_oprofile_data.tar.bz2");
+    upload_logs("/tmp/ltp_oprofile.txt");
     select_console($old_console) if defined($old_console);
 }
 
@@ -332,7 +381,10 @@ sub pre_run_hook {
     # But change them to hard fail in this test module.
     for my $pattern (@{$self->{serial_failures}}) {
         my %tmp = %$pattern;
-        $tmp{type} = 'hard' if $tmp{message} =~ m/kernel/i;
+
+        # don't switch to hard fail when test is expected to produce kernel warning
+        $tmp{type} = $tmp{post_boot_type} if defined($tmp{post_boot_type}) && !($tmp{soft_on_expect_warn} && get_var('LTP_WARN_EXPECTED'));
+
         push @pattern_list, \%tmp;
     }
 
@@ -356,17 +408,26 @@ sub run {
 
     my $fin_msg = "### TEST $test->{name} COMPLETE >>> ";
     my $cmd_text = qq($test->{command}; echo "$fin_msg\$?.");
-    my $klog_stamp = "echo 'OpenQA::run_ltp.pm: Starting $test->{name}' > /dev/$serialdev";
+
+    my $klog_stamp = "OpenQA::run_ltp.pm: Starting $test->{name}";
     my $start_time = thetime();
 
     if (check_var_array('LTP_DEBUG', 'tcpdump')) {
-        $self->{tcpdump_pid} = background_script_run("tcpdump -i any -w /tmp/tcpdump.pcap &>/tmp/tcpdump.log");
+        $self->{tcpdump_pid} = background_script_run("tcpdump -i any -w /var/tmp/tcpdump.pcap &>/var/tmp/tcpdump.log");
         # Wait for tcpdump to initialize before running the test
-        script_run('while [ ! -e /tmp/tcpdump.pcap ]; do usleep 100000; done');
+        script_run('while [ ! -e /var/tmp/tcpdump.pcap ]; do sleep 1; done');
+    }
+
+    if (check_var_array('LTP_DEBUG', 'oprofile')) {
+        script_run('rm -rf /tmp/ltp_oprofile');
+        assert_script_run('mkdir -p /tmp/ltp_oprofile');
+        $self->{oprofile_pid} = background_script_run('operf -ls -d /tmp/ltp_oprofile &>/tmp/ltp_oprofile.txt');
     }
 
     if (is_serial_terminal) {
-        script_run($klog_stamp);
+        script_run("echo '$klog_stamp' > /dev/kmsg");
+        # SLE11-SP4 doesn't support ignore_loglevel, due that stamp is not printed in console
+        script_run("echo '$klog_stamp' > /dev/$serialdev") if is_sle('<12');
         wait_serial(serial_term_prompt(), undef, 0, no_regex => 1);
         type_string($cmd_text);
         wait_serial($cmd_text, undef, 0, no_regex => 1);
@@ -381,6 +442,7 @@ sub run {
 
     if ($test_log =~ qr/$fin_msg(\d+)\.$/) {
         $env{retval} = $1;
+        $self->upload_oprofile() if defined($self->{oprofile_pid});
         $self->upload_tcpdump() if defined($self->{tcpdump_pid});
     }
 
@@ -393,12 +455,16 @@ sub run {
     }
 
     script_run('vmstat -w');
+
+    # reboot unless TCONF or last test
+    $self->do_reboot if (get_var('LTP_REBOOT_AFTER_TEST') && !$test->{last} && $env{retval} != 32);
 }
 
 # Only propogate death don't create it from failure [2]
 sub run_post_fail {
     my ($self, $msg) = @_;
 
+    $self->upload_oprofile() if defined($self->{oprofile_pid});
     $self->upload_tcpdump() if defined($self->{tcpdump_pid});
     $self->dump_tasktrace() if check_var_array('LTP_DEBUG', 'tasktrace');
     $self->save_crashdump()
@@ -478,7 +544,7 @@ The time in seconds which each test command has to run.
 =head2 LTP_DUMP_MEMORY_ON_TIMEOUT
 
 If set will request that the SUT's memory is dumped if the timer in this test
-module runs out. This is does not include timeouts which are built into the
+module runs out. This does not include timeouts which are built into the
 LTP test itself.
 
 =head2 LTP_ENV
@@ -489,9 +555,15 @@ E.g.: key=value,key2="value with spaces",key3='another value with spaces'
 =head2 LTP_DEBUG
 
 Comma separated list of debug features to enable during test run.
-C<tcpdump>: Capture all packets sent or received during each test.
-C<crashdump>: Save kernel crashdump on test timeout.
-C<tasktrace>: Print backtrace of all processes and show blocked tasks
+- C<oprofile>: Collect system-wide oprofile during each test. QEMUCPU=host may
+  be required.
+- C<tcpdump>: Capture all packets sent or received during each test.
+- C<crashdump>: Save kernel crashdump on test timeout.
+- C<tasktrace>: Print backtrace of all processes and show blocked tasks
+
+=head2 LTP_REBOOT_AFTER_TEST
+
+Reboot SUT after each test (unless last test or TCONF). It prolongs testing
+significantly, but for some tests may be necessary, e.g. ltp_ima_reboot.
 
 =cut
-

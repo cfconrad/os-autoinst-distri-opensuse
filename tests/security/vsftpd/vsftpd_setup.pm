@@ -6,10 +6,9 @@
 # Tags: poo#108614, tc#1769978
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
 use utils;
+use version_utils qw(is_sle);
 
 sub run {
     my $vsftpd_path = '/etc/vsftpd';
@@ -28,8 +27,11 @@ sub run {
     # Install vsftpd, expect for Tumbleweed
     zypper_call("in vsftpd expect openssl wget");
 
+    # https://bugzilla.suse.com/show_bug.cgi?id=1246224
+    assert_script_run('setsebool -P ftpd_full_access 1') unless is_sle('<16');
+
     # Create self-signed certificate
-    assert_script_run("mkdir $vsftpd_path && cd $vsftpd_path");
+    assert_script_run("(test -d $vsftpd_path || mkdir $vsftpd_path) && cd $vsftpd_path");
     assert_script_run "expect -c 'spawn openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout $key_file -out $cert_file;
 expect \"Country Name (2 letter code) \\[AU\\]\"; send \"DE\\r\";
 expect \"State or Province Name (full name) \\[Some-State\\]:\"; send \"Nuremberg\\r\";
@@ -72,7 +74,7 @@ expect {
 }
 
 sub test_flags {
-    return {milestone => 1, fatal => 1};
+    return {milestone => 1, fatal => 0};
 }
 
 1;

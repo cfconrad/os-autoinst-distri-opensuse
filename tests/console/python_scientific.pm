@@ -9,8 +9,6 @@
 # Maintainer: Felix Niederwanger <felix.niederwanger@suse.de>
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -41,7 +39,7 @@ sub run {
     # Package 'python3-scipy' requires PackageHub is available
     return unless is_phub_ready();
 
-    my $scipy = is_sle('<15-sp1') ? '' : 'python3-scipy';
+    my $scipy = is_sle('<15-sp1') || is_sle('>=16.0') ? '' : 'python3-scipy';
     zypper_call "in python3 python3-numpy $scipy";
     # Run python scripts
     run_python_script('python3-numpy-test.py');

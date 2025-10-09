@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2017-2022 SUSE LLC
+# Copyright 2017-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Base module for all wicked scenarios
@@ -1206,9 +1206,9 @@ sub prepare_containers {
     my $self = shift;
 
     if ($self->container_runtime eq 'docker') {
-        install_docker_when_needed(get_var('DISTRI'));
+        install_docker_when_needed();
     } else {
-        install_podman_when_needed(get_var('DISTRI'));
+        install_podman_when_needed();
     }
 
     my $containers = $self->get_containers();
@@ -1335,10 +1335,12 @@ sub need_network_tweaks() {
 }
 
 sub wait_for_background_process {
-    my ($self, $pid, %args) = @_;
-    $args{proceed_on_failure} //= 0;
+    my ($self, $pid) = @_;
+    # https://github.com/os-autoinst/os-autoinst-distri-opensuse/pull/19853/files#r1718454521
 
-    my $ret = script_run("wait $pid", die_on_timeout => 0, %args);
+    enter_cmd "wait $pid; echo wait-DONE-\$?- | tee /dev/$serialdev";
+    my $ret = wait_serial "wait-DONE-\\d+-";
+    # wait pid timeout
     unless (defined($ret)) {
         if (is_serial_terminal()) {
             type_string(qq(\cc));
@@ -1350,8 +1352,8 @@ sub wait_for_background_process {
 
         die("wait_for_background_process() failed, process $pid wasn't ready yet");
     }
-
-    return $ret if ($ret == 0 || $args{proceed_on_failure});
+    ($ret) = $ret =~ /wait-DONE-(\d+)-/;
+    return $ret if ($ret == 0);
     die("Background process $pid exit with $ret");
 }
 1;

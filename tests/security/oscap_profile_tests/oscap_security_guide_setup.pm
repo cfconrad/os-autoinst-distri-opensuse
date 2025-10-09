@@ -5,8 +5,6 @@
 # Maintainer: QE Security <none@suse.de>
 
 use base 'oscap_tests';
-use strict;
-use warnings;
 use testapi;
 use utils;
 use version_utils qw(is_sle);
@@ -21,6 +19,9 @@ sub run {
     if (get_required_var('OSCAP_ANSIBLE_REMEDIATION')) {
         $oscap_tests::ansible_remediation = get_required_var('OSCAP_ANSIBLE_REMEDIATION');
         $oscap_tests::ansible_profile_ID = is_sle ? $oscap_tests::sle_version . '-' . get_required_var('OSCAP_ANSIBLE_PROFILE_ID') : $oscap_tests::ansible_playbook_standart;
+    }
+    if (get_var('OSCAP_UPLOAD_DEBUG_LOGS')) {
+        $oscap_tests::oscap_upload_debug_logs = get_var('OSCAP_UPLOAD_DEBUG_LOGS');
     }
 
     $self->oscap_security_guide_setup();

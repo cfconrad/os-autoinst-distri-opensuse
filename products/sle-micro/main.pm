@@ -11,20 +11,15 @@ use utils;
 use testapi;
 use main_common qw(init_main is_updates_test_repo unregister_needle_tags join_incidents_to_repo);
 use main_micro_alp;
+use known_bugs;
 use DistributionProvider;
 
 init_main();
-
-my $distri = testapi::get_required_var('CASEDIR') . '/lib/susedistribution.pm';
-require $distri;
-testapi::set_distribution(susedistribution->new());
 
 $needle::cleanuphandler = sub {
     unregister_needle_tags('ENV-BACKEND-ipmi');
     unregister_needle_tags('ENV-FLAVOR-JeOS-for-kvm');
     unregister_needle_tags('ENV-JEOS-1');
-    unregister_needle_tags('ENV-OFW-0');
-    unregister_needle_tags('ENV-OFW-1');
     unregister_needle_tags('ENV-UEFI-1') unless get_var('UEFI');
     unregister_needle_tags('ENV-PXEBOOT-0');
     unregister_needle_tags('ENV-PXEBOOT-1');
@@ -34,9 +29,23 @@ $needle::cleanuphandler = sub {
     unregister_needle_tags("ENV-VERSION-12-SP1");
     unregister_needle_tags("ENV-VERSION-12-SP2");
     unregister_needle_tags("ENV-VERSION-12-SP3");
+    unregister_needle_tags("ENV-VERSION-12-SP4");
+    unregister_needle_tags("ENV-VERSION-12-SP5");
     unregister_needle_tags("ENV-VERSION-11-SP4");
     unregister_needle_tags("ENV-12ORLATER-1");
     unregister_needle_tags("ENV-FLAVOR-Server-DVD");
+    unregister_needle_tags('ENV-15SP3ORLATER-1');
+    unregister_needle_tags('ENV-OFW-1') unless get_var('OFW');
+    unregister_needle_tags('bootloader-shim-import-prompt');
+    unregister_needle_tags('ENV-15SP4');
+    unless (check_var('BOOTLOADER', 'grub2-bls')) {
+        unregister_needle_tags('bootloader-grub2-bls');
+        unregister_needle_tags('grub2-bls');
+    }
+    unless (get_var('FLAVOR', '') =~ /selfinstall|dvd/i) {
+        unregister_needle_tags('inst-bootmenu');
+        unregister_needle_tags('inst-oninstallation');
+    }
 };
 
 
@@ -63,8 +72,8 @@ if (is_updates_test_repo && !get_var('MAINT_TEST_REPO')) {
 testapi::set_distribution(DistributionProvider->provide());
 
 # set failures
-#$testapi::distri->set_expected_serial_failures(create_list_of_serial_failures());
-#$testapi::distri->set_expected_autoinst_failures(create_list_of_autoinst_failures());
+$testapi::distri->set_expected_serial_failures(create_list_of_serial_failures());
+$testapi::distri->set_expected_autoinst_failures(create_list_of_autoinst_failures());
 
 if (load_yaml_schedule) {
     if (YuiRestClient::is_libyui_rest_api) {

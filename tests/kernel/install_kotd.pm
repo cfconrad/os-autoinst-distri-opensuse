@@ -8,7 +8,6 @@
 # Maintainer: Petr Cervinka <pcervinka@suse.com>
 
 use 5.018;
-use warnings;
 use base "opensusebasetest";
 use testapi;
 use serial_terminal 'select_serial_terminal';
@@ -19,9 +18,12 @@ use power_action_utils 'power_action';
 
 sub run {
     my $self = shift;
-    $self->wait_boot;
+
+    $self->wait_boot unless (is_backend_s390x);
+
     # Use root-console for KOTD installation on svirt instead of root-sut-serial poo#54275
-    is_svirt ? select_console('root-console') : select_serial_terminal;
+    is_svirt_except_s390x ? select_console('root-console') : select_serial_terminal;
+
     # Get url of kotd/kmp repositories
     my $kotd_repo = get_required_var('KOTD_REPO');
     my $kmp_repo = get_var('KMP_REPO');
@@ -36,11 +38,19 @@ sub run {
     zypper_ar($kotd_repo, name => 'KOTD', priority => 90, no_gpg_check => 1);
     zypper_ar($kmp_repo, name => 'KMP', priority => 90, no_gpg_check => 1) if $kmp_repo;
     # Install latest kernel
-    zypper_call("in -l kernel-default");
+    zypper_call("in -lr KOTD kernel-default");
     # Check for multiple kernel installation
-    assert_script_run '[ "$(zypper se -s kernel-default | grep -c i+)" = "1" ]', fail_message => 'More than one kernel was installed';
+    my $packlist = zypper_search('-sx kernel-default');
+    die 'More than one kernel was installed'
+      unless 1 == scalar grep { $$_{status} =~ m/^i/ } @$packlist;
+
     # Reboot system after kernel installation
     power_action('reboot');
+
+    if (is_remote_backend) {
+        record_info 'Remote', 'Reconnect mgmt console';
+        reconnect_mgmt_console();
+    }
 }
 
 sub test_flags {

@@ -13,8 +13,6 @@
 # Maintainer: QE Core <qe-core@suse.com>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use version_utils;
@@ -28,6 +26,8 @@ sub run {
     # Verify the system's python3 version
     my $system_python_version = get_system_python_version();
     record_info("System python version", "$system_python_version");
+    # In tumbleweed python3-setuptools is just a provides from python311-setuptools package
+    zypper_call("install $system_python_version-setuptools") if (is_tumbleweed);
     # Import the project directory for creating a source distribution package.
     # The directory should contain setup.py and a Python module named test_module.py
     assert_script_run('curl -L -s ' . data_url('python/python3-setuptools') . ' | cpio --make-directories --extract && cd data');
@@ -43,7 +43,13 @@ sub run_tests ($python3_spec_release) {
         record_info("Skip python39", 'https://jira.suse.com/browse/PED-8196');
         return;
     }
-    zypper_call("install $python3_spec_release");
+    if ($python3_spec_release eq 'python311' && is_sle('>=16.0')) {
+        # python311-setuptools is not available on sle16
+        record_info("Skip python311", 'Skip python311-setuptools test on SLE 16.0');
+        return;
+    }
+
+    zypper_call("install $python3_spec_release $python3_spec_release-setuptools");
     record_info("pip3 version:", script_output("rpm -q $python3_spec_release-pip"));
     record_info("python3-setuptools:", script_output("rpm -q $python3_spec_release-setuptools"));
     my $python_binary = get_python3_binary($python3_spec_release);
@@ -97,6 +103,8 @@ sub cleanup {
     # Deletion of work folders
     assert_script_run("rm -rf dist user_package_setuptools.egg-info repo_webroot");
     assert_script_run("deactivate");    # leave the virtual env
+    assert_script_run("cd ..");
+    script_run("rm -r data");
 }
 
 sub post_run_hook {

@@ -8,8 +8,6 @@
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>, <qa-c@suse.de>
 
 use base "installbasetest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -18,6 +16,7 @@ use version_utils qw(is_desktop_installed is_sles4sap is_leap_migration is_sle_m
 use Utils::Backends 'is_pvm';
 use Utils::Logging 'upload_solvertestcase_logs';
 use transactional;
+use qam 'add_repo_if_not_present';
 
 sub run {
     my $self = shift;
@@ -34,6 +33,7 @@ sub run {
     my $zypper_migration_failed = qr/^Migration failed/m;
     my $zypper_migration_bsc1184347 = qr/rpmdb2solv: invalid option -- 'D'/m;
     my $zypper_migration_bsc1196114 = qr/scriptlet failed, exit status 127/m;
+    my $zypper_migration_bsc1241014 = qr/Detected 1 file conflict.*xxd.*Continue\?/ms;
     my $zypper_migration_license = qr/Do you agree with the terms of the license\? \[y/m;
     my $zypper_migration_urlerror = qr/URI::InvalidURIError/m;
     my $zypper_migration_reterror = qr/^No migration available|Can't get available migrations|Can't determine the list of installed products/m;
@@ -41,6 +41,24 @@ sub run {
     my $zypper_migration_signing_key = qr/^Do you want to reject the key, trust temporarily, or trust always?[\s\S,]* \[r/m;
     # start migration
     if (is_sle_micro) {
+        # We set DEBUG_TARGET_OS_TEST_ISSUES and DEBUG_TARGET_OS_TEST_REPOS
+        # to add the target product's patch before migration.
+        # This is for debug using, for more info please check out poo#161156.
+        if (my @repos = split(/,/, get_var('DEBUG_TARGET_OS_TEST_REPOS', ''))) {
+            my $counter = 0;
+
+            for my $var (@repos) {
+                add_repo_if_not_present("$var", "DEBUG_$counter");
+                $counter++;
+            }
+
+            zypper_call('ref', timeout => 1400, exitcode => [0, 106]);
+            record_info('Repos', script_output('zypper lr -u'));
+
+            # patch the system with TARGET_OS_TEST_REPOS
+            my $ret = trup_call('up', timeout => 300, proceed_on_failure => 1);
+            process_reboot(trigger => 1);
+        }
         # We need to stop and disable apparmor service before migration due to bsc#1197368
         if (script_run('systemctl is-active apparmor.service') == 0) {
             systemctl('disable --now apparmor.service');
@@ -54,7 +72,7 @@ sub run {
     # kde zypper migration.
     my $timeout = (is_leap_migration) ? 18000 : 7200;
     my $migration_checks = [
-        $zypper_migration_bsc1184347, $zypper_migration_bsc1196114,
+        $zypper_migration_bsc1184347, $zypper_migration_bsc1196114, $zypper_migration_bsc1241014,
         $zypper_migration_target, $zypper_disable_repos, $zypper_continue, $zypper_migration_done,
         $zypper_migration_error, $zypper_migration_conflict, $zypper_migration_fileconflict, $zypper_migration_notification,
         $zypper_migration_failed, $zypper_migration_license, $zypper_migration_reterror, $zypper_migration_signing_key
@@ -91,6 +109,12 @@ sub run {
             # othwerwise migration is done, test can continue, libsolv will be updated later
             record_soft_failure('bsc#1184347');
             last;
+        }
+        elsif ($out =~ $zypper_migration_bsc1241014) {
+            # LTSS can't be migrated, and there is fix for the bug
+            record_soft_failure('bsc#1241014');
+            type_string('yes');
+            send_key 'ret';
         }
         elsif ($out =~ $zypper_migration_error) {
             $zypper_migration_error_cnt += 1;
@@ -175,6 +199,10 @@ sub post_fail_hook {
     upload_logs '/var/log/zypper.log';
     upload_solvertestcase_logs();
     $self->SUPER::post_fail_hook;
+}
+
+sub test_flags {
+    return {milestone => 1};
 }
 
 1;

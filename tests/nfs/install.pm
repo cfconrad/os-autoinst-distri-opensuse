@@ -8,12 +8,11 @@
 package install;
 
 use 5.018;
-use strict;
-use warnings;
 use base 'opensusebasetest';
 use utils;
 use testapi;
 use serial_terminal 'select_serial_terminal';
+use version_utils qw(is_sle is_tumbleweed);
 
 sub install_dependencies_pynfs {
     my @deps = qw(
@@ -26,6 +25,7 @@ sub install_dependencies_pynfs {
       nfs-client
       nfs-kernel-server
     );
+    push(@deps, 'python3-standard-xdrlib') if (is_sle('16+') || is_tumbleweed);
     zypper_call('in ' . join(' ', @deps));
 }
 
@@ -53,7 +53,9 @@ sub install_testsuite {
         $rel = "-b $rel" if ($rel);
 
         install_dependencies_pynfs;
-        assert_script_run("git clone -q --depth 1 $url $rel && cd ./pynfs");
+        assert_script_run("git clone $url $rel && cd ./pynfs");
+        # workaround poo#178288 all pynfs fails in DELEG2
+        assert_script_run('git checkout 81a4693305abb42ffd16e77a4808a1a607693476~');
         assert_script_run('./setup.py build && ./setup.py build_ext --inplace');
     }
     elsif (get_var("CTHON04")) {

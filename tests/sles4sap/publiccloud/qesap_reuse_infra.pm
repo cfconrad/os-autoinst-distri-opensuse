@@ -6,14 +6,12 @@
 # Summary: Reuse qe-sap-deployment infrastructure preserved from previous test run.
 # https://github.com/SUSE/qe-sap-deployment
 
-use strict;
-use warnings;
 use base 'sles4sap_publiccloud_basetest';
 use testapi;
 use publiccloud::ssh_interactive 'select_host_console';
 use serial_terminal 'select_serial_terminal';
 use sles4sap_publiccloud;
-use qesapdeployment;
+use sles4sap::qesap::qesapdeployment;
 
 sub test_flags {
     return {fatal => 1, publiccloud_multi_module => 1};

@@ -15,8 +15,6 @@
 
 use base "opensusebasetest";
 
-use strict;
-use warnings;
 
 use utils;
 use power_action_utils 'prepare_system_shutdown';
@@ -64,6 +62,14 @@ sub run {
     script_run('sed -i -r "s/^DEFAULT_WM=\"icewm\"/DEFAULT_VM=\"\"/" /etc/sysconfig/windowmanager');
     # now we have gnome installed - restore DESKTOP variable
     set_var('DESKTOP', 'gnome', reload_needles => 1);
+
+    # https://progress.opensuse.org/issues/184528
+    if (is_s390x && is_sle('<15')) {
+        script_run('sed -i -r "s/^DISPLAYMANAGER_REMOTE_ACCESS=\"no\"/DISPLAYMANAGER_REMOTE_ACCESS=\"yes\"/" /etc/sysconfig/displaymanager');
+        script_run('sed -i -r "s/^FW_SERVICES_EXT_TCP.*$/FW_SERVICES_EXT_TCP=\"5901\"/" /etc/sysconfig/SuSEfirewall2');
+        zypper_call('in vncmanager');
+        systemctl 'enable vncmanager';
+    }
 
     $patch = $patch ? $patch : $patches;
     my $patch_status = is_patch_needed($patch, 1);

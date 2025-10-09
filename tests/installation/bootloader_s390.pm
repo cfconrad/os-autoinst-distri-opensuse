@@ -15,54 +15,13 @@ use base "installbasetest";
 
 use testapi;
 
-use strict;
-use warnings;
 use English;
 
 use bootloader_setup;
 use registration;
 use utils 'shorten_url';
-use version_utils qw(is_sle is_tumbleweed is_opensuse);
-
-# try to find the 2 longest lines that are below beyond the limit
-# collapsing the lines - we have a limit of 10 lines
-sub try_merge_lines {
-    my ($lines, $columns) = @_;
-    # the order of the parameters doesn't matter, so take the longest first
-    @$lines = sort { length($b) <=> length($a) } @$lines;
-    for my $start_index (0 .. scalar(@$lines) - 1) {
-        my $start = $lines->[$start_index];
-        for my $end_index ($start_index + 1 .. scalar(@$lines) - 1) {
-            my $end = $lines->[$end_index];
-            if (length($start) + length($end) + 1 < $columns) {    # hit!
-                my $last = pop @$lines;
-                $lines->[$start_index] .= " $end";
-                $lines->[$end_index] = $last unless ($last eq $end);
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-sub split_lines {
-    my ($params) = @_;
-
-    # s3270 has a funny behaviour in xedit, so be careful
-    my $columns = 72;
-
-    my @lines = split(/ /, $params);
-    while (try_merge_lines(\@lines, $columns)) {
-        # just keep trying!
-    }
-
-    $params = '';
-    for my $line (@lines) {
-        $params .= "String(\"$line \")\nNewline\n";
-    }
-
-    return $params;
-}
+use version_utils qw(is_agama is_sle is_tumbleweed is_opensuse);
+use autoyast qw(parse_dud_parameter);
 
 use backend::console_proxy;
 
@@ -79,7 +38,7 @@ sub prepare_parmfile {
     $params .= " " . get_var('S390_NETWORK_PARAMS');
     $params .= " " . get_var('EXTRABOOTPARAMS');
 
-    $params .= remote_install_bootmenu_params;
+    $params .= remote_install_bootmenu_params unless (get_var('AGAMA'));
 
     # we have to hardcode the hostname here - the true hostname would
     # create a too long parameter ;(
@@ -89,7 +48,27 @@ sub prepare_parmfile {
         $params .= " info=" . create_infofile("install: $instsrc");
     }
     else {
-        $params .= " install=" . $instsrc . $repo . " ";
+        if (get_var('AGAMA')) {
+            my $host = "ftp://" . get_var('REPO_HOST', 'openqa');
+            my $root_line = " root=live:" . ((get_var('FLAVOR') =~ /^(Full|agama-installer|offline-installer|online-installer)$/) ?
+                  $host . '/' . get_required_var('REPO_0') . "/LiveOS/squashfs.img" :
+                  $host . '/' . get_var('REPO_999'));
+            $params .= $root_line;
+
+            # add mandatory boot params
+            $params .= ' cio_ignore=all,!condev,!0.0.0150';
+            $params .= ' hvc_iucv=8';
+            $params .= " live.password=$testapi::password";
+
+            # add optional boot params
+            $params .= ' rd.zdev=dasd,0.0.0150' unless (get_var('AGAMA_ACTIVATE_DASD'));
+
+            # additional parameters requiring parsing
+            $params .= parse_dud_parameter(get_var('INST_DUD')) if get_var('INST_DUD');
+        }
+        else {
+            $params .= " install=" . $instsrc . $repo . " ";
+        }
     }
 
     if (get_var('UPGRADE')) {
@@ -97,7 +76,7 @@ sub prepare_parmfile {
     }
 
     $params .= specific_bootmenu_params;
-    $params .= registration_bootloader_cmdline if check_var('SCC_REGISTER', 'installation');
+    $params .= registration_bootloader_cmdline if check_var('SCC_REGISTER', 'installation') || get_var('FLAVOR') =~ 'Online';
 
     # Pass autoyast parameter for s390x, shorten the url because of 72 columns limit in x3270 xedit
     # If 'AUTOYAST_PREPARE_PROFILE' is true, shorten url directly, otherwise shorten url with data_url method
@@ -112,7 +91,7 @@ sub prepare_parmfile {
         $params .= " autoyast=" . $url;
         set_var('AUTOYAST', $url);
     }
-    return split_lines($params);
+    return $params;
 }
 
 sub get_to_yast {
@@ -125,19 +104,31 @@ sub get_to_yast {
     my $dir_with_suse_ins = get_var('REPO_UPGRADE_BASE_0') ? get_required_var('REPO_UPGRADE_BASE_0') : get_required_var('REPO_0');
     my $repo_host = get_var('REPO_HOST', 'openqa.suse.de');
 
-    my $parmfile_with_Newline_s = prepare_parmfile($dir_with_suse_ins);
-    my $sequence = <<"EO_frickin_boot_parms";
-${parmfile_with_Newline_s}
-ENTER
-ENTER
-EO_frickin_boot_parms
+    my $params = prepare_parmfile($dir_with_suse_ins);
+
+    # Split the parameters into 79 character + 1 character pairs.
+    # The input mode can handle 79 characters per line, the last one
+    # is handled later.
+    my @param_pairs = unpack('(a79a1)*', $params);
+
+    my $sequence = '';
+    for (my $i = 0; $i < @param_pairs; $i += 2) {
+        my $line_start = $param_pairs[$i];
+        $sequence .= "String(\"$line_start\")\n";
+    }
+    $sequence .= "ENTER\nENTER\n";
 
     # arbitrary number of retries
     my $max_retries = 7;
     for (1 .. $max_retries) {
         eval {
             # ensure that we are in cms mode before executing qaboot
-            $s3270->sequence_3270("String(\"#cp i cms\")", "ENTER", "ENTER", "ENTER", "ENTER",);
+            $s3270->sequence_3270("String(\"#cp i cms\")", "ENTER",);
+            # Wait for z/VM to load. "z/VM" is already in the buffer, but the check for "VM READ" suffices.
+            $r = $s3270->expect_3270(buffer_ready => qr/VM READ/, output_delim => qr/VM/, timeout => 20);
+            $s3270->sequence_3270("ENTER",);
+            $r = $s3270->expect_3270(output_delim => qr/Ready;/, timeout => 20);
+            $s3270->sequence_3270("ENTER", "ENTER",);
             $r = $s3270->expect_3270(output_delim => qr/CMS/, timeout => 20);
             $s3270->sequence_3270("String(\"qaboot $repo_host $dir_with_suse_ins\")", "ENTER", "Wait(InputField)",);
             # wait for qaboot dumping us into xedit. If this fails, probably the
@@ -159,6 +150,16 @@ EO_frickin_boot_parms
 
     $r = $s3270->expect_3270(buffer_ready => qr/X E D I T/);
 
+    # Now input the remaining 1 character at column 80 of each line
+    # manually using clocate :80 and creplace
+    $s3270->sequence_3270("String(\"clocate :80\")", "ENTER",);
+    for (my $i = 1; $i < @param_pairs; $i += 2) {
+        my $lineno = int($i / 2) + 1;
+        my $line_end = $param_pairs[$i] // ' ';
+        next if ($line_end eq ' ' || $line_end eq '');
+        $s3270->sequence_3270("String(\"l :$lineno\")", "ENTER", "String(\"creplace $line_end\")", "ENTER",);
+    }
+
     ## Remove the "manual=1" and the empty line at the end
     ## of the parmfile.
 
@@ -166,19 +167,38 @@ EO_frickin_boot_parms
     ## an empty line and a single "manual=1" at the bottom
     ## of the ftpboot parmfile.  This may fail in obscure
     ## ways when that changes.
-    $s3270->sequence_3270(qw(String(BOTTOM) ENTER String(DELETE) ENTER));
-    $s3270->sequence_3270(qw(String(BOTTOM) ENTER String(DELETE) ENTER));
+    ## In Agama The "manual=1" line is not present so it is not required to delete it.
+    unless (get_var('AGAMA')) {
+        $s3270->sequence_3270(qw(String(BOTTOM) ENTER String(DELETE) ENTER));
+        $s3270->sequence_3270(qw(String(BOTTOM) ENTER String(DELETE) ENTER));
 
-    $r = $s3270->expect_3270(buffer_ready => qr/X E D I T/);
+        $r = $s3270->expect_3270(buffer_ready => qr/X E D I T/);
+    }
 
     # save the parmfile.  ftpboot then starts the installation.
     $s3270->sequence_3270(qw( String(FILE) ENTER ));
 
-    # linuxrc
-    $r = $s3270->expect_3270(
-        output_delim => qr/Loading Installation System/,
-        timeout => 300
-    ) || die "Installation system was not found";
+    if (get_var('AGAMA')) {
+        my ($hostname) = split(/\./, get_required_var("ZVM_GUEST"));
+        $r = $s3270->expect_3270(
+            output_delim => qr/$hostname login/,
+            timeout => 300
+        ) || die "Login was not found";
+        $s3270->sequence_3270(qw(String("root") ENTER));
+
+        $r = $s3270->expect_3270(
+            output_delim => qr/Password/,
+            timeout => 30
+        ) || die "Password was not found";
+        $s3270->sequence_3270("String(\"$testapi::password\")", "ENTER");
+    }
+    else {
+        # linuxrc
+        $r = $s3270->expect_3270(
+            output_delim => qr/Loading Installation System/,
+            timeout => 300
+        ) || die "Installation system was not found";
+    }
 
     # set up display_mode for textinstall
     my $display_type;
@@ -192,17 +212,17 @@ EO_frickin_boot_parms
     else {
         $display_type = "VNC";
     }
+    unless (get_var('AGAMA')) {
+        my $output_delim
+          = $display_type eq "SSH" || $display_type eq "SSH-X" ? qr/\Q***  run 'yast.ssh' to start the installation  ***\E/
+          : $display_type eq "VNC" ? qr/\*\*\* Starting YaST(2|) \*\*\*/
+          : die "unknown vars.json:DISPLAY->TYPE <$display_type>";
 
-    my $output_delim
-      = $display_type eq "SSH" || $display_type eq "SSH-X" ? qr/\Q***  run 'yast.ssh' to start the installation  ***\E/
-      : $display_type eq "VNC" ? qr/\*\*\* Starting YaST(2|) \*\*\*/
-      : die "unknown vars.json:DISPLAY->TYPE <$display_type>";
-
-    $r = $s3270->expect_3270(
-        output_delim => $output_delim,
-        timeout => 300
-    ) || die "Loading Installation system tooks too long";
-
+        $r = $s3270->expect_3270(
+            output_delim => $output_delim,
+            timeout => 300
+        ) || die "Loading Installation system tooks too long";
+    }
 }
 
 sub show_debug {
@@ -237,11 +257,14 @@ sub format_dasd {
     # activate install-shell to do pre-install dasd-format
     select_console('install-shell');
 
-    # bring dasd online
-    # exit status 0 -> everything ok
-    # exit status 8 -> unformatted but still usable (e.g. from previous testrun)
-    $r = script_run("dasd_configure $dasd_path 1");
-    die "DASD in undefined state" unless (defined($r) && ($r == 0 || $r == 8));
+    # agama dasd is already online due it is specified in parmfile
+    unless (get_var('AGAMA')) {
+        # bring dasd online
+        # exit status 0 -> everything ok
+        # exit status 8 -> unformatted but still usable (e.g. from previous testrun)
+        $r = script_run("dasd_configure $dasd_path 1");
+        die "DASD in undefined state" unless (defined($r) && ($r == 0 || $r == 8));
+    }
 
     # make sure that there is a dasda device
     $r = script_run("lsdasd");
@@ -261,12 +284,15 @@ sub format_dasd {
         die "dasdfmt died with exit code $r" unless (defined($r) && $r == 0);
     }
 
-    # bring DASD down again to test the activation during the installation
-    if (script_run("timeout --preserve-status 20 bash -x /sbin/dasd_configure $dasd_path 0") != 0) {
-        record_soft_failure('bsc#1151436');
-        script_run('dasd_reload');
-        assert_script_run('dmesg');
-        assert_script_run("bash -x /sbin/dasd_configure -f $dasd_path 0");
+    # until Agama get better UI for DASD, activation will be done via parmfile (bsc#1238891#c9)
+    unless (is_agama) {
+        # bring DASD down again to test the activation during the installation
+        if (script_run("timeout --preserve-status 20 bash -x /sbin/dasd_configure $dasd_path 0") != 0) {
+            record_soft_failure('bsc#1151436');
+            script_run('dasd_reload');
+            assert_script_run('dmesg');
+            assert_script_run("bash -x /sbin/dasd_configure -f $dasd_path 0");
+        }
     }
 }
 
@@ -306,21 +332,23 @@ sub run {
     }
 
     # format DASD before installation by default
-    format_dasd if (check_var('FORMAT_DASD', 'pre_install'));
+    format_dasd if (check_var('FORMAT_DASD', 'pre_install') && !get_var('INST_AUTO') && !get_var('INST_DUD'));
     create_encrypted_part_dasd if get_var('ENCRYPT_ACTIVATE_EXISTING');
 
     select_console("installation", timeout => 180);
 
-    # We have textmode installation via ssh and the default vnc installation so far
-    if (check_var('VIDEOMODE', 'text') || check_var('VIDEOMODE', 'ssh-x')) {
-        # If libyui REST API is used, we set it up in installation/setup_libyui
-        unless (get_var('YUI_REST_API')) {
-            # Workaround for bsc#1142040
-            # enter_cmd("yast.ssh");
-            enter_cmd("QT_XCB_GL_INTEGRATION=none yast.ssh") && record_soft_failure('bsc#1142040');
+    unless (get_var('AGAMA')) {
+        # We have textmode installation via ssh and the default vnc installation so far
+        if (check_var('VIDEOMODE', 'text') || check_var('VIDEOMODE', 'ssh-x')) {
+            # If libyui REST API is used, we set it up in installation/setup_libyui
+            unless (get_var('YUI_REST_API')) {
+                # Workaround for bsc#1142040
+                # enter_cmd("yast.ssh");
+                enter_cmd("QT_XCB_GL_INTEGRATION=none yast.ssh") && record_soft_failure('bsc#1142040');
+            }
         }
+        wait_still_screen;
     }
-    wait_still_screen;
 
     $self->result('ok');
 }

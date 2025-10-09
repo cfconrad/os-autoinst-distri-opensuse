@@ -6,19 +6,12 @@
 # Summary: Test initializes console redirection to cloud Deployer VM.
 
 use parent 'sles4sap::sap_deployment_automation_framework::basetest';
-use strict;
-use warnings;
 use testapi;
 use sles4sap::sap_deployment_automation_framework::deployment
-  qw(serial_console_diag_banner
-  az_login
-  sdaf_prepare_ssh_keys
-  );
+  qw(serial_console_diag_banner az_login sdaf_ssh_key_from_keyvault);
 use sles4sap::sap_deployment_automation_framework::deployment_connector
-  qw(get_deployer_vm
-  get_deployer_ip
-  );
-use sles4sap::console_redirection qw(redirection_init);
+  qw(get_deployer_vm_name get_deployer_ip find_deployment_id);
+use sles4sap::sap_deployment_automation_framework::naming_conventions qw($deployer_private_key_path);
 use serial_terminal qw(select_serial_terminal);
 
 sub test_flags {
@@ -29,22 +22,18 @@ sub run {
     serial_console_diag_banner('Module sdaf_redirect_console_to_deployer.pm : start');
     az_login();
 
-    my $deployer_vm_name = get_deployer_vm;
+    my $deployer_vm_name = get_deployer_vm_name(deployment_id => find_deployment_id());
     # VM can be created by scheduling 'tests/sles4sap/sap_deployment_automation_framework/create_deployer_vm.pm'
     die 'Deployer VM not found. Check if VM exists.' unless $deployer_vm_name;
     record_info('VM found', "Deployer VM found: $deployer_vm_name");
 
-    my $deployer_ip = get_deployer_ip(deployer_vm_name => $deployer_vm_name);
-    # SDAF does not need privileged user to run.
-    my $ssh_user = get_var('REDIRECT_TARGET_USER', 'azureadm');
     # Variables to share data between test modules.
-    set_var('REDIRECT_DESTINATION_USER', $ssh_user);
+    my $deployer_ip = get_deployer_ip(deployer_vm_name => $deployer_vm_name);
+    # This will allow using connect_target_to_serial() without specifying user/host to deployer every time.
+    set_var('REDIRECT_DESTINATION_USER', get_var('PUBLIC_CLOUD_USER', 'azureadm'));
     set_var('REDIRECT_DESTINATION_IP', $deployer_ip);    # IP addr to redirect console to
-    sdaf_prepare_ssh_keys(deployer_key_vault => get_required_var('SDAF_KEY_VAULT'));
-
-    # autossh is required for console redirection to work
-    assert_script_run('zypper in -y autossh');
-    redirection_init();
+    sdaf_ssh_key_from_keyvault(
+        key_vault => get_required_var('SDAF_DEPLYOER_KEY_VAULT'), target_file => $deployer_private_key_path);
     serial_console_diag_banner('Module sdaf_redirect_console_to_deployer.pm : end');
 }
 

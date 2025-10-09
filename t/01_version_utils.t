@@ -50,12 +50,12 @@ subtest 'is_leap' => sub {
 
     set_var('VERSION', '42.3');
     ok is_leap, "check is_leap";
-    ok is_leap($_), "check $_" for qw(=42.3 <=15.0 >42.1 >=42.3);
-    ok !is_leap($_), "check $_" for qw(=15.0 >42.3 <42.3 <13.0);
-    dies_ok { is_leap $_ } "check $_" for (qw(13+ <=15 =42 42+ 42.1:S:A+ =42.3:S:A));
+    ok is_leap($_), "check $_" for qw(=42.3 <=15.0 >42.1 >=42.3 12+);
+    ok !is_leap($_), "check $_" for qw(=15.0 >42.3 <42.3 <13.0 15+);
+    dies_ok { is_leap $_ } "check $_" for (qw(42.1:S:A+ =42.3:S:A 12 15- =12+ >1 <15+));
 
     set_var('VERSION', '42.3:S:A');
-    ok is_leap($_), "check $_" for qw(=42.3 <=15.0);
+    ok is_leap($_), "check $_" for qw(=42.3 <=15.0 <15);
 };
 
 subtest 'is_sle' => sub {
@@ -75,6 +75,11 @@ subtest 'is_sle' => sub {
 
     set_var('VERSION', '12-SP2');
     ok is_sle($_), "check $_" for qw(=12-sp2 =12-sP2 <=15 >11-sp3 <12-sp3 >12-sp1 <12-SP3 >12-SP1);
+
+    set_var('VERSION', '16.0');
+    ok is_sle($_), "check $_" for qw(=16 =16.0 <16.9 <=16.0 >=16.0 >15-SP2 15-SP7+);
+    ok !is_sle($_), "check $_" for qw(>16.1 <15-sp9 <=15 >16 =16.9);
+    dies_ok { is_sle $_ } "check $_" for (qw(12 15- =12+ <15+ 16.0 >15_sp2 =XY));
 };
 
 subtest 'package_version_cmp' => sub {
@@ -110,6 +115,116 @@ subtest 'package_version_cmp' => sub {
         '5.3.18-198.1.g6b7890d < 5.3.18-200.1.g3e09edd ');
     ok(package_version_cmp('5.3.18-200.1.g3e09edd ', '5.3.18-198.1.g6b7890d') > 0,
         '5.3.18-200.1.g3e09edd > 5.3.18-198.1.g6b7890d');
+};
+
+subtest 'has_selinux_by_default' => sub {
+    use version_utils 'has_selinux_by_default';
+
+    # Test Leap (SELinux not enabled by default)
+    set_var('DISTRI', 'opensuse');
+    set_var('VERSION', '42.3');
+    ok !has_selinux_by_default, "check !has_selinux_by_default for Leap";
+
+    # Test MicroOS (SELinux enabled by default)
+    set_var('DISTRI', 'microos');
+    set_var('VERSION', '0');
+    ok has_selinux_by_default, "check has_selinux_by_default for MicroOS";
+
+    # Test SLE Micro invalid version (SELinux not enabled by default)
+    set_var('DISTRI', 'sle-micro');
+    set_var('VERSION', '0');
+    ok !has_selinux_by_default, "check !has_selinux_by_default for invalid sle-micro";
+
+    # Test SLE Micro 5.3 (SELinux not enabled by default)
+    set_var('VERSION', '5.3');
+    ok !has_selinux_by_default, "check !has_selinux_by_default for sle-micro 5.3";
+
+    # Test SLE Micro 5.4 (SELinux enabled by default)
+    set_var('VERSION', '5.4');
+    ok has_selinux_by_default, "check has_selinux_by_default for sle-micro 5.4";
+
+    # Test Tumbleweed (SELinux enabled by default)
+    set_var('DISTRI', 'opensuse');
+    set_var('VERSION', 'Tumbleweed');
+    ok has_selinux_by_default, "check has_selinux_by_default for Tumbleweed";
+};
+
+subtest 'has_selinux' => sub {
+    use version_utils 'has_selinux';
+
+    # Test SLE Micro 5.4 (enabled by default)
+    set_var('DISTRI', 'sle-micro');
+    set_var('VERSION', '5.4');
+    ok has_selinux, "check has_selinux with default settings (sle-micro 5.4)";
+
+    # Test SLE Micro 5.3 (not enabled by default)
+    set_var('VERSION', '5.3');
+    ok !has_selinux, "check !has_selinux with default settings (sle-micro 5.3)";
+
+    # Test Tumbleweed (default enabled)
+    set_var('DISTRI', 'opensuse');
+    set_var('VERSION', 'Tumbleweed');
+    ok has_selinux, "check has_selinux for Tumbleweed without SELINUX=1 environment";
+    set_var('SELINUX', '1');
+    ok has_selinux, "check has_selinux for Tumbleweed with SELINUX=1";
+    set_var('SELINUX', '0');
+    ok !has_selinux, "check !has_selinux for Tumbleweed with SELINUX=0";
+};
+
+subtest 'bootloader_tests' => sub {
+    use version_utils qw(get_default_bootloader);
+
+    set_var('DISTRI', 'opensuse');
+    set_var('FLAVOR', 'Server-DVD');
+    set_var('VERSION', 'Tumbleweed');
+    set_var('UEFI', '0');
+    ok get_default_bootloader eq 'grub2', "Tumbleweed no UEFI is grub2";
+
+    set_var('UEFI', '1');
+    ok get_default_bootloader eq 'grub2', "Tumbleweed on UEFI is grub2";
+
+    set_var('VERSION', 'Slowroll');
+    ok get_default_bootloader eq 'grub2', "Slowroll on UEFI is grub2";
+
+    set_var('VERSION', 'Staging:F');
+    ok get_default_bootloader eq 'grub2-bls', "Tumbleweed/Staging:F on UEFI is grub2-bls";
+
+    set_var('DISTRI', 'microos');
+    set_var('VERSION', 'Tumbleweed');
+    set_var('FLAVOR', 'MicroOS-Image-ContainerHost');
+    ok get_default_bootloader eq 'grub2', "Container host image is grub2";
+
+    set_var('FLAVOR', 'JeOS-for-OpenStack-Cloud');
+    ok get_default_bootloader eq 'grub2', "JeOS-for-OpenStack-Cloud image is grub2";
+
+    set_var('FLAVOR', 'MicroOS-Image');
+    ok get_default_bootloader eq 'grub2', "MicroOS-Image image is grub2";
+
+    set_var('DISTRI', 'opensuse');
+    set_var('FLAVOR', 'Server-DVD');
+
+    set_var('UPGRADE', 1);
+    ok get_default_bootloader eq 'grub2', "Upgrading Tumbleweed on UEFI is grub2";
+    set_var('UPGRADE', undef);
+
+    set_var('UEFI', '0');
+    ok get_default_bootloader eq 'grub2', "Tumbleweed non UEFI is grub2";
+
+    set_var('DISTRI', 'microos');
+    ok get_default_bootloader eq 'grub2', "Microos non UEFI is grub2";
+
+    set_var('UEFI', '1');
+    ok get_default_bootloader eq 'systemd-boot', "Microos on UEFI is systemd-boot";
+
+    set_var('UPGRADE', 1);
+    ok get_default_bootloader eq 'grub2', "Old Microos UEFI is grub2";
+    set_var('UPGRADE', 0);
+
+    set_var('BOOTLOADER', 'does-not-exist');
+    dies_ok { get_default_bootloader } "Bootloader variable set, non existant bootloader, causes failure";
+
+    set_var('BOOTLOADER', 'grub2');
+    ok get_default_bootloader eq 'grub2', "Forcing bootloader works";
 };
 
 done_testing;

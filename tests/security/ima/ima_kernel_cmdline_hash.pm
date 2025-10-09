@@ -6,14 +6,13 @@
 # Tags: poo#48932, poo#100892
 
 use base "opensusebasetest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
 use bootloader_setup qw(add_grub_cmdline_settings replace_grub_cmdline_settings);
 use power_action_utils "power_action";
-use version_utils;
+use version_utils qw(is_sle is_leap);
+use Utils::Architectures qw(is_aarch64);
 
 sub run {
     my ($self) = @_;
@@ -39,7 +38,9 @@ sub run {
     my $results = script_run("zcat /proc/config.gz | grep CONFIG_CRYPTO_TGR192");
     if ($results) {
         for (my $i = 0; $i < scalar(@algo_list); $i++) {
+
             splice @algo_list, $i, 1 if ($algo_list[$i]->{algo} eq 'tgr192');
+
         }
         $algo_modlist =~ s/ tgr192//;
     }
@@ -62,15 +63,20 @@ sub run {
 
         # Reboot to make settings work
         power_action('reboot', textmode => 1);
-        $self->wait_boot;
+        my $boot_method = ((is_aarch64 && is_sle('>=16')) ? 'wait_boot_past_bootloader' : 'wait_boot');
+        $self->$boot_method;
         select_serial_terminal;
 
         my $meas_tmpfile = "/tmp/ascii_runtime_measurements-$ima_hash";
         assert_script_run("cp $meas_file $meas_tmpfile");
         upload_logs "$meas_tmpfile";
-
-        my $out = script_output("grep '^10\\s*[a-fA-F0-9]\\{40\\}\\s*ima-ng\\s*$ima_hash:[a-fA-F0-9]\\{$hash_algo->{len}\\}\\s*\\/' $meas_file |wc -l");
-        die('Too few items') if ($out < 100);
+        my $retries = 30;
+        while ($retries--) {
+            sleep 0.1;
+            my $out = script_output("grep '^10\\s*[a-fA-F0-9]\\{40\\}\\s*ima-ng\\s*$ima_hash:[a-fA-F0-9]\\{$hash_algo->{len}\\}\\s*\/' $meas_file |wc -l");
+            last if ($out >= 100);    # 100 is a rough estimate, not strict requirement
+        }
+        die('Too few items') unless $retries;
     }
 }
 

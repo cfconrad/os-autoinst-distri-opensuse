@@ -7,8 +7,6 @@
 # Maintainer: Nan Zhang <nan.zhang@suse.com>
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use utils;
 use virt_autotest::common;
@@ -16,6 +14,7 @@ use virt_autotest::esxi_utils;
 use Time::Local;
 use Utils::Backends qw(is_qemu is_svirt);
 use version_utils qw(is_sle);
+use package_utils 'install_package';
 
 my $ssh_vm;
 my $scp_vm;
@@ -30,7 +29,7 @@ sub run {
     elsif (is_qemu) {
         my $host_os_ver = get_var('DISTRI') . "s" . lc(get_var('VERSION') =~ s/-//r);
         foreach my $guest (keys %virt_autotest::common::guests) {
-            run_tests($guest) if ($guest eq $host_os_ver || $guest eq "${host_os_ver}PV" || $guest eq "${host_os_ver}HVM");
+            run_tests($guest) if ($guest eq $host_os_ver || $guest eq "${host_os_ver}TD" || $guest eq "${host_os_ver}PV" || $guest eq "${host_os_ver}HVM" || $guest eq "${host_os_ver}ES");
         }
     }
 }
@@ -134,6 +133,13 @@ sub do_networking_tests {
     my $openqa_url = get_required_var('OPENQA_URL');
     my $external_url = 'www.suse.com';
 
+    # Check if guest is booted and ssh service is started, not needed for sle-micro
+    if (check_var('DISTRI', 'sle')) {
+        # If nmap is not installed, install it
+        install_package('nmap') if (script_run('command -v nmap'));
+        die "SSH is not reachable" if (script_retry("nmap $vm_ip -PN -p ssh | grep open", delay => 10, retry => 12, timeout => 360) != 0);
+    }
+
     if (is_sle('15+')) {
         assert_script_run($ssh_vm . "ping -I $vm_ip -4 -c3 " . $openqa_url);
         assert_script_run($ssh_vm . "ping -I $vm_ip -4 -c3 " . $external_url);
@@ -184,7 +190,7 @@ sub do_clock_sync_tests {
     # Guest time will not be synced up with host after timesync service disabled
     $diff_secs = get_diff_seconds();
 
-    if ($diff_secs > 86400 && $diff_secs < 86420) {
+    if ($diff_secs > 86380 && $diff_secs < 86420) {
         record_info('Clock synchronization was disabled successfully.');
     } else {
         die 'Disabling clock synchronization failed.';

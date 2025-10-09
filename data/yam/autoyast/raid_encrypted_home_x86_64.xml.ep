@@ -84,7 +84,7 @@
       <partitions t="list">
         <partition t="map">
           <create t="boolean">false</create>
-          <crypt_key>nots3cr3t</crypt_key>
+          <crypt_key>{{PASSWORD}}</crypt_key>
           <crypt_method t="symbol">luks1</crypt_method>
           <filesystem t="symbol">xfs</filesystem>
           <format t="boolean">false</format>
@@ -232,7 +232,6 @@
       <package>xfsprogs</package>
       <package>wicked</package>
       <package>sle-module-server-applications-release</package>
-      <package>sle-module-python3-release</package>
       <package>sle-module-basesystem-release</package>
       <package>openssh</package>
       <package>mdadm</package>

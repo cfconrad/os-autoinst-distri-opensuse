@@ -18,10 +18,7 @@
 # Maintainer: QE-SAP <qe-sap@suse.de>
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
-use serial_terminal 'select_serial_terminal';
 use lockapi;
 use hacluster qw(check_cluster_state
   get_cluster_name
@@ -30,8 +27,11 @@ use hacluster qw(check_cluster_state
   ha_export_logs
   setup_sbd_delay
   wait_until_resources_started
+  prepare_console_for_fencing
 );
-use utils qw(zypper_call);
+use utils qw(zypper_call reconnect_mgmt_console);
+use Utils::Backends 'is_pvm';
+use version_utils qw(is_sle);
 use Mojo::JSON qw(encode_json);
 
 our $dir_log = '/var/lib/crmsh/crash_test/';
@@ -46,9 +46,13 @@ sub run {
     my ($self) = @_;
     my $cluster_name = get_cluster_name;
     my $node_was_fenced = 0;
+    my $cmd_fails = 0;
+
+    # As this module causes a fence operation, we need to prepare the console for assert_screen
+    # on grub2 and bootmenu
+    prepare_console_for_fencing;
 
     # Ensure that the cluster state is correct before executing the checks
-    select_serial_terminal;
     check_cluster_state;
 
     # We have to wait for previous nodes to finish the tests, as they can't be done in parallel without any damages!
@@ -68,17 +72,26 @@ sub run {
         # Execute the command
         my $cmd = "crm cluster crash_test --$check --force";
         record_info($check, "Executing $cmd");
-        my $cmd_fails = script_run($cmd, die_on_timeout => 0);
+        if ($check eq 'split-brain-iptables') {
+            # iptables is not installed in SLE 16 by default
+            zypper_call 'in iptables' if is_sle('>=16');
+            # Wait for a moment and save the screen shot for debugging purpose
+            enter_cmd $cmd, wait_still_screen => 10;
+            save_screenshot();
+            $cmd_fails = 0;
+        }
+        else { $cmd_fails = script_run("timeout 20 $cmd"); }
 
         # Killing pacemaker should result in service restart
         # All remaining commands lead to a reboot of the node
         my $loop_count = bmwqemu::scale_timeout(15);    # Wait 1 minute (15*4) maximum, can be scaled with SCALE_TIMEOUT
         while (1) {
             last if ($loop_count-- <= 0);
+            reconnect_mgmt_console if (is_pvm && ($check ne 'kill-pacemakerd'));
             if (check_screen('grub2', 0, no_wait => 1)) {
                 # Wait for boot and reconnect to root console
                 $self->wait_boot;
-                select_serial_terminal;
+                select_console 'root-console';
                 # Wait for fencing delay and resources to start. Test should wait a little longer than startup delay.
                 sleep $start_delay_after_fencing + 15;
                 wait_until_resources_started();
@@ -101,6 +114,9 @@ sub run {
         # remaining checks should trigger fencing
         if ($node_was_fenced) {
             record_info('WARNING', "The node was fenced while executing '$cmd'");
+        }
+        elsif ($check eq 'split-brain-iptables') {
+            record_info('ERROR', "Execution of '$cmd' did not result in a fence", result => 'fail');
         }
         else {
             record_info('ERROR', "Failure while executing '$cmd'", result => 'fail') unless (defined $cmd_fails and $cmd_fails == 0);
@@ -144,7 +160,7 @@ sub run {
 }
 
 sub test_flags {
-    return {milestone => 1, fatal => 0};
+    return {milestone => 1, fatal => 1};
 }
 
 sub post_fail_hook {
@@ -160,7 +176,7 @@ sub post_fail_hook {
     ha_export_logs;
 
     # Execute the common part
-    $self->post_fail_hook;
+    $self->SUPER::post_fail_hook();
 }
 
 1;

@@ -19,6 +19,9 @@ use version_utils 'is_sle';
 #   * location of the installation tree
 #   * autoyast profile
 #   * extra parameters for virsh create / xl create
+#   * boot_firmware: 'efi' - specifies the firmware type for VM boot
+#     - 'efi': Use UEFI firmware (modern, recommended for SLES 15+)
+#     - If not specified: Use default BIOS firmware (legacy systems, compatibility)
 # By default, our guests will be installed via `virt-install`. If "method => 'import'" is set, the virtual machine will
 # be imported instead of installed.
 my $guest_version = "";
@@ -34,115 +37,91 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             name => 'sles15sp2HVM',
             autoyast => 'autoyast_xen/sles15sp2HVM_PRG.xml',
             extra_params => '--connect xen:/// --virt-type xen --hvm --os-variant sle15sp1',    # sle15sp2 is unknown on 12.3
-            macaddress => '52:54:00:78:73:b0',
-            ip => '192.168.122.116',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.116/24,192.168.122.1,192.168.122.1"',
         },
         sles15sp2PV => {
             name => 'sles15sp2PV',
             autoyast => 'autoyast_xen/sles15sp2PV_PRG.xml',
             extra_params => '--connect xen:/// --virt-type xen --paravirt --os-variant sle15sp1',    # sle15sp2 is unknown on 12.3
-            macaddress => '52:54:00:78:73:af',
-            ip => '192.168.122.115',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.115/24,192.168.122.1,192.168.122.1"',
         },
         sles15sp3PV => {
             name => 'sles15sp3PV',
             autoyast => 'autoyast_xen/sles15sp3PV_PRG.xml',
             extra_params => '--os-variant sle15-unknown',
-            macaddress => '52:54:00:78:73:b1',
-            ip => '192.168.122.117',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP3-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.117/24,192.168.122.1,192.168.122.1"',
         },
         sles15sp3HVM => {
             name => 'sles15sp3HVM',
             autoyast => 'autoyast_xen/sles15sp3HVM_PRG.xml',
             extra_params => '--os-variant sle15-unknown',
-            macaddress => '52:54:00:78:73:b2',
-            ip => '192.168.122.118',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP3-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.118/24,192.168.122.1,192.168.122.1"',
         },
         sles12sp5HVM => {
             name => 'sles12sp5HVM',
             autoyast => 'autoyast_xen/sles12sp5HVM_PRG.xml',
             extra_params => '--connect xen:/// --virt-type xen --hvm --os-variant sles12sp4',    # old system compatibility
-            macaddress => '52:54:00:78:73:ad',
-            ip => '192.168.122.113',
             distro => 'SLE_12_SP5',
             location => 'http://mirror.suse.cz/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.113/24,192.168.122.1,192.168.122.1"',
         },
         sles12sp5PV => {
             name => 'sles12sp5PV',
             autoyast => 'autoyast_xen/sles12sp5PV_PRG.xml',
             extra_params => '--connect xen:/// --virt-type xen --paravirt --os-variant sles12sp4',    # old system compatibility
-            macaddress => '52:54:00:78:73:ae',
-            ip => '192.168.122.114',
             distro => 'SLE_12_SP5',
             location => 'http://mirror.suse.cz/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.114/24,192.168.122.1,192.168.122.1"',
         },
         sles15sp4PV => {
             name => 'sles15sp4PV',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
-            macaddress => '52:54:00:78:73:a5',
-            ip => '192.168.122.110',
             distro => 'SLE_15_SP4',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.110/24,192.168.122.1,192.168.122.1"'
         },
         sles15sp4HVM => {
             name => 'sles15sp4HVM',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
-            macaddress => '52:54:00:78:73:a6',
-            ip => '192.168.122.108',
             distro => 'SLE_15_SP4',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.108/24,192.168.122.1,192.168.122.1"'
         },
         sles15sp5PV => {
             name => 'sles15sp5PV',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
-            macaddress => '52:54:00:78:73:a7',
-            ip => '192.168.122.119',
             distro => 'SLE_15_SP5',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.119/24,192.168.122.1,192.168.122.1"'
         },
         sles15sp5HVM => {
             name => 'sles15sp5HVM',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
-            macaddress => '52:54:00:78:73:a8',
-            ip => '192.168.122.120',
             distro => 'SLE_15_SP5',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.120/24,192.168.122.1,192.168.122.1"'
         },
         sles15sp6PV => {
             name => 'sles15sp6PV',
             extra_params => '--os-variant sle15-unknown',
-            macaddress => '52:54:00:78:73:a9',
-            ip => '192.168.122.121',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.121/24,192.168.122.1,192.168.122.1"'
         },
         sles15sp6HVM => {
             name => 'sles15sp6HVM',
             extra_params => '--os-variant sle15-unknown',
-            macaddress => '52:54:00:78:73:a0',
-            ip => '192.168.122.122',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.122/24,192.168.122.1,192.168.122.1"'
+        },
+        sles15sp7PV => {
+            name => 'sles15sp7PV',
+            extra_params => '--os-variant sle15-unknown',
+            distro => 'SLE_15',
+            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+        },
+        sles15sp7HVM => {
+            name => 'sles15sp7HVM',
+            extra_params => '--os-variant sle15-unknown',
+            distro => 'SLE_15',
+            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
         }
     );
     # Filter out guests not allowed for the detected SLE version
@@ -176,6 +155,11 @@ if (get_var("REGRESSION", '') =~ /xen/) {
         foreach my $guest (keys %guests) {
             delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
         }
+    } elsif (is_sle('=15-SP7')) {
+        my @allowed_guests = qw(sles12sp5HVM sles12sp5PV sles15sp6HVM sles15sp6PV sles15sp7HVM sles15sp7PV);
+        foreach my $guest (keys %guests) {
+            delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
+        }
     } else {
         %guests = ();
     }
@@ -187,68 +171,67 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             name => 'sles12sp3',
             autoyast => 'autoyast_kvm/sles12sp3_PRG.xml',
             extra_params => '--os-variant sles12sp3',
-            macaddress => '52:54:00:78:73:a2',
-            ip => '192.168.122.102',
             distro => 'SLE_12_SP3',
             location => 'http://mirror.suse.cz/install/SLP/SLE-12-SP3-Server-GM/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.102/24,192.168.122.1,192.168.122.1"',
         },
         sles15sp2 => {
             name => 'sles15sp2',
             autoyast => 'autoyast_kvm/sles15sp2_PRG.xml',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade (originally sle15sp2)
-            macaddress => '52:54:00:78:73:af',
-            ip => '192.168.122.115',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.115/24,192.168.122.1,192.168.122.1"',
         },
         sles15sp3 => {
             name => 'sles15sp3',
             autoyast => 'autoyast_kvm/sles15sp3_PRG.xml',
             extra_params => '--os-variant sle15-unknown',
-            macaddress => '52:54:00:78:73:b1',
-            ip => '192.168.122.117',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP3-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.117/24,192.168.122.1,192.168.122.1"',
         },
         sles12sp5 => {
             name => 'sles12sp5',
             autoyast => 'autoyast_kvm/sles12sp5_PRG.xml',
             extra_params => '--os-variant sles12sp4',    # old system compatibility
-            macaddress => '52:54:00:78:73:ad',
-            ip => '192.168.122.113',
             distro => 'SLE_12_SP5',
             location => 'http://mirror.suse.cz/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.113/24,192.168.122.1,192.168.122.1"',
         },
         sles15sp4 => {
             name => 'sles15sp4',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
-            macaddress => '52:54:00:78:73:a6',
-            ip => '192.168.122.108',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.108/24,192.168.122.1,192.168.122.1"'
         },
         sles15sp5 => {
             name => 'sles15sp5',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
-            macaddress => '52:54:00:78:73:a7',
-            ip => '192.168.122.109',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.109/24,192.168.122.1,192.168.122.1"'
         },
         sles15sp6 => {
             name => 'sles15sp6',
             extra_params => '--os-variant sle15-unknown',
-            macaddress => '52:54:00:78:73:b8',
-            ip => '192.168.122.111',
             distro => 'SLE_15',
             location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
-            linuxrc => 'ifcfg="eth0=192.168.122.111/24,192.168.122.1,192.168.122.1"'
+        },
+        sles15sp6efi => {
+            name => 'sles15sp6efi',
+            extra_params => '--os-variant sle15-unknown',
+            distro => 'SLE_15',
+            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
+            boot_firmware => 'efi',    # EFI version of SLES 15 SP6
+        },
+        sles15sp7 => {
+            name => 'sles15sp7',
+            extra_params => '--os-variant sle15-unknown',
+            distro => 'SLE_15',
+            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+        },
+        sles15sp7efi => {
+            name => 'sles15sp7efi',
+            extra_params => '--os-variant sle15-unknown',
+            distro => 'SLE_15',
+            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+            boot_firmware => 'efi',    # EFI version of SLES 15 SP7
         }
     );
     # Filter out guests not allowed for the detected SLE version
@@ -287,6 +270,15 @@ if (get_var("REGRESSION", '') =~ /xen/) {
         foreach my $guest (keys %guests) {
             delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
         }
+    } elsif (is_sle('=15-SP7')) {
+        my @allowed_guests = qw(sles12sp5 sles15sp6 sles15sp7);
+        # For SEV-SNP guest verification, use specific guest sets
+        if (check_var('ENABLE_SEV_SNP', '1')) {
+            @allowed_guests = qw(sles15sp6efi sles15sp7efi);
+        }
+        foreach my $guest (keys %guests) {
+            delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
+        }
     } else {
         %guests = ();
     }
@@ -300,8 +292,11 @@ if (get_var("REGRESSION", '') =~ /xen/) {
         sles12sp5 => {
             name => 'sles12sp5',
         },
-        sles15sp2 => {
-            name => 'sles15sp2',
+        sles12sp5ES => {
+            name => 'sles12sp5ES',
+        },
+        sles15sp2TD => {
+            name => 'sles15sp2TD',
         },
         sles15sp3 => {
             name => 'sles15sp3',
@@ -318,8 +313,11 @@ if (get_var("REGRESSION", '') =~ /xen/) {
         sles15sp6 => {
             name => 'sles15sp6',
         },
+        sles15sp7 => {
+            name => 'sles15sp7',
+        },
     );
-    %guests = get_var('TERADATA') ? %guests{"sles${guest_version}TD"} : %guests{"sles${guest_version}"};
+    %guests = get_var('TERADATA') ? %guests{"sles${guest_version}TD"} : (get_var('INCIDENT_REPO') =~ /LTSS-Extended-Security/) ? %guests{"sles${guest_version}ES"} : %guests{"sles${guest_version}"};
 
 } elsif (get_var("REGRESSION", '') =~ /hyperv/) {
     %guests = (
@@ -329,7 +327,10 @@ if (get_var("REGRESSION", '') =~ /xen/) {
         sles12sp5 => {
             vm_name => 'sles-12.5_openQA-virtualization-maintenance',
         },
-        sles15sp2 => {
+        sles12sp5ES => {
+            vm_name => 'sles-12.5_openQA-virtualization-maintenance-ES',
+        },
+        sles15sp2TD => {
             vm_name => 'sles-15.2_openQA-virtualization-maintenance',
         },
         sles15sp3 => {
@@ -347,8 +348,11 @@ if (get_var("REGRESSION", '') =~ /xen/) {
         sles15sp6 => {
             vm_name => 'sles-15.6_openQA-virtualization-maintenance',
         },
+        sles15sp7 => {
+            vm_name => 'sles-15.7_openQA-virtualization-maintenance',
+        },
     );
-    %guests = get_var('TERADATA') ? %guests{"sles${guest_version}TD"} : %guests{"sles${guest_version}"};
+    %guests = get_var('TERADATA') ? %guests{"sles${guest_version}TD"} : (get_var('INCIDENT_REPO') =~ /LTSS-Extended-Security/) ? %guests{"sles${guest_version}ES"} : %guests{"sles${guest_version}"};
 }
 
 our %imports = ();    # imports are virtual machines that we don't install but just import. We test those separately.

@@ -1,12 +1,10 @@
-# Copyright 2023 SUSE LLC
+# Copyright 2023-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Power off Elemental OS server
 # Maintainer: elemental@suse.de
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 
 use testapi;
 use power_action_utils qw(power_action);

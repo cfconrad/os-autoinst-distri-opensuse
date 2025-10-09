@@ -20,13 +20,11 @@
 # Tags: poo#65375, poo#97685, poo#104556
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use Utils::Backends;
 use Utils::Architectures;
 use utils;
-use version_utils qw(is_sle is_public_cloud is_transactional is_sle_micro);
+use version_utils qw(is_sle is_public_cloud is_transactional is_sle_micro is_jeos);
 use utils qw(zypper_call package_upgrade_check);
 use transactional qw(trup_call process_reboot);
 
@@ -96,14 +94,35 @@ EOF
     }
 
     assert_screen("gpg-passphrase-enter");
-    enter_cmd "REALSECRETPHRASE";    # Input insecure passphrase
-    assert_screen("gpg-passphrase-insecure");
-    send_key 'tab';
-    send_key 'ret';
-    assert_screen("gpg-passphrase-enter");
-    enter_cmd "$passwd";
-    assert_screen("gpg-passphrase-reenter");
-    enter_cmd "$passwd";
+
+    # Different behavior for pinentry >= 1.3.0, which has a single dialog
+    # for passphrase entry and repetition with strength meter.
+    # Would use match_has_tag here, but old tags match the new screen as well.
+    if (check_screen "gpg-passphrase-enter-with-repeat") {
+        # Attempt an insecure passphrase first
+        type_string "REALSECRETPHRASE";
+        send_key 'tab';
+        type_string "REALSECRETPHRASE";
+        send_key 'ret';
+
+        assert_screen("gpg-passphrase-insecure");
+        send_key 'tab';
+        send_key 'ret';
+
+        type_string "$passwd";
+        send_key 'tab';
+        type_string "$passwd";
+        send_key 'ret';
+    } else {
+        enter_cmd "REALSECRETPHRASE";    # Input insecure passphrase
+        assert_screen("gpg-passphrase-insecure");
+        send_key 'tab';
+        send_key 'ret';
+        assert_screen("gpg-passphrase-enter");
+        enter_cmd "$passwd";
+        assert_screen("gpg-passphrase-reenter");
+        enter_cmd "$passwd";
+    }
 
     # According to FIPS PUB 186-4 Digital Signature Standard (DSS), only the
     # 2048 and 3072 key length should be supported by default.
@@ -159,8 +178,11 @@ EOF
 sub run {
     select_console 'root-console';
 
+    my $gpg_fips_string = check_var('FIPS_ENABLED', '1') ? "fips-mode:y::Libgcrypt" : "fips-mode:n::";
+    validate_script_output("gpgconf --show-versions", sub { m/.*$gpg_fips_string.*/ }) if (is_sle('15+') && !is_jeos && !is_public_cloud);
+
     # increase entropy for key generation for s390x on svirt backend
-    if (is_s390x && ((is_sle('15+') || is_transactional) && (is_svirt))) {
+    if (is_s390x && ((is_sle('15+') && is_sle('<16')) || is_transactional) && (is_svirt)) {
         if (is_transactional) {
             trup_call('pkg install haveged');
             process_reboot(trigger => 1);
@@ -212,6 +234,10 @@ sub run {
     foreach my $len ('1024', '2048', '3072', '4096') {
         gpg_test($len, $gpg_version);
     }
+}
+
+sub test_flags {
+    return {fatal => 0};
 }
 
 1;

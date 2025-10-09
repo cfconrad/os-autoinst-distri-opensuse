@@ -1,26 +1,27 @@
-# Copyright 2022 SUSE LLC
+# Copyright SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-Later
 #
-# Summary: Verify the "aulastlog" can print the last login for all users of a machine similar to the way lastlog does
-#          The login name, port and last login time will be printed
+# Summary: Verify the "aulastlog" can print the last login for all users of a
+#          machine similar to the way lastlog does.
+#          The login name, port and last login time will be printed.
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#81772, tc#1768580
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
 use utils;
+use version_utils qw(is_tumbleweed);
 
 sub run {
     my $audit_log = '/var/log/audit/audit.log';
     my $user = 'suse';
-    my $pwd = 'testpassw0rd';
+    my $pwd = 'Hello-World';
+    my $audit_service = 'auditd';
 
     select_console 'root-console';
 
     # Restart auditd, since auditd is stopped in the previous case
-    assert_script_run('systemctl restart auditd');
+    assert_script_run("systemctl restart $audit_service");
 
     # Run aulastlog directly
     assert_script_run('aulastlog');

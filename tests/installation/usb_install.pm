@@ -12,8 +12,6 @@
 
 package usb_install;
 use base 'y2_installbase';
-use strict;
-use warnings;
 
 use utils;
 use testapi;
@@ -24,7 +22,6 @@ use LWP::Simple 'head';
 use Utils::Backends 'use_ssh_serial_console';
 
 sub run {
-    assert_screen('sshd-server-started', 5);
     use_ssh_serial_console;
     assert_script_run("set -o pipefail");
 

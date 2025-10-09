@@ -44,6 +44,8 @@
     </crash_kernel>
     <crash_xen_kernel>201M\&lt;4G</crash_xen_kernel>
   </kdump>
+  <!--12sp3 TD shall not do any registration at all, see poo#170233-->
+  % unless ($check_var->('NO_REGISTER', '1')) {
   <suse_register>
     <do_registration config:type="boolean">true</do_registration>
     <email><%= $get_var->('SCC_EMAIL') %></email>
@@ -53,7 +55,11 @@
     <addons config:type="list">
       % while (my ($key, $addon) = each (%$addons)) {
       <addon>
+        % if ($check_var->('EXTENDED_SECURITY', '1')) {
+        <name>SLES-LTSS-Extended-Security</name>
+        % } else {
         <name><%= $addon->{name} %></name>
+        % }
         <version><%= $addon->{version} %></version>
         <arch><%= $addon->{arch} %></arch>
         <release_type/>
@@ -66,21 +72,24 @@
         % if ($key eq 'rt') {
         <reg_code><%= $get_var->('SCC_REGCODE_RT') %></reg_code>
         % }
-        % if ($key eq 'ltss') {
+        % if ($key eq 'ltss' and $check_var->('EXTENDED_SECURITY', '0')) {
         <reg_code><%= $get_var->('SCC_REGCODE_LTSS') %></reg_code>
+        % }
+        % if ($key eq 'ltss' and $check_var->('EXTENDED_SECURITY', '1')) {
+        <reg_code><%= $get_var->('SCC_REGCODE_LTSS_ES') %></reg_code>
         % }
       </addon>
       % }
     </addons>
     %}
   </suse_register>
+  % }
   <add-on>
     <add_on_products config:type="list">
       % if ($check_var->('VERSION', '12-SP3')) {
       <listentry>
-        <media_url>http://updates.nue.suse.com/download/SUSE/Updates/SLE-SERVER/12-SP3-LTSS-TERADATA/x86_64/update/</media_url>
-        <!--media_url>http://dist.suse.de/updates/SUSE/Updates/SLE-SERVER/12-SP3-LTSS-TERADATA/x86_64/update/</media_url-->
-        <alias>SLES12-SP3-LTSS-TERADATA</alias>
+        <media_url>http://updates.nue.suse.com/download/SUSE/Updates/SLE-SERVER/12-SP3-TERADATA/x86_64/update/</media_url>
+        <alias>SLES12-SP3-TERADATA</alias>
       </listentry>
       % }
     % unless ($check_var->('PATCH_WITH_ZYPPER', '1')) {
@@ -123,7 +132,7 @@
   </networking>
   <partitioning config:type="list">
     <drive>
-  % my $wwn = {'lipa' => 'wwn-0x5002538c4002f8bd', briza => 'wwn-0x5000c5004f0e566d'};
+  % my $wwn = {'lipa' => 'wwn-0x5002538c4002f8bd', briza => 'wwn-0x5000c5004f0e566d', quinn => 'wwn-0x5000c50099db2117'};
   % my $hostname = (split(/\./, $get_var->("SUT_IP")))[0];
   % my $device_id = defined($wwn->{$hostname}) ? '/dev/disk/by-id/' . $wwn->{$hostname} : '';
       <device><%= $device_id %></device>
@@ -279,6 +288,28 @@
     </user>
   </users>
   <scripts>
+    <pre-scripts config:type="list">
+      <script>
+        <filename>pre_erase_all_disks.sh</filename>
+        <interpreter>shell</interpreter>
+        <source><![CDATA[
+#!/bin/sh
+disks=$(lsblk -n -l -o NAME -d -e 7,11,254);
+for disk in $disks;do
+    echo "Wiping /dev/$disk..."
+    wipefs -af /dev/$disk
+    sync
+    parted -s /dev/$disk mklabel gpt
+    sync
+done
+echo "All disks are wiped out."
+lsblk
+]]>
+        </source>
+        <feedback config:type="boolean">false</feedback>
+        <notification>Please wait while pre-script is running...</notification>
+      </script>
+    </pre-scripts>
     <post-scripts config:type="list">
       <script>
         <filename>debug_libvirtd.sh</filename>

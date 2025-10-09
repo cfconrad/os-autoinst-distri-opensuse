@@ -12,8 +12,6 @@
 # Maintainer: Jose Lausuch <jalausuch@suse.com>
 
 use base "opensusebasetest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use Utils::Backends;
@@ -42,7 +40,7 @@ sub run {
     # install dependencies
     zypper_call('--quiet in pciutils mstflint', timeout => 200);
 
-    my @devices = split(' ', script_output("lspci | grep -i infiniband.*mellanox |cut  -d ' ' -f 1"));
+    my @devices = split(' ', script_output("lspci | grep -i mellanox.*ConnectX-5 |cut  -d ' ' -f 1"));
 
     die "There is no Mellanox card here" if !@devices;
 

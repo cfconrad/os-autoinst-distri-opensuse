@@ -10,8 +10,6 @@
 # Maintainer: Dominik Heidler <dheidler@suse.de>
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -26,7 +24,8 @@ sub run {
         zypper_call 'in systemd-network';
         systemctl 'is-enabled systemd-networkd', expect_false => 1;
         systemctl 'is-active systemd-networkd', expect_false => 1;
-        assert_script_run 'networkctl status';
+        script_run 'networkctl status';
+        assert_script_run 'networkctl';
     }
 
     my $network_daemon = script_output 'readlink /etc/systemd/system/network.service | sed \'s#.*/\(.*\)\.service#\1#\'';
@@ -37,7 +36,11 @@ sub run {
     my $unexpected = 'wicked';
     my $reason = 'networking';
 
-    if (is_jeos && (is_sle || is_leap)) {
+    if (is_sle("16+") || is_leap("16+")) {
+        $expected = 'NetworkManager';
+        $unexpected = 'wicked';
+        $reason = 'networking';
+    } elsif (is_jeos && (is_sle || is_leap)) {
         $expected = 'wicked';
         $unexpected = 'NetworkManager';
         $reason = 'JeOS';

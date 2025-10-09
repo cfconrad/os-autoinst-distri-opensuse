@@ -6,18 +6,14 @@
 # Summary: Show the testresults of a job
 # Maintainer: Dominik Heidler <dheidler@suse.de>
 
-use strict;
-use warnings;
 use base "x11test";
 use testapi;
 
-my $tutorial_disabled;
-
 sub upload_autoinst_log {
-    assert_script_run 'openqa-client jobs/1/cancel post';
+    assert_script_run 'openqa-cli api -X post jobs/1/cancel';
     for my $i (1 .. 10) {
         # wait for test to finish and upload
-        last if (script_run('openqa-client jobs/1 | grep state | grep done', 40) == 0);
+        last if (script_run('openqa-cli api --pretty jobs/1 | grep state | grep done', 40) == 0);
         sleep 5;
     }
     if (script_run('wget http://localhost/tests/1/file/autoinst-log.txt') != 0) {
@@ -29,20 +25,7 @@ sub upload_autoinst_log {
     }
 }
 
-sub handle_notify_popup {
-    assert_screen 'openqa-dont-notify-me';
-    for my $i (1 .. 5) {
-        assert_and_click 'openqa-dont-notify-me';
-        if (check_screen('openqa-tutorial-confirm', 15)) {
-            last;
-        }
-    }
-    assert_and_click 'openqa-tutorial-confirm';
-    assert_screen 'openqa-tutorial-closed';
-}
-
 sub run {
-    handle_notify_popup;
     assert_screen 'openqa-tests';
     assert_and_click 'openqa-tests';
     # At this point the openQA job might still be running or already finished.

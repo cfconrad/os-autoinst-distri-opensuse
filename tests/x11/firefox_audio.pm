@@ -16,15 +16,13 @@
 # Maintainer: QE Core <qe-core@suse.de>
 
 use base "x11test";
-use strict;
-use warnings;
 use testapi;
 
 sub run {
     my ($self) = @_;
     select_console 'x11';
     start_audiocapture;
-    x11_start_program('firefox ' . data_url('1d5d9dD.oga'), target_match => [qw(command-not-found test-firefox_audio-1)], match_timeout => 90);
+    x11_start_program('firefox ' . data_url('1d5d9dD.oga'), target_match => [qw(command-not-found test-firefox_audio-1 test-firefox_audio-notplayed)], match_timeout => 90);
     #  re-try for typing issue, see https://progress.opensuse.org/issues/54401
     if (match_has_tag 'command-not-found') {
         for my $retry (0 .. 2) {
@@ -33,12 +31,14 @@ sub run {
             last if (match_has_tag 'test-firefox_audio-1');
         }
     }
+    if (match_has_tag 'test-firefox_audio-notplayed') {
+        record_info('poo#186585', 'Play the audio file manually');
+        send_key_until_needlematch('test-firefox_audio-1', 'spc', 3, 3);
+    }
     sleep 1;    # at least a second of silence
 
-    # firefox_audio is unstable due to bsc#1048271, we don't want to invest
-    # time in rerunning it, if it fails, so instead of assert, simply soft-fail
     unless (check_recorded_sound 'DTMF-159D') {
-        record_soft_failure 'bsc#1048271';
+        record_info("bsc#1048271", "WONTFIX - Tones are sporadically played with lower frequencies");
     }
     send_key 'alt-f4';
     assert_screen([qw(firefox-save-and-quit generic-desktop)]);

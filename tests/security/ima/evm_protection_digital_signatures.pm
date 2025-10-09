@@ -7,13 +7,13 @@
 # Tags: poo#53579, poo#100694, poo#102311
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
-use bootloader_setup qw(replace_grub_cmdline_settings tianocore_disable_secureboot);
+use bootloader_setup qw(replace_grub_cmdline_settings);
 use power_action_utils 'power_action';
+use security::config;
+use security::secureboot qw(handle_secureboot);
 
 sub run {
     my ($self) = @_;
@@ -24,16 +24,15 @@ sub run {
     my $sample_cmd = 'yes --version';
 
     my $mok_priv = '/root/certs/key.asc';
-    my $mok_pass = 'suse';
 
     # Execute additional chattr -i '{}' before evmctl sign as a workaround
     # for find command issue which always execute the signing and "chattr +i"
     # command twice.
     my @sign_cmd = (
-        "/usr/bin/find / -fstype $fstype -type f -executable -uid 0 -exec evmctl sign -p$mok_pass -k $mok_priv '{}' \\;",
-"for D in /lib /lib64 /usr/lib /usr/lib64; do /usr/bin/find \"\$D\" -fstype $fstype -\\! -executable -type f -name '*.so*' -uid 0 -exec chattr -i '{}' \\; -exec evmctl sign -p$mok_pass -k $mok_priv '{}' \\; -exec chattr +i '{}' \\; ; done",
-"/usr/bin/find /lib/modules -fstype $fstype -type f -name '*.ko' -uid 0 -exec chattr -i '{}' \\; -exec evmctl sign -p$mok_pass -k $mok_priv '{}' \\; -exec chattr +i '{}' \\;",
-"/usr/bin/find /lib/firmware -fstype $fstype -type f -uid 0 -exec chattr -i '{}' \\; -exec evmctl sign -p$mok_pass -k $mok_priv '{}' \\; -exec chattr +i '{}' \\;"
+        "/usr/bin/find / -fstype $fstype -type f -executable -uid 0 -exec evmctl sign -p$security::config::mok_pw -k $mok_priv '{}' \\;",
+"for D in /lib /lib64 /usr/lib /usr/lib64; do /usr/bin/find \"\$D\" -fstype $fstype -\\! -executable -type f -name '*.so*' -uid 0 -exec chattr -i '{}' \\; -exec evmctl sign -p$security::config::mok_pw -k $mok_priv '{}' \\; -exec chattr +i '{}' \\; ; done",
+"/usr/bin/find /lib/modules -fstype $fstype -type f -name '*.ko' -uid 0 -exec chattr -i '{}' \\; -exec evmctl sign -p$security::config::mok_pw -k $mok_priv '{}' \\; -exec chattr +i '{}' \\;",
+"/usr/bin/find /lib/firmware -fstype $fstype -type f -uid 0 -exec chattr -i '{}' \\; -exec evmctl sign -p$security::config::mok_pw -k $mok_priv '{}' \\; -exec chattr +i '{}' \\;"
     );
 
     for my $s (@sign_cmd) {
@@ -65,9 +64,7 @@ sub run {
 
         # We need re-enable the secureboot after removing "ima_appraise=fix" kernel parameter
         power_action('reboot', textmode => 1);
-        $self->wait_grub(bootloader_time => 200);
-        $self->tianocore_disable_secureboot('re_enable');
-        $self->wait_boot(textmode => 1);
+        handle_secureboot($self, 're_enable');
         select_serial_terminal;
 
         my $ret = script_output($sample_cmd, 30, proceed_on_failure => 1);

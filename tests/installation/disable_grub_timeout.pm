@@ -10,8 +10,6 @@
 # - Save screenshot
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
-use strict;
-use warnings;
 use base 'y2_installbase';
 use testapi;
 use utils;
@@ -70,13 +68,15 @@ sub run {
 
     send_key_until_needlematch 'inst-bootloader-options-highlighted', $bsc_1208266_needed ? $bootloader_shortcut : 'right', 20, 2;
     assert_screen 'installation-bootloader-options';
-    # Select Timeout dropdown box and disable
-    send_key 'alt-t';
-    wait_still_screen(1);
+
     my $timeout = "-1";
     # SLE-12 GA only accepts positive integers in range [0,300]
     $timeout = "60" if is_sle('<12-SP1');
     $timeout = "90" if (get_var("REGRESSION", '') =~ /xen|kvm|qemu/);
+
+    # Select Timeout dropdown box and disable
+    send_key 'alt-t';
+    wait_still_screen(1);
     type_string $timeout;
 
     wait_still_screen(1);

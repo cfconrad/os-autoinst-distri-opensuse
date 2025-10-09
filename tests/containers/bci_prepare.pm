@@ -21,133 +21,129 @@
 
 use Mojo::Base qw(consoletest);
 use XML::LibXML;
-use utils qw(zypper_call script_retry);
-use version_utils qw(get_os_release is_sle is_opensuse);
+use utils qw(zypper_call script_retry systemctl);
+use version_utils qw(get_os_release is_sle);
 use db_utils qw(push_image_data_to_db);
 use containers::common;
 use testapi;
 use serial_terminal 'select_serial_terminal';
+use containers::helm;
+use containers::k8s qw(install_k3s install_helm);
+use transactional qw(trup_call reboot_on_changes);
 
-
-sub packages_to_install {
+sub prepare_virtual_env {
     my ($version, $sp, $host_distri) = @_;
     my $arch = get_required_var('ARCH');
     my $scc_timeout = 1200;    # SCC can take really long timetimes
+    my $install_timeout = 600;
+    my $virtualenv = 'bci/bin/activate';
+    my $python = 'python3';
+    my $pip = 'pip3';
 
-    my $bci_virtualenv = get_var('BCI_VIRTUALENV', 0);
+    record_info('Install', 'Installing needed packages');
 
-    # Avoid PackageKit to conflict about lock with zypper
-    script_run("pkcon quit", die_on_timeout => 0) if (is_sle || is_opensuse);
+    my $should_pip_upgrade = 1;
+    my $should_create_venv = 1;
 
-    # common packages
-    my @packages = ('git-core', 'python3', 'gcc', 'jq');
-    if ($host_distri eq 'ubuntu') {
-        push @packages, ('python3-dev', 'python3-pip', 'golang', 'postgresql-server-dev-all');
-        push @packages, ('python3-virtualenv') if ($bci_virtualenv);
-    } elsif ($host_distri eq 'rhel' && $version > 7) {
-        push @packages, ('platform-python-devel', 'python3-pip', 'golang', 'postgresql-devel');
-        push @packages, ('python3-virtualenv') if ($bci_virtualenv);
-    } elsif ($host_distri =~ /centos|rhel/) {
-        push @packages, ('python3-devel', 'python3-pip', 'golang', 'postgresql-devel');
-        push @packages, ('python3-virtualenv') if ($bci_virtualenv);
-    } elsif ($host_distri eq 'sles' || $host_distri =~ /leap/) {
-        # SDK is needed for postgresql
-        my $version = "$version.$sp";
-        push @packages, ('postgresql-server-devel');
-        push @packages, ('python3-virtualenv') if ($bci_virtualenv);
-        if ($version eq "12.5") {
-            script_retry("SUSEConnect --auto-agree-with-licenses -p sle-sdk/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
-            # PackageHub is needed for jq
-            script_retry("SUSEConnect -p PackageHub/12.5/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
-            script_retry('zypper -n in jq', retry => 3);
-            push @packages, ('python36-devel', 'python36-pip');
-            die "virtualenv is not supported on 12-SP5" if ($bci_virtualenv);
-        } elsif ($version =~ /15\.[1-3]/) {
-            # Desktop module is needed for SDK module, which is required for go and postgresql-devel
-            script_retry("SUSEConnect -p sle-module-desktop-applications/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
-            script_retry("SUSEConnect -p sle-module-development-tools/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
-            push @packages, ('python3-devel', 'go', 'skopeo');
-        } else {
-            # Desktop module is needed for SDK module, which is required for go and postgresql-devel
-            if ($host_distri !~ /leap/) {
-                script_retry("SUSEConnect -p sle-module-desktop-applications/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
-                script_retry("SUSEConnect -p sle-module-development-tools/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
-                script_retry("SUSEConnect -p sle-module-python3/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
-            }
-            push @packages, qw(python311 python311-devel go skopeo python311-pip python311-tox);
-        }
-    } elsif ($host_distri =~ /opensuse/) {
-        push @packages, qw(python3-devel go skopeo postgresql-server-devel python3-pip python3-tox);
-        push @packages, ('python3-virtualenv') if ($bci_virtualenv);
-    } else {
-        die("Host is not supported for running BCI tests.");
-    }
-    return @packages;
-}
-
-sub activate_virtual_env {
-    assert_script_run('virtualenv bci');
-    assert_script_run('source bci/bin/activate');
-}
-
-sub run {
-    select_serial_terminal;
-
-    # Wait for any zypper tasks in the background to finish
-    assert_script_run('while pgrep -f zypp; do sleep 1; done', timeout => 300);
-
-    my ($version, $sp, $host_distri) = get_os_release;
-
-    # CONTAINER_RUNTIMES can be "docker", "podman" or both "podman,docker"
-    my $engines = get_required_var('CONTAINER_RUNTIMES');
-    my $bci_tests_repo = get_required_var('BCI_TESTS_REPO');
-    my $bci_tests_branch = get_var('BCI_TESTS_BRANCH');
-    my $bci_virtualenv = get_var('BCI_VIRTUALENV', 0);
-
-    record_info('Install', 'Install needed packages');
-    my @packages = packages_to_install($version, $sp, $host_distri);
-    if ($host_distri eq 'ubuntu') {
+    if ($host_distri =~ /ubuntu/) {
         # Sometimes, the host doesn't get an IP automatically via dhcp, we need force it just in case
         assert_script_run("dhclient -v");
         # This command prevents a prompt that asks for services to be restarted
         # causing a delay of 5min on each package install
         script_run('export DEBIAN_FRONTEND=noninteractive');
-        foreach my $pkg (@packages) {
-            script_retry("apt-get -y install $pkg", timeout => 300);
-        }
-        activate_virtual_env if ($bci_virtualenv);
-        assert_script_run('pip3 --quiet install --upgrade pip', timeout => 600);
-        assert_script_run("pip3 --quiet install tox", timeout => 600);
+        script_retry("apt-get -y install python3-venv", timeout => $install_timeout);
     } elsif ($host_distri =~ /centos|rhel/) {
-        foreach my $pkg (@packages) {
-            script_retry("yum install -y $pkg", timeout => 300);
+        if (get_var("VERSION") =~ /mls8/) {
+            assert_script_run("dnf install -y --allowerasing git-core jq python3.11 python3.11-pip");
+            $python = 'python3.11';
+            $pip = 'pip3.11';
+        } else {
+            script_retry("dnf install -y --allowerasing git-core python3 jq", timeout => $install_timeout);
         }
-        activate_virtual_env if ($bci_virtualenv);
-        assert_script_run('pip3 --quiet install --upgrade pip', timeout => 600);
-        assert_script_run("pip3 --quiet install tox", timeout => 600);
-    } elsif ($host_distri =~ /sles|opensuse/) {
-        foreach my $pkg (@packages) {
-            zypper_call("--quiet in $pkg", timeout => 300);
+    } elsif ($host_distri =~ /micro/i) {
+        # this works only for sle-micro 6.0 and 6.1
+        # 6.2 is officially sles 16.0 with transactional variant
+        # it is enough to run BCI on server variant only
+        trup_call('pkg in skopeo tar git jq');
+        reboot_on_changes;
+    } elsif ($host_distri =~ /opensuse|sles/) {
+        my @packages = ('jq', 'skopeo');
+        # Avoid PackageKit to conflict about lock with zypper
+        script_run("timeout 20 pkcon quit");
+        # Wait for any zypper tasks in the background to finish
+        assert_script_run('while pgrep -f zypp; do sleep 1; done', timeout => 300);
+        my $version = "$version.$sp";
+        if ($version =~ /12\./) {
+            $should_pip_upgrade = 0;
+            $should_create_venv = 0;
+            $python = 'python3.11';
+            $pip = 'pip3.11';
+            @packages = ('jq');
+            # PackageHub is needed for jq
+            script_retry("SUSEConnect -p PackageHub/12.5/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
+            zypper_call("ar -f http://download.suse.de/ibs/SUSE:/SLE-12:/Update:/Products:/SaltBundle:/Update/standard/ saltbundle");
+            zypper_call("rm python3-pip");
+            zypper_call("in saltbundlepy-base venv-salt-minion");
+            assert_script_run("mkdir -p ./bci/bin");
+            assert_script_run("ln -s /usr/lib/venv-salt-minion/bin/activate ./$virtualenv");
+        } elsif ($version =~ /15\.[4-7]/) {
+            $python = 'python3.11';
+            $pip = 'pip3.11';
+            script_retry("SUSEConnect -p sle-module-python3/$version/$arch", delay => 60, retry => 3, timeout => $scc_timeout)
+              unless ($host_distri =~ /opensuse/);
+            push @packages, qw(git-core python311);
+        } elsif (is_sle('16+')) {
+            # Python 3.13 is the default vers. for SLE 16.0
+            push @packages, qw(git-core python313);
         }
-        activate_virtual_env if ($bci_virtualenv);
-        if (!grep(/-tox/, @packages)) {
-            assert_script_run('pip --quiet install --upgrade pip', timeout => 600);
-            assert_script_run("pip --quiet install tox --ignore-installed six", timeout => 600);
-        }
+        zypper_call("--quiet in " . join(' ', @packages), timeout => $install_timeout);
     } else {
-        die "Unexpected distribution ($host_distri) has been used";
+        die("Host is not supported for running BCI tests.");
     }
 
-    return if (get_var('HELM_CONFIG') && !($host_distri == "sles" && $version == 15 && $sp >= 3));
+    assert_script_run("$python --version");
+    assert_script_run("$python -m venv bci") if $should_create_venv;
+    assert_script_run("source $virtualenv");
+    assert_script_run("$python -m pip --quiet install --upgrade pip", timeout => $install_timeout) if $should_pip_upgrade;
+    assert_script_run("$pip --quiet install tox", timeout => $install_timeout);
+    record_info("pip freeze", script_output("$pip freeze", timeout => $install_timeout));
+    assert_script_run('deactivate');
+}
 
-    # For BCI tests using podman, buildah package is also needed
-    install_buildah_when_needed($host_distri) if ($engines =~ /podman/);
-
-    record_info('Clone', "Clone BCI tests repository: $bci_tests_repo");
+sub update_test_repos {
+    my $bci_tests_repo = get_var('BCI_TESTS_REPO', 'https://github.com/SUSE/BCI-tests.git');
+    my $bci_tests_branch = get_var('BCI_TESTS_BRANCH', '');    # Keep BCI_TESTS_BRANCH for backwards compatibility.
+    if ($bci_tests_repo =~ m/(.*)#(.*)/) {
+        $bci_tests_repo = $1;
+        $bci_tests_branch = $2;
+    } elsif ($bci_tests_repo =~ m/(.*)\/tree\/(.*)/) {
+        # Also accept directly pasted links, e.g. 'https://github.com/SUSE/BCI-tests/tree/only-jdk11-sucks-on-ppc64'
+        $bci_tests_repo = "$1.git";
+        $bci_tests_branch = $2;
+    }
+    record_info('Clone', "Cloning BCI tests repository: $bci_tests_repo\nBranch: $bci_tests_branch");
     my $branch = $bci_tests_branch ? "-b $bci_tests_branch" : '';
-    script_run('rm -rf /root/BCI-tests');
+    assert_script_run('rm -rf /root/BCI-tests');
     assert_script_run("git clone $branch -q --depth 1 $bci_tests_repo /root/BCI-tests");
-    assert_script_run('deactivate') if ($bci_virtualenv);
+}
+
+sub run {
+    select_serial_terminal;
+    my ($version, $sp, $host_distri) = get_os_release;
+
+    prepare_virtual_env($version, $sp, $host_distri) if get_var('BCI_PREPARE');
+
+    # Ensure LTSS subscription is active when testing LTSS containers.
+    validate_script_output("SUSEConnect -l", qr/.*LTSS.*Activated/, fail_message => "Host requires LTSS subscription for LTSS container")
+      if (get_var('CONTAINER_IMAGE_TO_TEST') =~ /ltss/i || is_sle('<16'));
+
+    update_test_repos if (get_var('BCI_TESTS_REPO'));
+
+    # CONTAINER_RUNTIMES can be "docker", "podman" or both "podman,docker"
+    my $engines = get_required_var('CONTAINER_RUNTIMES');
+    # For BCI tests using podman, buildah package is also needed
+    # buildah is not present in any sle-micro, including 6.2
+    install_buildah_when_needed($host_distri) if ($engines =~ /podman/ && $host_distri !~ /micro/i);
 }
 
 sub test_flags {

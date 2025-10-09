@@ -6,8 +6,6 @@
 # Summary: CPU BUGS on Linux kernel check
 # Maintainer: James Wang <jnwang@suse.com>
 package spectre_v4;
-use strict;
-use warnings;
 
 use base "consoletest";
 use bootloader_setup;
@@ -29,10 +27,10 @@ our %mitigations_list =
     sysfs => {
         on => "Mitigation: Speculative Store Bypass disabled",
         off => "Vulnerable",
-        auto => "Mitigation: Speculative Store Bypass disabled via prctl and seccomp",
+        auto => "Mitigation: Speculative Store Bypass disabled via prctl",
         prctl => "Mitigation: Speculative Store Bypass disabled via prctl",
         seccomp => "Mitigation: Speculative Store Bypass disabled via prctl and seccomp",
-        default => "Mitigation: Speculative Store Bypass disabled via prctl and seccomp",
+        default => "Mitigation: Speculative Store Bypass disabled via prctl",
     },
     cmdline => [
         "on",

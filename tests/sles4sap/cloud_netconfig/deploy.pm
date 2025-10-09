@@ -2,14 +2,76 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # Summary: Create a VM with a single NIC and 3 ip-config
-# Maintainer: QE-SAP <qe-sap@suse.de>, Michele Pagot <michele.pagot@suse.com>
+# Maintainer: QE-SAP <qe-sap@suse.de>
 
-use strict;
-use warnings;
+=head1 NAME
+
+cloud_netconfig/deploy.pm - Deploy infrastructure for the cloud-netconfig test
+
+=head1 DESCRIPTION
+
+This module deploys the necessary Azure infrastructure for testing the
+B<cloud-netconfig> service. It sets up a specific network configuration to
+verify that C<cloud-netconfig> can correctly manage multiple IP addresses on a
+single network interface.
+
+The created resources include:
+
+=over 4
+
+=item * A virtual machine (VM) to host the test.
+
+=item * A virtual network (VNet) and a subnet.
+
+=item * A single Network Interface Card (NIC) attached to the VM.
+
+=item * Three IP configurations associated with the single NIC:
+
+=over 2
+
+=item - The primary IP configuration with a public IP address.
+
+=item - A secondary IP configuration with another public IP address and a static private IP.
+
+=item - A third IP configuration with only a static private IP.
+
+=back
+
+=item * A Network Security Group (NSG) allowing SSH access.
+
+=back
+
+=head1 VARIABLES
+
+=over 4
+
+=item B<PUBLIC_CLOUD_PROVIDER>
+
+Specifies the public cloud provider for deployment. Currently, only 'AZURE' is supported.
+
+=item B<PUBLIC_CLOUD_IMAGE_LOCATION>
+
+Id of the OS image to use for the VM deployment.
+If set, it specifies the location of a custom VHD image in Azure Blob Storage.
+If not set, a catalog image is used.
+
+=item B<SCC_REGCODE_SLES4SAP>
+
+SUSE Customer Center registration code. If provided, the deployed VM will be registered.
+
+=back
+
+=head1 MAINTAINER
+
+QE-SAP <qe-sap@suse.de>
+
+=cut
+
 use Mojo::Base 'publiccloud::basetest';
 use testapi;
 use mmapi 'get_current_job_id';
 use serial_terminal 'select_serial_terminal';
+use version_utils 'is_sle';
 use sles4sap::azure_cli;
 
 use constant DEPLOY_PREFIX => 'clne';
@@ -17,15 +79,30 @@ use constant DEPLOY_PREFIX => 'clne';
 sub run {
     my ($self) = @_;
 
-    die 'Azure is the only CSP supported for the moment' unless check_var('PUBLIC_CLOUD_PROVIDER', 'AZURE');
+    die('Azure is the only CSP supported for the moment')
+      unless check_var('PUBLIC_CLOUD_PROVIDER', 'AZURE');
 
     my $rg = DEPLOY_PREFIX . get_current_job_id();
-    my $os_ver = get_required_var('CLUSTER_OS_VER');
 
     select_serial_terminal;
 
     # Init all the PC gears (ssh keys, CSP credentials)
     my $provider = $self->provider_factory();
+
+    my $os_ver;
+    if (get_var('PUBLIC_CLOUD_IMAGE_LOCATION')) {
+        # This section is only needed by Azure tests using images uploaded
+        # with publiccloud_upload_img.
+        $os_ver = $self->{provider}->get_blob_uri(get_var('PUBLIC_CLOUD_IMAGE_LOCATION'));
+    } else {
+        $os_ver = $provider->get_image_id();
+    }
+
+    # remove configuration file created by the PC factory
+    # as it interfere with ssh behavior.
+    # in particular it has setting about verbosity that
+    # break test steps that relay to remote ssh comman output
+    assert_script_run('rm ~/.ssh/config');
 
     az_group_create(name => $rg, region => $provider->provider_client->region);
 
@@ -56,19 +133,11 @@ sub run {
         resource_group => $rg,
         name => $nsg);
 
-    $az_cmd = join(' ', 'az network nsg rule create',
-        '--resource-group', $rg,
-        '--nsg-name', $nsg,
-        '--name', $nsg . 'RuleSSH',
-        "--protocol '*'",
-        '--direction inbound',
-        "--source-address-prefix '*'",
-        "--source-port-range '*'",
-        "--destination-address-prefix '*'",
-        '--destination-port-range 22',
-        '--access allow',
-        '--priority 200');
-    assert_script_run($az_cmd);
+    az_network_nsg_rule_create(
+        resource_group => $rg,
+        nsg => $nsg,
+        name => $nsg . 'RuleSSH',
+        port => 22);
 
     # Create one NIC, by default it also create a ip configuration
     # Associate the first public IP to this default first IpConfig
@@ -111,27 +180,35 @@ sub run {
         '--private-ip-address-version IPv4');
     assert_script_run($az_cmd);
 
+    # If image provided is a blob storage link, create image out of it
+    if ($os_ver =~ /\.vhd$/) {
+        my $img_name = $rg . 'img';
+        az_img_from_vhd_create(
+            resource_group => $rg,
+            name => $img_name,
+            source => $os_ver);
+        $os_ver = $img_name;
+    }
+
     # Create one VM and add the NIC to it
     my $vm = DEPLOY_PREFIX . '-vm';
-    az_vm_create(
+    my %vm_create_args = (
         resource_group => $rg,
         name => $vm,
         nic => $nic,
         image => $os_ver,
-        username => 'cloudadmin');
+        username => 'cloudadmin',
+        region => $provider->provider_client->region);
+    $vm_create_args{security_type} = 'Standard' if is_sle '<=12-SP5';
+
+    az_vm_create(%vm_create_args);
 
     my $vm_ip;
     my $ssh_cmd;
     my $ret;
     # check that the VM is reachable using both public IP addresses
     foreach (1 .. 2) {
-        $az_cmd = join(' ',
-            'az network public-ip show',
-            "--resource-group $rg",
-            '--name', DEPLOY_PREFIX . "-pub_ip-$_",
-            '--query "ipAddress"',
-            '-o tsv');
-        $vm_ip = script_output($az_cmd);
+        $vm_ip = az_network_publicip_get(resource_group => $rg, name => DEPLOY_PREFIX . "-pub_ip-$_");
         $ssh_cmd = 'ssh cloudadmin@' . $vm_ip;
 
         my $start_time = time();
@@ -159,7 +236,8 @@ sub run {
                 'sudo', 'registercloudguest',
                 '--force-new',
                 '-r', "\"$reg_code\"",
-                '-e "testing@suse.com"'));
+                '-e "testing@suse.com"'),
+            timeout => 600);
         assert_script_run(join(' ', $ssh_cmd, 'sudo', 'SUSEConnect -s'));
     }
 }

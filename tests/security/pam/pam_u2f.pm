@@ -1,4 +1,4 @@
-# Copyright 2021 SUSE LLC
+# Copyright SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Summary: Update pam_u2f to 1.1.1 (or later)
@@ -14,8 +14,6 @@
 # Tags: poo#104181 tc#1769990
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
 use base 'consoletest';
 use utils qw(zypper_call package_upgrade_check);
@@ -40,7 +38,7 @@ sub run {
 
     # 'pamu2fcfg' command test, we don't have available yubikey
     # However, we can still check this command can work
-    validate_script_output('pamu2fcfg 2>&1 || true', sub { m/No device found. Aborting/ });
+    validate_script_output('pamu2fcfg 2>&1 || true', sub { m/No .* found. Aborting/ });
 }
 
 sub test_flags {

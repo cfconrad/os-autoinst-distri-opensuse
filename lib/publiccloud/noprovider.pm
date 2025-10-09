@@ -5,7 +5,7 @@
 
 # Summary: Helper class for dummy provider
 #
-# Maintainer: qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::noprovider;
 use Mojo::Base 'publiccloud::provider';
@@ -58,6 +58,7 @@ sub create_ssh_key {
 sub cleanup {
     my ($self) = @_;
     # Do nothing with existing instance.
+    return 1;
 }
 
 1;

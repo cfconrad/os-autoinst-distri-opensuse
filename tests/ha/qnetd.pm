@@ -9,19 +9,30 @@
 # Maintainer: QE-SAP <qe-sap@suse.de>
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
 use lockapi;
-use hacluster;
+use hacluster qw(choose_node
+  $default_timeout
+  ensure_resource_running
+  get_cluster_name
+  get_ip
+  is_node
+  prepare_console_for_fencing
+  save_state
+  wait_for_idle_cluster
+  wait_until_resources_started
+);
 use utils qw(zypper_call exec_and_insert_password);
-use version_utils 'is_sle';
+use version_utils qw(is_sle);
+use Utils::Logging qw(record_avc_selinux_alerts);
 
 sub handle_diskless_sbd_scenario_cluster_node {
     my $cluster_name = get_cluster_name;
     if (get_var('USE_DISKLESS_SBD') && !check_var('QDEVICE_TEST_ROLE', 'qnetd_server')) {
         barrier_wait("DISKLESS_SBD_QDEVICE_$cluster_name");
         assert_script_run 'crm cluster restart';
+        wait_until_resources_started;
+        wait_for_idle_cluster;
     }
 }
 
@@ -69,6 +80,13 @@ sub qdevice_status {
 sub run {
     my $cluster_name = get_cluster_name;
     my $qdevice_check = "/etc/corosync/qdevice/check_master.sh";
+
+    # As this module causes a fence operation, we need to prepare the console for assert_screen
+    # on grub2 and bootmenu
+    prepare_console_for_fencing;
+
+    # iptables is not installed in SLE 16 by default
+    zypper_call 'in iptables' if is_sle('>=16');
 
     if (check_var('QDEVICE_TEST_ROLE', 'qnetd_server')) {
         zypper_call 'in corosync-qnetd';
@@ -138,7 +156,7 @@ sub run {
         qdevice_status('split-brain-check');
         # Resource must be running in this node
         my $node_01 = choose_node(1);
-        ensure_resource_running("promotable-1", ":[[:blank:]]*$node_01\[[:blank:]]*[Mm]aster\$");
+        ensure_resource_running('promotable-1', ":[[:blank:]]*$node_01\[[:blank:]]*([Mm]aster|[Pp]romoted)\$");
     }
 
     barrier_wait("SPLIT_BRAIN_TEST_DONE_$cluster_name");
@@ -153,6 +171,13 @@ sub run {
 
     # The following barrier prevents the QNetd server from stopping before the cluster nodes complete their tests
     barrier_wait("QNETD_TESTS_DONE_$cluster_name") if check_var('QDEVICE_TEST_ROLE', 'qnetd_server');
+}
+
+# Avoid calling hacluster::post_run_hook(). It will fail on node 2 which gets fenced
+# But collect SELinux AVCs on node 1 and server
+sub post_run_hook {
+    my ($self) = @_;
+    $self->record_avc_selinux_alerts() if (is_sle('16+') && !is_node(2));
 }
 
 1;

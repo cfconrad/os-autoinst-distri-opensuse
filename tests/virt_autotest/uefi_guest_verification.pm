@@ -12,8 +12,6 @@
 package uefi_guest_verification;
 
 use base 'virt_feature_test_base';
-use strict;
-use warnings;
 use POSIX 'strftime';
 use File::Basename;
 use testapi;
@@ -23,27 +21,22 @@ use virt_utils;
 use virt_autotest::common;
 use virt_autotest::utils;
 use version_utils qw(is_sle is_alp);
+use Utils::Architectures;
 
 sub run_test {
     my $self = shift;
 
     $self->check_guest_bootloader($_) foreach (keys %virt_autotest::common::guests);
     $self->check_guest_bootcurrent($_) foreach (keys %virt_autotest::common::guests);
-    if (is_kvm_host) {
-        if (is_sle) {
-            record_soft_failure("In order to implement pm features, current kvm virtual machine uses uefi firmware that does not support PXE/HTTP boot and secureboot. bsc#1182886 UEFI virtual machine boots with trouble");
-        }
-        elsif (is_alp) {
-            # The current default uefi firmware in alp kvm container supports secure boot,
-            # but does not support PXE/HTTP boot, and pm is not well supported either.
-            $self->check_guest_secure_boot($_) foreach (keys %virt_autotest::common::guests);
-        }
-        #$self->check_guest_uefi_boot($_) foreach (keys %virt_autotest::common::guests);
 
+    # No machine type on aarch64 supports power management, or secure boot
+    return $self if (is_aarch64);
+
+    if (is_sle('=16')) {
+        $self->check_guest_secure_boot($_) foreach (keys %virt_autotest::common::guests);
+        #$self->check_guest_uefi_boot($_) foreach (keys %virt_autotest::common::guests);
     }
-    else {
-        record_soft_failure("UEFI implementation for xen fullvirt uefi virtual machine is incomplete. bsc#1184936 Xen fullvirt lacks of complete support for UEFI");
-    }
+    record_soft_failure("UEFI implementation for xen fullvirt uefi virtual machine is incomplete. bsc#1184936 Xen fullvirt lacks of complete support for UEFI") if (is_xen_host);
 
     # TODO: enable pm check for alp once default uefi firmware supports it well
     if (is_sle('>=15')) {
@@ -98,6 +91,17 @@ sub check_guest_secure_boot {
     return $self;
 }
 
+# PED-87 Do NOT auto-generate EFI secret-key for hibernation verification leads
+# to bsc#1230977 Fail to dompmsuspend 15SP7 FV UEFI guest system. In order to
+# continue to perform power management, regenerating efi secret key and reboot
+# for uefi guest is needed. Only hybrid and disk suspend modes need do this.
+sub regen_efi_secret_key {
+    my ($self, $guest) = @_;
+
+    execute_over_ssh(address => $guest, command => 'echo 1 > /sys/firmware/efi/secret-key/regen');
+    reboot_virtual_machine(address => $guest);
+}
+
 sub check_guest_pmsuspend_enabled {
     my $self = shift;
 
@@ -108,6 +112,7 @@ sub check_guest_pmsuspend_enabled {
                 record_info("PMSUSPEND to hyrbrid is not supported here", "Guest $_ on kvm sles 15+ host");
                 next;
             }
+            $self->regen_efi_secret_key($_) if (is_sle('>=15') or ($_ =~ /sles-15|sles15/img));
             $self->do_guest_pmsuspend($_, 'hybrid');
         }
         foreach (keys %virt_autotest::common::guests) {
@@ -115,6 +120,7 @@ sub check_guest_pmsuspend_enabled {
                 record_info("PMSUSPEND to disk is not supported here", "Guest $_ on kvm sles 15+ host");
                 next;
             }
+            $self->regen_efi_secret_key($_) if (is_sle('>=15') or ($_ =~ /sles-15|sles15/img));
             $self->do_guest_pmsuspend($_, 'disk');
         }
     }
@@ -154,4 +160,3 @@ sub post_fail_hook {
 }
 
 1;
-

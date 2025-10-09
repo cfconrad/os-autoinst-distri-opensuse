@@ -13,14 +13,16 @@ use base 'Exporter';
 use Exporter;
 use main_common;
 use main_ltp_loader 'load_kernel_tests';
-use main_containers qw(load_container_tests is_container_test);
+use main_containers qw(load_container_tests is_container_test load_container_engine_test);
 use main_publiccloud qw(load_publiccloud_download_repos);
 use main_security qw(load_security_tests is_security_test);
-use testapi qw(check_var get_required_var get_var set_var);
+use testapi qw(check_var get_required_var get_var set_var record_info);
 use version_utils;
 use utils;
 use Utils::Architectures;
 use Utils::Backends;
+use Data::Dumper;
+
 
 sub is_image {
     return get_required_var('FLAVOR') =~ /image|default|kvm|base/i;
@@ -38,11 +40,12 @@ sub is_regproxy_required {
 
 sub load_config_tests {
     loadtest 'transactional/tdup' if get_var('TDUP');
-    loadtest 'transactional/host_config' unless is_dvd;
     loadtest 'rt/rt_is_realtime' if is_rt;
     loadtest 'transactional/enable_selinux' if (get_var('ENABLE_SELINUX') && is_image);
     loadtest 'console/suseconnect_scc' if (get_var('SCC_REGISTER') && !is_dvd);
     loadtest 'transactional/install_updates' if (is_sle_micro && is_released);
+    loadtest 'containers/k3s_helm_install' if (get_var('CONTAINER_UPDATE_HOST') && is_sle_micro('6.0+') && (is_x86_64 || is_aarch64));
+    loadtest 'containers/bci_prepare' if (get_var('CONTAINER_UPDATE_HOST') && get_var('BCI_PREPARE'));
 }
 
 sub load_boot_from_disk_tests {
@@ -57,24 +60,25 @@ sub load_boot_from_disk_tests {
     # read FIRST_BOOT_CONFIG in order to know how the image will be configured
     # ignition|combustion|ignition+combustion is considered as default path
     if (check_var('FIRST_BOOT_CONFIG', 'wizard')) {
+        loadtest 'installation/bootloader_uefi' unless is_vmware || is_s390x || is_bootloader_sdboot;
         loadtest 'jeos/firstrun';
     } elsif (check_var('FIRST_BOOT_CONFIG', 'cloud-init')) {
         unless (is_s390x) {
-            loadtest 'installation/bootloader_uefi';
+            loadtest 'installation/bootloader_uefi' unless is_vmware;
             loadtest 'installation/first_boot';
         }
-        loadtest 'jeos/verify_cloudinit';
     } else {
         if (is_s390x()) {
             loadtest 'boot/boot_to_desktop';
         } elsif (is_vmware) {
-            ;
+            loadtest 'installation/first_boot';
         } else {
             loadtest 'microos/disk_boot';
         }
     }
 
     loadtest 'installation/system_workarounds' if (is_aarch64 && is_microos);
+    loadtest 'transactional/host_config';
     replace_opensuse_repos_tests if is_repo_replacement_required;
 }
 
@@ -123,7 +127,7 @@ sub load_installation_tests {
         loadtest 'installation/installation_overview';
     }
     loadtest 'installation/disable_grub_timeout' if is_bootloader_grub2;
-    loadtest 'installation/configure_sdboot' if is_bootloader_sdboot;
+    loadtest 'installation/configure_bls' if is_bootloader_sdboot || is_bootloader_grub2_bls;
     loadtest 'installation/enable_selinux' if get_var('ENABLE_SELINUX');
     loadtest 'installation/start_install';
     loadtest 'installation/await_install';
@@ -152,6 +156,11 @@ sub load_autoyast_installation_tests {
 sub load_selfinstall_boot_tests {
     loadtest 'installation/bootloader_uefi';
     loadtest 'microos/selfinstall';
+    if (check_var('FIRST_BOOT_CONFIG', 'wizard')) {
+        loadtest 'jeos/firstrun';
+    }
+    loadtest 'transactional/host_config';
+    replace_opensuse_repos_tests if is_repo_replacement_required;
 }
 
 sub load_remote_target_tests {
@@ -182,7 +191,8 @@ sub load_remote_controller_tests {
     loadtest 'installation/user_settings_root';
     loadtest 'installation/resolve_dependency_issues';
     loadtest 'installation/installation_overview';
-    loadtest 'installation/disable_grub_timeout';
+    loadtest 'installation/disable_grub_timeout' if is_bootloader_grub2;
+    loadtest 'installation/configure_bls' if is_bootloader_sdboot || is_bootloader_grub2_bls;
     loadtest 'installation/start_install';
     loadtest 'installation/await_install';
     loadtest 'installation/reboot_after_installation';
@@ -198,10 +208,11 @@ sub load_common_tests {
     loadtest 'microos/services_enabled';
     # MicroOS -old images use wicked, but cockpit-wicked is no longer supported in TW
     loadtest 'microos/cockpit_service' unless (is_microos('Tumbleweed') && is_staging) || (is_microos('Tumbleweed') && get_var('HDD_1', '') =~ /-old/) || !get_var('SCC_REGISTER');
-    loadtest 'console/perl_bootloader' unless (is_bootloader_sdboot);
+    loadtest 'console/perl_bootloader' unless (is_bootloader_sdboot || is_bootloader_grub2_bls);
     # Staging has no access to repos and the MicroOS-DVD does not contain ansible
     # Ansible test needs Packagehub in SLE and it can't be enabled in SLEM
     loadtest 'console/ansible' unless (is_staging || is_sle_micro || is_leap_micro);
+    loadtest 'console/salt' unless (is_staging || is_sle_micro);
     # On s390x zvm setups we need more time to wait for system to boot up.
     # Skip this test with sd-boot. The reason is not what you'd think though:
     # With sd-boot, host_config does not perform a reboot and a snapshot is made while the serial terminal
@@ -233,13 +244,13 @@ sub load_qemu_tests {
     loadtest 'microos/rebuild_initrd' if is_s390x;
     loadtest 'qemu/info';
     loadtest 'qemu/qemu' unless is_rt;
-    loadtest 'qemu/kvm' unless (is_aarch64 or is_rt);
+    loadtest 'qemu/kvm' unless (is_aarch64 or is_ppc64le or is_rt);
     # qemu-linux-user package not available in SLEM
     loadtest 'qemu/user' unless (is_sle_micro || is_leap_micro);
 }
 
 sub load_fips_tests {
-    loadtest 'transactional/enable_fips' if get_var('BOOT_HDD_IMAGE');
+    loadtest 'fips/fips_setup' if get_var('BOOT_HDD_IMAGE');
     loadtest 'fips/libica' if is_s390x && is_sle_micro('5.4+');
     loadtest 'fips/openssl/openssl_fips_alglist';
     loadtest 'fips/openssl/openssl_fips_cipher';
@@ -286,12 +297,15 @@ sub load_rcshell_tests {
 sub load_journal_check_tests {
     # Enclosing test cases
     loadtest 'console/journal_check';
+    loadtest 'console/coredump_collect';
     loadtest 'shutdown/shutdown';
 }
 
 sub load_slem_on_pc_tests {
     my $args = OpenQA::Test::RunArgs->new();
-    if (get_var('PUBLIC_CLOUD_DOWNLOAD_TESTREPO')) {
+    if (get_var('PUBLIC_CLOUD_AZURE_AITL')) {
+        loadtest "publiccloud/azure_aitl", run_args => $args;
+    } elsif (get_var('PUBLIC_CLOUD_DOWNLOAD_TESTREPO')) {
         load_publiccloud_download_repos();
     } elsif (get_var('PUBLIC_CLOUD_UPLOAD_IMG')) {
         loadtest("boot/boot_to_desktop");
@@ -303,13 +317,30 @@ sub load_slem_on_pc_tests {
         loadtest("publiccloud/registration", run_args => $args);
         # 2 next modules of pubcloud needed for sle-micro incidents/repos verification
         if (get_var('PUBLIC_CLOUD_QAM', 0)) {
-            loadtest("publiccloud/transfer_repos", run_args => $args);
+            loadtest("publiccloud/transfer_repos", run_args => $args) unless (check_var('PUBLIC_CLOUD_SKIP_MU', 1));
             loadtest("publiccloud/patch_and_reboot", run_args => $args);
         }
         if (get_var('PUBLIC_CLOUD_LTP', 0)) {
             loadtest("publiccloud/run_ltp", run_args => $args);
-        }
-        else {
+        } elsif (get_var('PUBLIC_CLOUD_AISTACK')) {
+            # AISTACK test verification
+            loadtest("publiccloud/ssh_interactive_start", run_args => $args);
+            loadtest("publiccloud/create_aistack_env", run_args => $args);
+            loadtest("publiccloud/aistack_rbac_run", run_args => $args);
+            loadtest("publiccloud/aistack_sanity_run", run_args => $args);
+            loadtest("publiccloud/ssh_interactive_end", run_args => $args);
+        } elsif (is_container_test) {
+            loadtest("publiccloud/ssh_interactive_start", run_args => $args);
+            loadtest("publiccloud/instance_overview", run_args => $args);
+            loadtest("publiccloud/slem_prepare", run_args => $args);
+            my $runtime = get_required_var('CONTAINER_RUNTIMES');
+            for (split(',\s*', $runtime)) {
+                my $run_args = OpenQA::Test::RunArgs->new();
+                $run_args->{runtime} = $_;
+                load_container_engine_test($run_args);
+            }
+            loadtest("publiccloud/ssh_interactive_end", run_args => $args);
+        } else {
             loadtest "publiccloud/check_services", run_args => $args;
             loadtest("publiccloud/slem_basic", run_args => $args);
         }
@@ -319,7 +350,7 @@ sub load_slem_on_pc_tests {
 sub load_xfstests_tests {
     if (check_var('XFSTESTS', 'installation')) {
         load_boot_from_disk_tests;
-        loadtest 'transactional/host_config';
+        loadtest 'console/suseconnect_scc';
         loadtest 'xfstests/install';
         unless (check_var('NO_KDUMP', '1')) {
             loadtest 'xfstests/enable_kdump';
@@ -330,7 +361,6 @@ sub load_xfstests_tests {
         boot_hdd_image;
         loadtest 'xfstests/partition';
         loadtest 'xfstests/run';
-        loadtest 'xfstests/generate_report';
     }
 }
 
@@ -370,6 +400,9 @@ sub load_tests {
 
     if (get_var('BOOT_HDD_IMAGE')) {
         load_boot_from_disk_tests;
+    } elsif (is_pvm && is_sle_micro('>=6.1')) {
+        loadtest 'installation/bootloader';
+        loadtest 'microos/install_image';
     } elsif (is_selfinstall) {
         load_selfinstall_boot_tests;
     } elsif (get_var('AUTOYAST')) {
@@ -410,8 +443,13 @@ sub load_tests {
     } elsif (check_var('EXTRA', 'networking')) {
         load_network_tests;
     } elsif (check_var('EXTRA', 'provisioning')) {
-        # This module fails in MicroOS, never been run before. Need to investigate.
-        loadtest 'microos/verify_setup' unless is_microos;
+        # verify_setup is not working correctly in microos with ignition
+        # for the initial configuration. Disabled temporarily to investigate!
+        if (check_var('FIRST_BOOT_CONFIG', 'cloud-init')) {
+            loadtest 'jeos/verify_cloudinit';
+        } else {
+            loadtest 'microos/verify_setup' unless check_var('FIRST_BOOT_CONFIG', 'ignition') && is_microos;
+        }
         load_transactional_tests;
     } elsif (check_var('EXTRA', 'virtualization')) {
         load_qemu_tests;

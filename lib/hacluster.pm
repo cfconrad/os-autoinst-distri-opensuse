@@ -11,16 +11,20 @@ use base Exporter;
 use Exporter;
 use strict;
 use warnings;
-use version_utils qw(is_sle);
+use version_utils qw(is_sle package_version_cmp);
 use Scalar::Util qw(looks_like_number);
 use utils;
 use testapi;
 use lockapi;
 use isotovideo;
+use maintenance_smelt qw(get_incident_packages);
 use x11utils qw(ensure_unlocked_desktop);
-use Utils::Logging qw(export_logs);
+use Utils::Logging qw(export_logs record_avc_selinux_alerts);
+use network_utils qw(iface);
 use Carp qw(croak);
 use Data::Dumper;
+use XML::Simple;
+use serial_terminal qw(select_serial_terminal set_serial_prompt serial_term_prompt);
 
 our @EXPORT = qw(
   $crm_mon_cmd
@@ -51,6 +55,7 @@ our @EXPORT = qw(
   ensure_process_running
   ensure_resource_running
   ensure_dlm_running
+  execute_crm_resource_refresh_and_check
   write_tag
   read_tag
   block_device_real_path
@@ -66,10 +71,6 @@ our @EXPORT = qw(
   check_device_available
   set_lvm_config
   add_lock_mgr
-  pre_run_hook
-  post_run_hook
-  post_fail_hook
-  test_flags
   is_not_maintenance_update
   activate_ntp
   script_output_retry_check
@@ -82,6 +83,22 @@ our @EXPORT = qw(
   crm_wait_for_maintenance
   crm_check_resource_location
   generate_lun_list
+  show_cluster_parameter
+  set_cluster_parameter
+  prepare_console_for_fencing
+  crm_get_failcount
+  crm_wait_failcount
+  crm_resources_by_class
+  crm_resource_locate
+  crm_resource_meta_show
+  crm_resource_meta_set
+  crm_list_options
+  get_sbd_devices
+  parse_sbd_metadata
+  list_configured_sbd
+  sbd_device_report
+  get_fencing_type
+  check_crm_nonroot
 );
 
 =head1 SYNOPSIS
@@ -117,9 +134,8 @@ Extension (HA or HAE) tests.
 
 =cut
 
-our $crm_mon_cmd = 'crm_mon -R -r -n -N -1';
+our $crm_mon_cmd = 'crm_mon -R -r -n -1';
 our $softdog_timeout = bmwqemu::scale_timeout(60);
-our $prev_console;
 our $join_timeout = bmwqemu::scale_timeout(60);
 our $default_timeout = bmwqemu::scale_timeout(30);
 our $corosync_token = q@corosync-cmapctl | awk -F " = " '/runtime.config.totem.token\s/ {print int($2/1000)}'@;
@@ -177,7 +193,7 @@ sub add_file_in_csync {
 
     if (defined($conf_file) && defined($args{value})) {
         # Check if conf_file is a valid value
-        assert_script_run "[[ -w $conf_file ]]";
+        assert_script_run("[[ -w $conf_file ]]", 180);
 
         # Add the value in conf_file and sync on all nodes
         assert_script_run "grep -Fq $args{value} $conf_file || sed -i 's|^}\$|include $args{value};\\n}|' $conf_file";
@@ -277,7 +293,7 @@ Returns the IP address of SUT or 0 if the address cannot be determined. Special 
 =cut
 
 sub get_my_ip {
-    my $netdevice = get_var('SUT_NETDEVICE', 'eth0');
+    my $netdevice = get_var('SUT_NETDEVICE', iface());
     my $node_ip = script_output "ip -4 addr show dev $netdevice | sed -rne '/inet/s/[[:blank:]]*inet ([0-9\\.]*).*/\\1/p'";
     return _just_the_ip($node_ip);
 }
@@ -291,8 +307,9 @@ Returns the number of nodes configured in the cluster.
 =cut
 
 sub get_node_number {
-    my $index = is_sle('15-sp2+') ? 2 : 1;
-    return script_output "crm_mon -1 | awk '/ nodes configured/ { print \$$index }'";
+    my $out = script_output "crm_mon -1";
+    my ($number) = $out =~ /(\d+) nodes configured/ or die "get_node_number: unexpected crm_mon output";
+    return $number;
 }
 
 =head2 get_node_index
@@ -384,7 +401,13 @@ screenshot.
 =cut
 
 sub save_state {
-    script_run 'yes | crm configure show', $default_timeout;
+    my $ret = script_run('yes | crm configure show', $default_timeout);
+
+    # In this pipeline, "crm configure show" exits cleanly with 0, but "yes" keeps writing after
+    # the pipe is closed and dies with SIGPIPE (128+13=141). We could ingore 141 exit code.
+    if ($ret != 0 && $ret != 141) {
+        record_info('crm configure show', 'Failed to run "crm configure show"', result => 'fail');
+    }
     assert_script_run "$crm_mon_cmd", $default_timeout;
     save_screenshot;
 }
@@ -494,6 +517,44 @@ process is running or croaks on error.
 sub ensure_dlm_running {
     die 'dlm is not running' unless check_rsc "dlm";
     return ensure_process_running 'dlm_controld';
+}
+
+=head2 execute_crm_resource_refresh_and_check
+
+ execute_crm_resource_refresh_and_check();
+
+Execute C<crm resource refresh> for specified C<resource> on C<instance_hostname>
+and check the C<crm_failcount> returns C<value=0>.
+Check no B<failover> happens and state of cluster resources is healthy.
+
+=cut
+
+sub execute_crm_resource_refresh_and_check {
+    my (%args) = @_;
+    my $instance_type = $args{instance_type};
+    my $instance_id = $args{instance_id};
+    my $instance_hostname = $args{instance_hostname};
+    my $instance_sid = get_required_var('SAP_SID');
+    my $resource = "rsc_sap_${instance_sid}_$instance_type$instance_id";
+
+    # Delete resource's recorded failures before refresh
+    record_info("Delete failcount", "delete sapinstance recorded failures of $resource");
+    assert_script_run("sudo crm_failcount --delete -r $resource -N $instance_hostname");
+    # Refresh resource
+    record_info("Refresh $instance_type", "refresh sapinstance $resource");
+    assert_script_run("sudo crm resource refresh $resource");
+
+    # Query the current value of the resource's fail count
+    record_info("Query $instance_type", "Query fail count of sapinstance $resource");
+    my $str = script_output("sudo crm_failcount --query -r $resource -N $instance_hostname");
+    $str =~ /value=(\d+)/;
+    die 'Test failed to crm_failcount is non-zero' if (int($1));
+    # Check cluster
+    record_info('Cluster check', 'Checking state of cluster resources is healthy');
+    check_cluster_state();
+    # Check failover
+    record_info('NoFailover check', 'Checking no failover happens');
+    crm_check_resource_location(resource => $resource, wait_for_target => $instance_hostname);
 }
 
 =head2 write_tag
@@ -625,13 +686,17 @@ sub ha_export_logs {
     script_run "touch $corosync_conf";
     script_run "crm report $report_opt -E $bootstrap_log $crm_log", 300;
     upload_logs("$bootstrap_log", failok => 1);
-    upload_logs("$crm_log.tar.bz2", failok => 1);
 
-    script_run "crm configure show > /tmp/crm.txt";
+    my $crm_log_name = script_output("echo \"FILE=\|\$(ls $crm_log* | tail -1)\|\"");
+    $crm_log_name =~ /FILE=\|([^\|]+)\|/;
+    $crm_log_name = $1;
+    upload_logs("$crm_log_name", failok => 1);
+
+    record_info('crm configure show', 'Failed to run "crm configure show"', result => 'fail') if (script_run("crm configure show > /tmp/crm.txt"));
     upload_logs('/tmp/crm.txt');
 
     # Extract YaST logs and upload them
-    upload_y2logs(failok => 1);
+    upload_y2logs(failok => 1) if is_sle('<16');
 
     # Generate the packages list
     script_run "rpm -qa > $packages_list";
@@ -646,9 +711,10 @@ sub ha_export_logs {
     upload_logs($mdadm_conf, failok => 1);
 
     # supportconfig
-    my $ret = script_run "supportconfig -g -B $clustername", 300, die_on_timeout => 0;
+    enter_cmd "supportconfig -g -B $clustername; echo DONE-\$?- > /dev/$serialdev";
+    my $ret = wait_serial qr/DONE-\d+-/, timeout => 300;
     # Make it softfail for not blocking qem bot auto approvals on 12-SP5
-    # Command 'supportconfig' hangs on 12-SP5, script_run timed out and returned 'undef'
+    # Command 'supportconfig' hangs on 12-SP5, wait_serial times out and returns 'undef'
     if (!defined($ret) && is_sle("=12-SP5")) {
         record_soft_failure 'poo#151612';
         # Send 'ctrl-c' to kill 'supportconfig' as it hangs
@@ -687,7 +753,7 @@ Checks the state of the cluster. Calls B<$crm_mon_cmd> and inspects its output c
 =back
 
 Checks that the reported number of nodes in the output of C<crm node list> and B<$crm_mon_cmd>
-is the same.
+is the same by calling C<check_online_nodes>.
 
 And runs C<crm_verify -LV>.
 
@@ -701,24 +767,79 @@ sub check_cluster_state {
     my %args = @_;
 
     # We may want to check cluster state without stopping the test
-    my $cmd = (defined $args{proceed_on_failure} && $args{proceed_on_failure} == 1) ? \&script_run : \&assert_script_run;
+    my $cmd_sub = (defined $args{proceed_on_failure} && $args{proceed_on_failure} == 1) ? \&script_run : \&assert_script_run;
 
-    $cmd->("$crm_mon_cmd");
+    $cmd_sub->("$crm_mon_cmd");
     if (is_sle '12-sp3+') {
         # Add sleep as command 'crm_mon' outputs 'Inactive resources:' instead of 'no inactive resources' on 12-sp5
         sleep 5;
-        $cmd->("$crm_mon_cmd | grep -i 'no inactive resources'");
+        $cmd_sub->("$crm_mon_cmd | grep -i 'no inactive resources'");
     }
-    $cmd->('crm_mon -1 | grep \'partition with quorum\'');
-    # In older versions, node names in crm node list output are followed by ": normal". In newer ones by ": member"
-    $cmd->(q/crm_mon -s | grep "$(crm node list | grep -E -c ': member|: normal') nodes online"/);
+    $cmd_sub->('crm_mon -1 | grep \'partition with quorum\'');
+
+    # If running with versions of crmsh older than 4.4.2, do not use check_online_nodes (see POD below)
+    # Fall back to the older method of checking Online vs. Configured nodes
+    my $out = script_output(q|rpm -q --qf 'crmshver=%{VERSION}\n' crmsh|);
+    my ($ver) = $out =~ /crmshver=(\S+)/m or die "Couldn't parse crmsh version from: $out";
+    my $cmp_result = package_version_cmp($ver, '4.4.2');
+    if ($cmp_result < 0) {
+        $cmd_sub->(q/crm_mon -s | grep "$(crm node list | grep -E -c ': member|: normal') nodes online"/);
+    }
+    else {
+        check_online_nodes(%args);
+    }
+
     # As some options may be deprecated, test shouldn't die on 'crm_verify'
     if (get_var('HDDVERSION')) {
         script_run 'crm_verify -LV';
     }
     else {
-        $cmd->('crm_verify -LV');
+        $cmd_sub->('crm_verify -LV');
     }
+}
+
+=head2 check_online_nodes
+
+ check_online_nodes( [ proceed_on_failure => 1 ] );
+
+Checks that the reported number of nodes in the output of C<crm node list> and B<$crm_mon_cmd>
+is the same.
+
+With the named argument B<proceed_on_failure> set to 1, the function will only report
+the number of nodes configured and online. Otherwise it will die when the number of
+configured nodes is different than the number of online nodes, or if it fails to get
+any of these numbers.
+
+This function is not exported and it's used only by C<check_cluster_state>.
+
+This function requires crmsh-4.4.2 or newer.
+
+=cut
+
+sub check_online_nodes {
+    my %args = @_;
+    # In older versions, node names in output from commands 'crm node list' or 'crm node show',
+    # are followed by ": normal". In newer ones by ": member"
+    my $configured_nodes = script_output q@echo "|$(crm node show | grep -E -c ': member|: normal')|"@;
+    $configured_nodes =~ /\|(\d+)\|/;
+    $configured_nodes = $1 // 0;
+    record_info 'Configured nodes', "Configured nodes: $configured_nodes";
+    die 'Cluster has 0 nodes' if ($configured_nodes == 0 && !$args{proceed_on_failure});
+
+    # Get online nodes with: crm_mon --exclude=all --include=nodes -1
+    # Output will look like:
+    # Node List:
+    #   * Online: [ node01 node02 ]
+    my $online_nodes = script_output 'crm_mon --exclude=all --include=nodes --output-as=text -1', %args;
+    foreach (split(/\n/, $online_nodes)) {
+        next unless /Online: \[\s+([^\]]+)\]/;
+        # Assign array to scalar will give us number of elements in the list
+        $online_nodes = split(/\s+/, $1);
+    }
+    record_info 'Online nodes', "Online nodes: $online_nodes";
+
+    die "Could not calculate online nodes. Got: [$online_nodes]" if (($online_nodes !~ /^\d+$/) && !$args{proceed_on_failure});
+    die 'Not all configured nodes are online' if (($configured_nodes - $online_nodes) && !$args{proceed_on_failure});
 }
 
 =head2 wait_until_resources_stopped
@@ -780,7 +901,7 @@ sub wait_until_resources_started {
     push @cmds, "grep -iq 'no inactive resources' <($crm_mon_cmd)" if is_sle '12-sp3+';
     push @cmds, "! (grep -Eioq ':[[:blank:]]*failed|:[[:blank:]]*starting' <($crm_mon_cmd))";
 
-    # Execute each comnmand to validate that the cluster is running
+    # Execute each command to validate that the cluster is running
     # This can takes time, so a loop is a good idea here
     foreach my $cmd (@cmds) {
         # Each command execution has its own timeout, so we need to reset the counter
@@ -794,6 +915,8 @@ sub wait_until_resources_started {
                 sleep 5;
             }
             else {
+                record_info('Cluster status', script_output("$crm_mon_cmd"));
+                save_state();
                 die "Cluster/resources did not start within $timeout seconds (cmd='$cmd')";
             }
         }
@@ -809,7 +932,7 @@ sub wait_until_resources_started {
 
 Use C<cs_wait_for_idle> to wait until the cluster is idle before continuing the tests.
 Supply a timeout with the named argument B<timeout> (defaults to 120 seconds). This
-timeout is scaled by the factor specified in the B<TIMEOUT_SCALE> setting. Croaks on
+timeout is scaled by the factor specified in the B<TIMEOUT_SCALE> setting. Dies on
 timeout.
 
 =cut
@@ -817,12 +940,19 @@ timeout.
 sub wait_for_idle_cluster {
     my %args = @_;
     my $timeout = bmwqemu::scale_timeout($args{timeout} // 120);
+    my $interval = 5;
     my $outoftime = time() + $timeout;    # Current time plus timeout == time at which timeout will be reached
-    return if script_run 'rpm -q ClusterTools2';    # cs_wait_for_idle only present if ClusterTools2 is installed
+    my $chk_cmd = 'cs_wait_for_idle --sleep 5';
+    if (script_run 'rpm -q ClusterTools2') {
+        # cs_wait_for_idle only present if ClusterTools2 is installed.
+        # If not installed, check with crmadmin and wait longer between checks
+        $chk_cmd = q@crmadmin -q -S $(crmadmin -Dq | sed 's/designated controller is: //i')@;
+        $interval = 30;
+    }
     while (1) {
-        my $out = script_output 'cs_wait_for_idle --sleep 5', $timeout;
-        last if ($out =~ /Cluster state: S_IDLE/);
-        sleep 5;
+        my $out = script_output $chk_cmd, $timeout, proceed_on_failure => 1;
+        last if ($out =~ /S_IDLE/);
+        sleep $interval;
         die "Cluster was not idle for $timeout seconds" if (time() >= $outoftime);
     }
 }
@@ -943,62 +1073,27 @@ sub set_lvm_config {
 
 =head2 add_lock_mgr
 
- add_lock_mgr( $lock_manager );
+ add_lock_mgr( $lock_manager, [ force => bool ] );
 
 Configures a B<$lock_manager> resource in the cluster configuration on SUT.
 B<$lock_mgr> usually is either B<clvmd> or B<lvmlockd>, but any other cluster
 primitive could work as well.
 
+Takes a second named argument B<force> which if set to true will add C<--force>
+to the B<crmsh> command. Should be used with care. Defaults to false.
+
 =cut
 
 sub add_lock_mgr {
-    my ($lock_mgr) = @_;
+    my ($lock_mgr, %args) = @_;
+    $args{force} //= 0;
+    my $cmd = join(' ', 'crm', ($args{force} ? '--force' : ''), 'configure', 'edit');
 
-    assert_script_run "EDITOR=\"sed -ie '\$ a primitive $lock_mgr ocf:heartbeat:$lock_mgr'\" crm configure edit";
-    assert_script_run "EDITOR=\"sed -ie 's/^\\(group base-group.*\\)/\\1 $lock_mgr/'\" crm configure edit";
+    assert_script_run "EDITOR=\"sed -ie '\$ a primitive $lock_mgr ocf:heartbeat:$lock_mgr'\" $cmd";
+    assert_script_run "EDITOR=\"sed -ie 's/^\\(group base-group.*\\)/\\1 $lock_mgr/'\" $cmd";
 
     # Wait to get clvmd/lvmlockd running on all nodes
     sleep 5;
-}
-
-sub pre_run_hook {
-    my ($self) = @_;
-    if (isotovideo::get_version() == 12) {
-        $prev_console = $autotest::selected_console;
-    } else {
-        # perl -c will give a "only used once" message
-        # here and this makes the ci tests fail.
-        1 if defined $testapi::selected_console;
-        $prev_console = $testapi::selected_console;
-    }
-}
-
-sub post_run_hook {
-    my ($self) = @_;
-
-    return unless ($prev_console);
-    select_console($prev_console, await_console => 0);
-    if ($prev_console eq 'x11') {
-        ensure_unlocked_desktop;
-    }
-    else {
-        $self->clear_and_verify_console;
-    }
-}
-
-sub post_fail_hook {
-    my ($self) = @_;
-
-    # Save a screenshot before trying further measures which might fail
-    save_screenshot;
-
-    # Try to save logs as a last resort
-    ha_export_logs;
-    export_logs;
-}
-
-sub test_flags {
-    return {milestone => 1, fatal => 1};
 }
 
 =head2 is_not_maintenance_update
@@ -1006,16 +1101,25 @@ sub test_flags {
  is_not_maintenance_update( $package );
 
 Checks if the package specified in B<$package> is not targeted by a maintenance
-update. Returns true if the package is not targeted, i.e., package name does not
-appear in the B<BUILD> setting and the B<MAINTENANCE> setting is active, or false
-in all other cases.
+update. Returns true if the package is not targeted, i.e., B<MAINTENANCE> setting
+is active and package name does not appear in the B<BUILD> setting nor is it
+in the list of packages in the related B<INCIDENT_ID>. Returns false in all other
+cases. Besides the package B<$package>, it also checks for B<kernel> in the B<BUILD>
+setting and the list of packages, as the tests should always run with updates to the
+kernel.
 
 =cut
 
 sub is_not_maintenance_update {
     my $package = shift;
     # Allow to skip an openQA module if package is not targeted by maintenance update
-    if (get_var('MAINTENANCE') && get_var('BUILD') !~ /$package/) {
+    if (get_var('MAINTENANCE') && get_var('INCIDENT_ID')) {
+        # If package is listed in BUILD, no need to check for more
+        return 0 if (get_var('BUILD') =~ /$package|kernel/);
+        # Package name is not in BUILD setting, but it can still be targeted by the
+        # incident, so let's query SMELT to confirm
+        my @incident_packages = get_incident_packages(get_required_var('INCIDENT_ID'));
+        return 0 if (grep(/$package|kernel/, @incident_packages));
         record_info('Skipped - MU', "$package test not needed here");
         return 1;
     }
@@ -1058,8 +1162,9 @@ B<$ignore_failure> do not kill the test upon failure.
 
 sub script_output_retry_check {
     my %args = @_;
-    my $cmd = $args{cmd} // die('No command specified.');
-    my $regex = $args{regex_string} // die('Regex input missing');
+    foreach (qw(cmd regex_string)) { croak "Missing mandatory $_ argument" unless $args{$_}; }
+    my $cmd = $args{cmd};
+    my $regex = $args{regex_string};
     my $retry = $args{retry} // 5;
     my $sleep = $args{sleep} // 10;
     my $ignore_failure = $args{ignore_failure} // "0";
@@ -1094,6 +1199,11 @@ C<script_output_retry_check> also defined in this library.
 =cut
 
 sub collect_sbd_delay_parameters {
+    # Depending on when this function is executed, the cmap API may not be ready
+    # (for example, after a fence). Since corosync-cmapctl is used to get some
+    # of the params below, lets first confirm cmap API is ready
+    script_retry('corosync-cmapctl', delay => 30, timeout => $default_timeout, fail_message => 'cmap API not ready');
+
     # all commands below ($corosync_token, $corosync_consensus...) are defined and exported at the beginning of the library
     my %params = (
         'corosync_token' =>
@@ -1392,14 +1502,16 @@ B<timeout> Override default timeout value
 
 sub crm_check_resource_location {
     my (%args) = @_;
+    croak 'Missing mandatory argument "$args{resource}"' unless $args{resource};
     my $wait_for_target = $args{wait_for_target} // 0;
     my $timeout = $args{timeout} // bmwqemu::scale_timeout(120);
-    my $cmd = join(' ', "crm resource status", $args{resource}, "| grep 'resource $args{resource} is'"); # Grep to avoid random kernel message appearing in script_output
+    # Grep to avoid random kernel message appearing in script_output
+    my $cmd = join(' ', "crm resource status", $args{resource}, "| grep 'resource $args{resource} is'");
     my $out;
     my $current_location;
 
-    my $start_time = time;
-    while (time < ($start_time + $timeout)) {
+    my $start_time = time();
+    while (time() < ($start_time + $timeout)) {
         $out = script_output($cmd);
         $current_location = (split(': ', $out))[-1];
         return ($current_location) unless ($wait_for_target);
@@ -1440,4 +1552,578 @@ sub generate_lun_list {
         $index += $num_luns;
     }
 }
+
+
+=head2 set_cluster_parameter
+
+    set_cluster_parameter(resource=>'Totoro', parameter=>'neighbour', value=>'my');
+
+Manage HA cluster parameter using crm shell.
+
+=over
+
+=item * B<resource>: Resource containing parameter
+
+=item * B<parameter>: Parameter name
+
+=item * B<value>: Target parameter value
+
+=back
+
+=cut
+
+sub set_cluster_parameter {
+    my (%args) = @_;
+    foreach (qw(resource parameter value)) { croak "Missing mandatory $_ argument" unless $args{$_}; }
+    my $cmd = join(' ', 'crm', 'resource', 'param', $args{resource}, 'set', $args{parameter}, $args{value});
+    assert_script_run($cmd);
+}
+
+=head2 show_cluster_parameter
+
+    show_cluster_parameter(resource=>'Totoro', parameter=>'neighbour');
+
+Show cluster parameter value using CRM shell.
+
+=over
+
+=item * B<resource>: Resource containing parameter
+
+=item * B<parameter>: Parameter name
+
+=back
+
+=cut
+
+sub show_cluster_parameter {
+    my (%args) = @_;
+    foreach (qw(resource parameter)) { croak "Missing mandatory $_ argument" unless $args{$_}; }
+    my $cmd = join(' ', 'crm', 'resource', 'param', $args{resource}, 'show', $args{parameter});
+    return script_output($cmd);
+}
+
+=head2 prepare_console_for_fencing
+
+    prepare_console_for_fencing();
+
+Some HA tests modules will cause a node to fence. In these cases, the tests will need
+to assert a B<grub2> or B<bootmenu> screen, so the modules will need to select the
+C<root-console> before any calls to C<assert_screen>. On some systems, a simple call
+to C<select_console 'root-console'> will not work as the console could be "dirty" with
+messages obscuring the root prompt. This function will pre-select the console without
+asserting anything on the screen, clear it, and then select it normally.
+
+=cut
+
+sub prepare_console_for_fencing {
+    select_console 'root-console', await_console => 0;
+    send_key 'ctrl-l';
+    send_key 'ret';
+    select_console 'root-console';
+}
+
+=head2 crm_get_failcount
+
+    crm_get_failcount(crm_resource=>'ASCS_00' [, assert_result=>'true']);
+
+Returns failcount number for specified resource.
+
+=over
+
+=item * B<crm_resource>: Cluster resource name
+
+=item * B<assert_result>: Make test fail instead of returning value. Default: 'false'
+
+=back
+
+=cut
+
+sub crm_get_failcount {
+    my (%args) = @_;
+    croak 'Missing mandatory argument "$args{crm_resource}"' unless $args{crm_resource};
+    my $cmd = join(' ', 'crm_failcount', '--query', "--resource=$args{crm_resource}");
+    my %result = map { my ($key, $value) = split(/=/, $_); $key => $value } split(/ +/, script_output($cmd));
+    die "Cluster resource '$args{crm_resource}' has positive fail count value: '$result{value}'"
+      if $result{value} != '0' && $args{assert_result};
+
+    return $result{value};
+}
+
+=head2 crm_wait_failcount
+
+    crm_wait_failcount(crm_resource=>'ASCS_00' [, timeout=>'60', delay=>'3']);
+
+Waits till crm fail count reached non-zero value of fail after B<timeout>
+
+=over
+
+=item * B<crm_resource>: Cluster resource name
+
+=item * B<timeout>: Give up after timeout in sec. Default 60 sec.
+
+=item * B<delay>: Delay between retries. Default: 5 sec
+
+=back
+
+=cut
+
+sub crm_wait_failcount {
+    my (%args) = @_;
+    croak 'Missing mandatory argument "$args{crm_resource}"' unless $args{crm_resource};
+    $args{timeout} //= 300;
+    $args{delay} //= 5;
+
+
+    my $result = 0;
+    my $start_time = time;
+    while ($result == 0) {
+        $result = crm_get_failcount(crm_resource => $args{crm_resource});
+        sleep $args{delay};
+        last if (time() > ($start_time + $args{timeout}));
+    }
+
+    die "Fail count is still 0 after timeout: '$args{timeout}'" if $result == 0;
+    return ($result);
+}
+
+
+=head2 crm_resources_by_class
+
+    crm_resources_by_class(primitive_class=>'stonith:external/sbd');
+
+Returns resource name ARRAYREF filtered by class.
+Refer to CRM help pages for details: C<crm configure show --help> and C<crm ra classes>
+
+=over
+
+=item * B<primitive_class>: CRM resource class name. Example: 'stonith:external/sbd', 'IPaddr2'
+
+=back
+
+=cut
+
+sub crm_resources_by_class {
+    my (%args) = @_;
+    croak 'Missing mandatory argument: "$args{primitive_class}"' unless $args{primitive_class};
+    my @result;
+    # Filter only 'primitive' line
+    foreach (split("\n", script_output("crm configure show related:$args{primitive_class} | grep primitive"))) {
+        # split primitive line "primitive <name> <class>"
+        my @aux = split(/\s+/, $_);
+        if ($aux[2]) {
+            # additional check if returned resource exists for some bogus value
+            assert_script_run("crm resource status $aux[1]");
+            push @result, $aux[1];
+        }
+    }
+    return \@result;
+}
+
+=head2 crm_resource_locate
+
+    crm_resource_locate(crm_resource=>'ASCS_00');
+
+Returns hostname of cluster node where defined B<crm_resource> currently resides.
+
+=over
+
+=item * B<crm_resource>: Cluster resource name
+
+=back
+
+=cut
+
+sub crm_resource_locate {
+    my (%args) = @_;
+    croak 'Missing mandatory argument: "$args{crm_resource}"' unless $args{crm_resource};
+    # Command outputs something like: 'resource rsc_sap_QES_ASCS01 is running on: qesscs01lc14'
+    my $result = script_output("crm resource locate $args{crm_resource}");
+    return (split(':\s', $result))[1];
+}
+
+=head2 crm_resource_meta_show
+
+    crm_resource_meta_show(resource=>'Totoro', meta_argument=>'neighbour');
+
+Return resource meta-argument value.
+
+=over
+
+=item * B<resource>: Resource containing parameter
+
+=item * B<meta_argument>: Meta-argument name
+
+=back
+
+=cut
+
+sub crm_resource_meta_show {
+    my (%args) = @_;
+    foreach (qw(resource meta_argument)) { croak "Missing mandatory $_ argument" unless $args{$_}; }
+    return script_output("crm resource meta $args{resource} show $args{meta_argument}");
+}
+
+=head2 crm_resource_meta_set
+
+    crm_resource_meta_set(resource=>'Totoro', meta_argument=>'neighbour', argument_value=>'my');
+
+Change or delete resource meta-argument value.
+
+=over
+
+=item * B<resource>: Resource containing parameter
+
+=item * B<meta_argument>: Meta-argument name
+
+=item * B<argument_value>: Meta-argument value. If B<undef>, meta argument will be removed.
+
+=back
+
+=cut
+
+sub crm_resource_meta_set {
+    my (%args) = @_;
+
+    foreach (qw(resource meta_argument)) { croak "Missing mandatory $_ argument" unless $args{$_}; }
+    my $action = $args{argument_value} ? 'set' : 'delete';
+    my $cmd = "crm resource meta $args{resource} $action $args{meta_argument}";
+    $cmd .= " $args{argument_value}" if $action eq 'set';
+
+    assert_script_run($cmd);
+    record_info('CRM meta set', "CRM meta set: $cmd");
+}
+
+=head2 crm_list_options
+
+    my $ret = crm_list_options();
+
+Executes a series of C<crm> commands to list metadata options for different
+resource types (primitive, fencing, cluster attributes) and validates that their
+XML output is well-formed. This function is designed to test a new feature in
+C<crmsh> version 5.0.0 and newer, which provides a CLI interface to query
+resource meta-attributes.
+
+The function will execute the following commands:
+
+=over
+
+=item * C<crm_resource --list-options primitive --output-as xml>
+
+=item * C<crm_resource --list-options fencing --output-as xml>
+
+=item * C<crm_attribute --list-options cluster --all --output-as=xml>
+
+=back
+
+B<Return values:>
+
+=over
+
+=item * B<1>: All commands executed successfully and their XML output was valid.
+
+=item * B<0>: The installed C<crmsh> version is older than 5.0.0. The function performs no operation.
+
+=item * B<-1>: At least one of the commands produced output that was not valid XML.
+
+=back
+
+=cut
+
+sub crm_list_options {
+    my (%args) = @_;
+
+    my $outver = script_output(q|rpm -q --qf 'crmshver=%{VERSION}\n' crmsh|);
+    my ($ver) = $outver =~ /crmshver=(\S+)/m or die "Couldn't parse crmsh version from: $outver";
+    my $cmp_result = package_version_cmp($ver, '5.0.0');
+    return 0 if ($cmp_result < 0);
+    my $out;
+
+    my $parser = XML::Simple->new;
+    my $ret = 1;
+    foreach (
+        'crm_resource  --list-options primitive     --output-as xml',
+        'crm_resource  --list-options fencing       --output-as xml',
+        'crm_attribute --list-options cluster --all --output-as=xml') {
+        $out = script_output($_);
+        eval { $parser->parse_string($out) };
+        if ($@) {
+            $ret = -1;
+            diag("XML parsing error for '$_' output:\n $@");
+        }
+    }
+    return $ret;
+}
+
+=head2 get_sbd_devices
+
+    my @ret = get_sbd_devices($hostname);
+
+Executes 'crm sbd status' to get sbd configuration, and return the devices information
+for the specify node.
+
+Following is the result of `crm sbd status`, we will check if there are two device on each node.
+status of sdb.service:
+
+Node                          |Active      |Enable         |Since
+2nodes-node01:       |YES          |YES              | active since: Tue 2025-07-22 09:45:21
+2nodes-node02:       |YES          |YES              | active since: Tue 2025-07-22 09:45:21
+
+# Status of the sbd disk watcher process on 2nodes-node01:
+|-3059 sbd: watcher: /dev/disk/by-path/xxxxxxx - slot : 0 --uuid xxxx
+|-3060 sbd: watcher: /dev/disk/by-path/xxxxxxx - slot : 0 --uuid xxxx
+
+# Status of the sbd disk watcher process on 2nodes-node02:
+|-3058 sbd: watcher: /dev/disk/by-path/xxxxxxx - slot : 0 --uuid xxxx
+|-3061 sbd: watcher: /dev/disk/by-path/xxxxxxx - slot : 0 --uuid xxxx
+
+# Watchdog info:
+Node.                    |Device                    |Driver           |Kernel Timeout
+2nodes-node01  |/dev/watchdog.   | <unknown>    | 10
+2nodes-node02  |/dev/watchdog.   | <unknown>    | 10
+
+=over
+
+=item B<Parameters:>
+
+=over
+
+=item C<$hostname>
+
+String. The name of the node to query.
+
+=back
+
+=item B<Return values:>
+
+Array. List of SBD devices, e.g. (sbd_device1, sbd_device2)
+
+=back
+
+=cut
+
+sub get_sbd_devices {
+    my $hostname = shift;
+
+    my $in_block = 0;
+    my @devices;
+    foreach my $line (split /\n/, script_output('crm sbd status')) {
+        if ($line =~ /^# Status of the sbd disk watcher process on \Q$hostname\E:/) {
+            $in_block = 1;
+            next;
+        }
+
+        if ($line =~ /^# Status of the sbd disk watcher process on / or $line =~ /^# Watchdog info:/) {
+            $in_block = 0;
+        }
+
+        if ($in_block && $line =~ /watcher:\s+(\S+)/) {
+            push @devices, $1;
+        }
+    }
+    return @devices;
+}
+
+=head2 parse_sbd_metadata
+
+    my @ret = parse_sbd_metadata;
+
+Executes 'crm sbd configure show disk_metadata' to get sbd information, and return the devices and metadata value.
+
+Following is the result of `crm sbd configure show disk_metadata`, we will check if there are two device on each node.
+INFO: crm sbd configure show disk_metadata
+==Dumping header on disk /dev/disk/by-path/xxxxx
+Header version      : 2.1
+UUID                : xxx
+Number of slots     : 255
+Sector size         : 512
+Timeout (watchdog)  : 5
+Timeout (allocate)  : 10
+Timeout (loop)      : 2
+Timeout (msgwait)   : 5
+==Header on disk /dev/disk/by-path/xxxxxxx is dumped
+
+# If there is a second sbd device
+==Dumping header on disk /dev/disk/by-path/xxxxx
+Header version      : 2.1
+UUID                : xxx
+Number of slots     : 255
+Sector size         : 512
+Timeout (watchdog)  : 5
+Timeout (allocate)  : 10
+Timeout (loop)      : 2
+Timeout (msgwait)   : 5
+==Header on disk /dev/disk/by-path/xxxxxxx is dumped
+
+=over
+
+=item B<Return values:>
+
+   (
+          {
+            'metadata' => {
+                            'allocate' => '10',
+                            'loop' => '2',
+                            'msgwait' => '5',
+                            'watchdog' => '5'
+                          },
+            'device_name' => '/dev/disk/by-path/xxxxx'
+          },
+          {
+            'device_name' => '/dev/disk/by-path/xxxxx',
+            'metadata' => {
+                            'allocate' => '10',
+                            'loop' => '2',
+                            'msgwait' => '5',
+                            'watchdog' => '5'
+                          }
+          }
+        ])
+
+=back
+
+=cut
+
+sub parse_sbd_metadata {
+    my @val = ();
+    my $metadata = {};
+    my $device_name = "";
+    foreach my $line (split(/\n/, script_output('crm sbd configure show disk_metadata'))) {
+        if ($line =~ /^==Dumping header on disk (\S+)/) {
+            $device_name = $1;
+        } elsif ($line =~ /Timeout\s+\((\w+)\)\s+\:\s+(\d+)/) {
+            $metadata->{$1} = $2;
+        } elsif ($line =~ /^==Header on disk (\S+) is dumped$/) {
+            push @val, {device_name => $device_name, metadata => $metadata};
+
+            # Init the device_name and metadata hash;
+            $device_name = "";
+            $metadata = {};
+        }
+    }
+    return @val;
+}
+
+=head2 list_configured_sbd
+
+    list_configured_sbd();
+
+Returns list of SBD devices defined in `/etc/sysconfig/sbd` as an B<ARRAYREF>. Example: ['/device/1', '/device/2']
+
+=cut
+
+sub list_configured_sbd {
+    my (%args) = @_;
+    # return if file does not exist - means no SBD setup
+    return [] if script_run('test -f /etc/sysconfig/sbd');
+    my $sbd_devices = script_output('grep -E ^SBD_DEVICE /etc/sysconfig/sbd', proceed_on_failure => '1');
+    return [] unless $sbd_devices;
+    $sbd_devices =~ s/SBD_DEVICE=|"//g;
+    my @sbd_devices = split(';', $sbd_devices);
+    assert_script_run("test -b $_", fail_message => "SBD device '$_' not found") foreach @sbd_devices;
+    return \@sbd_devices;
+}
+
+=head2 sbd_device_report
+
+    sbd_device_report(device_list=>['/device/one', '/device/two']);
+
+Executes various SBD related commands and returns report compiled from the outputs as a single string.
+
+=over
+
+=item * B<device_list> List of devices as an B<ARRAYREF> that should be included in the report.
+
+=item * B<expected_sbd_devices_count> Optional check if number of expected SBD devices deployed matches current state.
+
+=back
+
+=cut
+
+sub sbd_device_report {
+    my (%args) = @_;
+    my $separator = "\n" . '*' x 50 . "\n";
+    my $report = "SBD Device report$separator";
+    # Optional check if number of expected SBD devices matches current state
+    if ($args{expected_sbd_devices_count}) {
+        my $number_of_sbds = $args{device_list} ? @{$args{device_list}} : '0';
+        $report .= "Check SBD device count :\n";
+        $report .= ($args{expected_sbd_devices_count} == $number_of_sbds) ?
+          "PASS: Number of expected ($args{expected_sbd_devices_count}) devices matched${separator}" :
+          "FAIL: Number of expected ($args{expected_sbd_devices_count}) devices does not match current state ($number_of_sbds)${separator}";
+    }
+
+    # no need to run commands if there are no SBD devices configured
+    return $report unless $args{device_list};
+    $report .= join("\n", 'Device list:', @{$args{device_list}});
+    $report .=
+      join("\n", map { "${separator}Slot $_:\n" . script_output("sbd list -d $_") } @{$args{device_list}});
+    $report .=
+      join("\n", map { "${separator}Dump $_:\n" . script_output("sbd dump -d $_") } @{$args{device_list}});
+
+    return $report;
+}
+
+=head2 get_fencing_type
+
+    get_fencing_type();
+
+Checks which stonith resource type is configured using B<crm shell>.
+Returns full type name ('external/sbd', 'fence_azure_arm', ...).
+
+=cut
+
+sub get_fencing_type {
+    my $stonith_type = script_output('crm configure show type:primitive | grep stonith');
+    $stonith_type =~ m/stonith:(.*)\s/;
+    return $1;
+}
+
+=head2 check_crm_nonroot
+
+    check_crm_nonroot();
+
+Checks if non-root user run 'crm configure show' successfully
+
+=over
+
+=item * B<user> non-root user, usually be <sid>adm
+
+=back
+
+=cut
+
+sub check_crm_nonroot {
+    my $user = shift // die 'check_crm_nonroot requires a username';
+
+    # Get the command 'crm' path
+    my $command = script_output('which crm');
+
+    # Set the user into haclient job group because of `crm` permission
+    assert_script_run("usermod -a -G haclient $user");
+
+    my $orig_prompt = serial_term_prompt() // '# ';
+
+    # Login as non-root user
+    enter_cmd "su - $user";
+    wait_serial '> ', no_regex => 1, timeout => 2;
+    set_serial_prompt '> ';
+
+    # Unset all related PATH which belong to non-root user.
+    my @paths = ('PYTHONPATH', 'PYTHONHOME', 'PYTHON_DIR', 'PYTHON_MODULES_DIR', 'PYTHON_VERSION', 'PYTHON_VERSION_FILE', 'LD_LIBRARY_PATH');
+    foreach my $path (@paths) {
+        assert_script_run("unset $path");
+    }
+
+    # Run crm configure show
+    assert_script_run("yes | $command configure show");
+
+    # Exit non-root user
+    enter_cmd 'exit';
+
+    $testapi::distri->{serial_term_prompt} = $orig_prompt;
+    wait_serial $orig_prompt, no_regex => 1, timeout => 2;
+
+    select_serial_terminal();
+}
+
 1;

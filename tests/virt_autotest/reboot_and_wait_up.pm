@@ -7,12 +7,8 @@ package reboot_and_wait_up;
 # Summary: virt_autotest: the initial version of virtualization automation test in openqa, with kvm support fully, xen support not done yet
 # Maintainer: alice <xlai@suse.com>
 
-use strict;
-use warnings;
 use testapi;
 use ipmi_backend_utils;
-use base "proxymode";
-use power_action_utils 'power_action';
 use Utils::Architectures;
 use virt_autotest::utils;
 
@@ -23,7 +19,7 @@ sub reboot_and_wait_up {
     if (is_s390x) {
         record_info('INFO', 'Reboot LPAR');
         #Reboot s390x lpar
-        power_action('reboot', observe => 1, keepconsole => 1);
+        enter_cmd "reboot";
         my $svirt = select_console('svirt', await_console => 0);
         return;
     }
@@ -60,13 +56,8 @@ sub reboot_and_wait_up {
                 #Xen console may output additional messages about vm on sol whose output is disrupted.
                 #So in order to get login prompt back on screen, 'ret' key should be fired up. But the
                 #os name banner might not be available anymore, only 'linux-login' needle can be matched.
-                if (is_xen_host) {
-                    send_key 'ret' for (0 .. 2);
-                    assert_screen [qw(text-login linux-login)], 600;
-                }
-                else {
-                    assert_screen [qw(text-login linux-login)], 600;
-                }
+                send_key 'ret' for (0 .. 2);
+                assert_screen [qw(text-login linux-login)], 600;
                 enter_cmd "root";
                 assert_screen "password-prompt";
                 type_password;

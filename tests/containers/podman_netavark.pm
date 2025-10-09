@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2023-2024 SUSE LLC
+# Copyright 2023-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: podman, netavark, aardvark
@@ -12,11 +12,30 @@ use testapi;
 use serial_terminal qw(select_serial_terminal);
 use version_utils qw(package_version_cmp is_transactional is_jeos is_leap is_sle_micro is_leap_micro is_sle is_microos is_public_cloud is_vmware);
 use containers::common qw(install_packages);
-use containers::utils qw(get_podman_version);
 use Utils::Systemd qw(systemctl);
-use Utils::Architectures qw(is_s390x);
 use main_common qw(is_updates_tests);
 use publiccloud::utils qw(is_gce);
+use utils qw(script_retry);
+
+my ($ipv6_gateway, $ipv6_interface, $dev);
+
+sub store_ipv6_route {
+    # TEST3 may remove the default ipv6 route, save it to restore later
+    # bsc#1222239 bsc#1232450
+    my $default_ipv6_route = script_output("ip -6 route show default");
+    if ($default_ipv6_route =~ /default via (\S+) dev (\S+)/) {
+        $ipv6_gateway = $1;
+        $ipv6_interface = $2;
+    }
+}
+
+sub load_ipv6_route {
+    # restore the default ipv6 route
+    my $default_ipv6_route = script_output("ip -6 route show default");
+    if (!$default_ipv6_route && $ipv6_gateway && $ipv6_interface) {
+        assert_script_run("ip -6 route add default via $ipv6_gateway dev $ipv6_interface");
+    }
+}
 
 sub is_cni_in_tw {
     return (script_output("podman info -f '{{.Host.NetworkBackend}}'") =~ "cni") && is_microos && get_var('TDUP');
@@ -26,9 +45,7 @@ sub is_cni_in_tw {
 # but images build with older pre-installed podman come with cni
 # fresh install of sle-micro comes with netavark
 sub is_cni_default {
-    my $podman_version = get_podman_version();
-    return package_version_cmp($podman_version, '4.8.0') < 0 ||
-      (is_sle_micro('<6.0') && !check_var('FLAVOR', 'DVD-Updates'));
+    return (is_sle_micro('<6.0') && !check_var('FLAVOR', 'DVD-Updates'));
 }
 
 sub remove_subtest_setup {
@@ -36,6 +53,12 @@ sub remove_subtest_setup {
     assert_script_run("podman network prune -f");
     validate_script_output("podman network ls --noheading", sub { /^\w+\s+podman\s+bridge$/ });
     validate_script_output("podman ps -a --noheading", sub { /^\s*$/ });
+
+    if ($dev) {
+        script_run 'ip a s';
+        script_run("ip link set $dev down");
+        script_run("ip link del dev $dev");
+    }
 }
 
 sub is_container_running {
@@ -45,9 +68,6 @@ sub is_container_running {
     foreach my $cont (@containers) {
         if ($out =~ m/$cont/) {
             next;
-        } elsif (is_sle_micro) {
-            record_soft_failure('bsc#1211774 - podman fails to start container with SELinux');
-            return 0;
         } else {
             die "Container $cont is not running!";
         }
@@ -85,14 +105,7 @@ sub switch_to_netavark {
 sub run {
     my ($self, $args) = @_;
 
-    select_serial_terminal;
     my $podman = $self->containers_factory('podman');
-
-    my $podman_version = get_podman_version();
-    if (package_version_cmp($podman_version, '4.0.0') < 0) {
-        record_info('No support', "Netavark backend is not supported in podman-$podman_version");
-        return 1;
-    }
 
     if (is_cni_default || is_cni_in_tw) {
         switch_to_netavark;
@@ -102,10 +115,6 @@ sub run {
     }
 
     $podman->cleanup_system_host();
-
-    # it is turned off in
-    # https://github.com/os-autoinst/os-autoinst-distri-opensuse/blame/master/lib/containers/common.pm#L303
-    assert_script_run 'sysctl -w net.ipv6.conf.all.disable_ipv6=0';
 
     assert_script_run('curl ' . data_url('containers/nginx.conf') . ' -o nginx.conf');
 
@@ -127,6 +136,7 @@ sub run {
         name6 => 'webserver_ctr_ipv6'
     };
 
+    script_retry("podman pull $ctr1->{image}", timeout => 300, delay => 60, retry => 3);
     assert_script_run("podman network create --gateway $net1->{gateway} --subnet $net1->{subnet} $net1->{name}");
     assert_script_run("podman run --network $net1->{name}:ip=$ctr1->{ip},mac=$ctr1->{mac} -d --name $ctr1->{name} -v \$PWD/nginx.conf:/etc/nginx/nginx.conf:ro,Z $ctr1->{image}");
     assert_script_run("podman container inspect $ctr1->{name} --format {{.NetworkSettings.Networks.$net1->{name}.IPAddress}}");
@@ -197,42 +207,51 @@ sub run {
     }
 
     remove_subtest_setup;
+    load_ipv6_route;
 
     my $cur_version = script_output('rpm -q --qf "%{VERSION}\n" netavark');
     # only for netavark v1.6+
     # JeOS's kernel-default-base is missing *macvlan* kernel module
-    if (!(is_jeos || (is_updates_tests && is_gce)) && package_version_cmp($cur_version, '1.6.0') >= 0) {
+    if (!is_jeos && package_version_cmp($cur_version, '1.6.0') >= 0) {
         record_info('TEST4', 'smoke test for netavark dhcp proxy + macvlan');
         $net1->{name} = 'test_macvlan';
         systemctl('enable --now netavark-dhcp-proxy.socket');
         systemctl('status netavark-dhcp-proxy.socket');
 
-        my $dev = script_output(q(ip -br link show | awk '/UP / {print $1}'| head -n 1));
-        my $extra = '';
-        if (is_public_cloud || is_s390x || is_vmware) {
-            my $sn = script_output(qq(ip -o -f inet addr show $dev | awk '/scope global/ {print \$4}' | head -n 1)) =~ s/\.\d+\//\.0\//r;
-            $extra .= "--subnet $sn ";
-            my $gw = $sn =~ s/0\/\d+$/1/r;
-            $extra .= "--gateway $gw ";
-            my $range = $gw =~ s/\d+$/244\/30/r;
-            $extra .= "--ip-range $range";
-        }
+        my $d = script_output(q(ip -br link show | awk '/UP / {print $1}'| head -n 1));
+        my $id = 666;
+        $dev = "$d" . "\.$id";
+
+        assert_script_run("ip link add link $d name $dev type vlan id $id");
+        assert_script_run("ip link set $dev up");
+
+        my $extra = '--subnet=192.168.64.0/24  --ip-range=192.168.64.128/25 --gateway=192.168.64.254';
         assert_script_run("podman network create -d macvlan --interface-name $dev $extra $net1->{name}");
-        assert_script_run("podman run --network $net1->{name} -td --name $ctr2->{name} $ctr2->{image}");
+        assert_script_run("podman run --network $net1->{name} -td --name $ctr2->{name} --ip 192.168.64.128 $ctr2->{image}");
         if (is_container_running($ctr2->{name})) {
             assert_script_run("podman exec $ctr2->{name} ip addr show eth0");
             assert_script_run("podman container inspect $ctr2->{name} --format {{.NetworkSettings.Networks.$net1->{name}.IPAddress}}");
         }
+
+        assert_script_run("podman run --network $net1->{name} -td --name $ctr1->{name} --ip 192.168.64.129 $ctr2->{image}");
+        assert_script_run("podman exec $ctr2->{name} ip addr show eth0");
+        assert_script_run("podman exec $ctr1->{name} ping -c4 192.168.64.128");
     }
 
     remove_subtest_setup;
 }
 
+sub pre_run_hook() {
+    select_serial_terminal;
+    store_ipv6_route;
+}
+
 sub post_run_hook {
     shift->_cleanup();
 }
+
 sub post_fail_hook {
-    script_run("sysctl -a | grep --color=never net");
+    load_ipv6_route;
     shift->_cleanup();
 }
 

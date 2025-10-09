@@ -9,6 +9,10 @@ schedule:
   - console/check_os_release
   - console/ping
   - console/arping
+  - console/wireshark_cli
+  - console/traceroute
+  - console/tracepath
+  - console/dig
   - console/man_pages
   - console/openvswitch
   - console/pam
@@ -37,42 +41,60 @@ schedule:
   - console/sysstat
   - console/cpio
   - console/tar
+  - console/ruby
+  - console/tcpdump
   - '{{version_specific}}'
   - console/coredump_collect
 conditional_schedule:
   version_specific:
     VERSION:
-      15-SP6:
+      15-SP7:
+        - console/rabbitmq
+        - console/chrony
         - console/openssl_nodejs
         - console/golang
         - console/redis
+        - console/ansible
+        - qe-core/systemd/journal_remote
+        - '{{arch_specific}}'
+      15-SP6:
+        - console/rabbitmq
+        - console/chrony
+        - console/openssl_nodejs
+        - console/golang
+        - console/redis
+        - console/ansible
+        - qe-core/systemd/journal_remote
         - '{{arch_specific}}'
       15-SP5:
+        - console/rabbitmq
+        - console/chrony
         - console/openssl_nodejs
         - console/golang
         - console/redis
+        - console/ansible
         - '{{arch_specific}}'
       15-SP4:
+        - console/rabbitmq
+        - console/chrony
         - console/openssl_nodejs
         - console/golang
         - console/redis
+        - console/ansible
         - '{{arch_specific}}'
       15-SP3:
+        - console/rabbitmq
+        - console/chrony
         - console/openssl_nodejs
         - console/golang
         - console/redis
         - '{{arch_specific}}'
       15-SP2:
+        - console/rabbitmq
+        - console/chrony
         - console/openssl_nodejs
         - console/golang
         - console/redis
-        - '{{arch_specific}}'
-      15-SP1:
-        - console/openssl_nodejs
-        - console/golang
-        - '{{arch_specific}}'
-      15:
-        - console/openssl_nodejs
         - '{{arch_specific}}'
       12-SP5:
         - console/openssl_nodejs
@@ -85,6 +107,10 @@ conditional_schedule:
         - '{{sle15}}'
   sle15:
     VERSION:
+      15-SP7:
+        - console/firewalld
+        - console/lshw
+        - console/dpdk
       15-SP6:
         - console/firewalld
         - console/lshw
@@ -102,9 +128,3 @@ conditional_schedule:
       15-SP2:
         - console/firewalld
         - console/lshw
-      15-SP1:
-        - console/firewalld
-        - console/lshw
-      15:
-        - console/lshw
-        - console/firewalld

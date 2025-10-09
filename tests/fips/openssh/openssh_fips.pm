@@ -17,12 +17,16 @@
 # Tags: tc#1525228, poo#90458
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils 'zypper_call';
 use version_utils qw(is_sle is_transactional is_sle_micro);
+
+sub is_older_product {
+    return 1 if is_sle('<16');
+    return 1 if is_sle_micro('<6.2');
+    return 0;    # default for Tumbleweed and newer SLE Micro
+}
 
 sub run {
     select_serial_terminal;
@@ -33,6 +37,12 @@ sub run {
 
     # this package is not available on SL Micro
     zypper_call('in expect') unless is_transactional;
+
+    # on Tumbleweed sshd is not active by default:
+    # ensure sshd is installed and started before trying to connect
+    my $pkg_name = is_sle('<=15-SP2') ? "openssh" : "openssh-server";
+    assert_script_run "rpm -q " . $pkg_name . " || zypper in -y " . $pkg_name;
+    assert_script_run 'systemctl is-active sshd || systemctl enable --now sshd';
 
     # on SL Micro we skip this check because it behaves differently
     validate_script_output
@@ -48,7 +58,9 @@ sub run {
     validate_script_output("$cmd", sub { m/Unknown mac type|no matching MAC found/ }, proceed_on_failure => 1);
 
     # Verify ssh doesn't support DSA public key in fips mode
-    validate_script_output('ssh-keygen -t dsa -f ~/.ssh/id_dsa -P "" 2>&1 || true', sub { m/Key type dsa not alowed in FIPS mode/ }, proceed_on_failure => 1);
+    # exact message depends on the product version
+    my $message = is_older_product ? "Key type dsa not alowed in FIPS mode" : "unknown key type dsa";
+    validate_script_output('ssh-keygen -t dsa -f ~/.ssh/id_dsa -P "" 2>&1 || true', sub { m/$message/ }, proceed_on_failure => 1);
 
     # Although there is StrictHostKeyChecking=no option, but the fingerprint
     # for localhost was still added into ~/.ssh/known_hosts, which potentially

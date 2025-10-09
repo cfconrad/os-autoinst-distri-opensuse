@@ -19,8 +19,6 @@
 # Maintainer: Jun Wang <jgwang@suse.com>
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -33,6 +31,7 @@ sub run {
     my $version = get_required_var('VERSION');
     if (is_sle()) {
         my $qa_head_repo = "http://download.suse.de/ibs/QA:/Head/" . 'SLE-' . $version;
+        $qa_head_repo = get_required_var('QA_HEAD_REPO') unless (is_sle('<16'));
         zypper_ar("$qa_head_repo", name => 'qa-head-repo');
     }
     zypper_call('install bats pam-test pam pam-config snapper perl');
@@ -54,6 +53,7 @@ sub run {
     my $limit_pam_version = '1.5.0';
     my $ret = "";
     my $tap_results = "results.tap";
+    assert_script_run("sed -i 's/ROOT_PASSWORD/$testapi::password/g' $pamdir/*.sh");
     if (package_version_cmp($pam_version, $limit_pam_version) >= 0) {
         $ret = script_run("cd $pamdir; prove -v pam.sh >$tap_results", timeout => 180);
     } else {

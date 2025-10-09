@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2020-2024 SUSE LLC
+# Copyright 2020-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Summary: Base module for SELinux test cases
@@ -14,10 +14,11 @@ use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
 use security_boot_utils;
-use version_utils qw(is_sle_micro);
+use version_utils qw(has_selinux);
 use Utils::Backends 'is_pvm';
 use bootloader_setup qw(add_grub_cmdline_settings replace_grub_cmdline_settings);
 use power_action_utils 'power_action';
+use Utils::Architectures 'is_s390x';
 
 use base "opensusebasetest";
 
@@ -25,12 +26,14 @@ our @EXPORT = qw(
   $file_contexts_local
   $file_output
   $policyfile_tar
+  get_selinux_status
+  is_selinux_permissive
   download_policy_pkgs
 );
 
 our $file_contexts_local;
-# On SLE Micro we want to use the default selinux targeted policy and do not have minimum installed which this checks
-if (is_sle_micro('>=6.0')) {
+# On distros with SELinux enabled we want to use the default selinux targeted policy and do not have minimum installed which this checks
+if (has_selinux) {
     $file_contexts_local = '/etc/selinux/targeted/contexts/files/file_contexts.local';
 } else {
     $file_contexts_local = '/etc/selinux/minimum/contexts/files/file_contexts.local';
@@ -39,6 +42,36 @@ our $file_output = '/tmp/cmd_output';
 our $policypkg_repo = get_var('SELINUX_POLICY_PKGS');
 our $policyfile_tar = 'testing-main';
 our $dir = '/tmp/';
+
+=head2 get_selinux_status
+
+ get_selinux_status();
+
+Returns the SELinux status as a string.
+
+=cut
+
+sub get_selinux_status {
+    select_serial_terminal;
+
+    my $status = script_output("sestatus", proceed_on_failure => 1);
+    record_info("SELinux status", $status);
+    return $status;
+}
+
+=head2 is_selinux_permissive
+
+ is_selinux_permissive();
+
+Returns true if SELinux is in permissive mode, false otherwise.
+
+=cut
+
+sub is_selinux_permissive {
+    my $status = get_selinux_status();
+    return 0 unless $status =~ /SELinux status:\s+enabled/;
+    return $status =~ /Current mode:\s+permissive/;
+}
 
 # download SELinux policy pkgs
 sub download_policy_pkgs {
@@ -60,19 +93,13 @@ sub create_test_file {
 sub fixfiles_restore {
     my ($self, $file_name, $fcontext_pre, $fcontext_post) = @_;
 
-    if (script_run("[ -z \"$file_name\" ]") == 0) {
+    if (!$file_name) {
         record_info("WARNING", "no file need to be restored", result => "softfail");
+        return;
     }
-    elsif (script_run("[ -f \"$file_name\" ]") == 0) {
-        validate_script_output("ls -Z \"$file_name\"", sub { m/$fcontext_pre/ });
-        assert_script_run("fixfiles restore \"$file_name\"");
-        validate_script_output("ls -Z \"$file_name\"", sub { m/$fcontext_post/ });
-    }
-    elsif (script_run("[ -d \"$file_name\" ]") == 0) {
-        validate_script_output("ls -Zd \"$file_name\"", sub { m/$fcontext_pre/ });
-        assert_script_run("fixfiles restore \"$file_name\"");
-        validate_script_output("ls -Zd \"$file_name\"", sub { m/$fcontext_post/ });
-    }
+    validate_script_output qq{stat -c %C "$file_name"}, sub { m/$fcontext_pre/ };
+    assert_script_run qq{fixfiles restore "$file_name"};
+    validate_script_output qq{stat -c %C "$file_name"}, sub { m/$fcontext_post/ };
 }
 
 # check SELinux contexts of a file/dir
@@ -121,7 +148,9 @@ sub reboot_and_reconnect {
 sub set_sestatus {
     my ($self, $mode, $type) = @_;
     my $selinux_config_file = '/etc/selinux/config';
-    select_serial_terminal;
+
+    # In CC testing, the root login will be disabled, so we need to use select_console
+    is_s390x() ? select_console 'root-console' : select_serial_terminal;
 
     # workaround for 'selinux-auto-relabel' in case: auto relabel then trigger reboot
     my $results = script_run("zypper --non-interactive se selinux-autorelabel");
@@ -145,7 +174,7 @@ sub set_sestatus {
 
     # reboot the vm and reconnect the console
     $self->reboot_and_reconnect(textmode => 1);
-    select_serial_terminal;
+    is_s390x() ? select_console 'root-console' : select_serial_terminal;
 
     validate_script_output(
         'sestatus',

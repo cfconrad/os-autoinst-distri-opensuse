@@ -13,18 +13,17 @@
 # Maintainer: Katerina Lorenzova <klorenzova@suse.cz>
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use lockapi;
 use version_utils;
-
+use utils "zypper_call";
 
 sub run {
     barrier_create('rsync_setup', 2);
     barrier_create('rsync_finished', 2);
     mutex_create 'barrier_setup_done';
     select_console 'root-console';
+    zypper_call('in rsync') if (script_run('rpm -qi rsync') == 1);
 
     #preparation of rsync config files
     assert_script_run('curl -v -o /etc/rsyncd.conf ' . data_url('console/rsyncd.conf'));
@@ -41,8 +40,11 @@ sub run {
         assert_script_run 'systemctl status rsyncd.service';
     }
 
+    # The custom path needs to be explicitly allowed
+    assert_script_run 'semanage fcontext -a -t rsync_data_t "/srv/rsync_test(/.*)"' if has_selinux;
+
     #making testing files for download
-    assert_script_run 'mkdir -p /srv/rsync_test/pub';
+    assert_script_run 'mkdir -Zp /srv/rsync_test/pub';
     assert_script_run 'echo "content of rsync testing file" > /srv/rsync_test/pub/file1';
     assert_script_run 'echo "content of second file" > /srv/rsync_test/pub/file2';
     assert_script_run 'echo "third file" > /srv/rsync_test/pub/file3';

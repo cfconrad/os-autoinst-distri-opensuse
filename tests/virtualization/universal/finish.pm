@@ -11,8 +11,6 @@
 use base 'consoletest';
 use virt_autotest::common;
 use virt_autotest::utils;
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -22,6 +20,7 @@ sub run {
     # See https://progress.opensuse.org/issues/93204
     select_console('root-console');
     select_serial_terminal;
+    reconnect_console_if_not_good('root-serial-ssh');
 
     # Show all guests
     assert_script_run 'virsh list --all';

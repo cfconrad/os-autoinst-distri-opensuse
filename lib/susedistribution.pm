@@ -16,8 +16,8 @@ use utils qw(
   type_string_very_slow
   zypper_call
 );
-use version_utils qw(is_hyperv_in_gui is_sle is_leap is_svirt_except_s390x is_tumbleweed is_opensuse is_hyperv is_plasma6 is_public_cloud);
-use x11utils qw(desktop_runner_hotkey ensure_unlocked_desktop x11_start_program_xterm);
+use version_utils qw(is_hyperv_in_gui is_sle is_leap is_svirt_except_s390x is_tumbleweed is_opensuse is_hyperv is_plasma6 is_public_cloud is_agama);
+use x11utils qw(desktop_runner_hotkey ensure_unlocked_desktop x11_start_program_xterm default_gui_terminal);
 use Utils::Backends;
 
 use backend::svirt qw(SERIAL_TERMINAL_DEFAULT_DEVICE SERIAL_TERMINAL_DEFAULT_PORT SERIAL_USER_TERMINAL_DEFAULT_DEVICE SERIAL_USER_TERMINAL_DEFAULT_PORT);
@@ -49,8 +49,6 @@ Class constructor
 sub new {
     my ($class) = @_;
     my $self = $class->SUPER::new(@_);
-
-    $self->{script_run_die_on_timeout} = 1;
     return $self;
 }
 
@@ -339,13 +337,22 @@ sub ensure_installed {
     my $pkglist = ref $pkgs eq 'ARRAY' ? join ' ', @$pkgs : $pkgs;
     $args{timeout} //= 90;
 
-    x11_start_program_xterm;
+    # In this context we want to call the x11_start_program from the distribution directly
+    $self->x11_start_program(default_gui_terminal());
+
     $self->become_root;
     ensure_serialdev_permissions;
     quit_packagekit;
     zypper_call "in $pkglist";
     wait_still_screen 1;
-    send_key("alt-f4");    # close xterm
+    send_key("alt-f4");    # close terminal
+
+    if (check_screen 'terminal-close-window', timeout => 30) {
+        wait_screen_change {
+            testapi::assert_and_click('terminal-close-window');
+        };
+    }
+
     assert_screen 'generic-desktop' if is_opensuse;
 }
 
@@ -476,8 +483,9 @@ sub init_consoles {
             || (get_var('BACKEND', '') =~ /generalhw/ && get_var('GENERAL_HW_VNC_IP'))
             || is_svirt_except_s390x))
     {
-        $self->add_console('install-shell', 'tty-console', {tty => 2});
-        $self->add_console('installation', 'tty-console', {tty => check_var('VIDEOMODE', 'text') ? 1 : 7});
+        $self->add_console('install-shell', 'tty-console', {tty => is_agama() ? 8 : 2});
+        $self->add_console('installation', 'tty-console', {tty =>
+                  check_var('VIDEOMODE', 'text') ? 1 : is_agama() ? 2 : 7});
         $self->add_console('install-shell2', 'tty-console', {tty => 9});
         # On SLE15 X is running on tty2 see bsc#1054782
         $self->add_console('root-console', 'tty-console', {tty => get_root_console_tty});
@@ -573,8 +581,25 @@ sub init_consoles {
             my $packed_ip = gethostbyname($s390_guest_fqdn);
             die "Failed to get host by name for '$s390_guest_fqdn' (on " . hostname . ")" unless $packed_ip;
             my $s390_guest_ip = inet_ntoa($packed_ip);
-            $s390_params .= " HostIP=${s390_guest_ip}/${s390_guest_subnetmask}";
-            $s390_params .= " Hostname=${s390_guest_hostname}";
+            if (get_var("AGAMA")) {
+                my @split = split(/\./, get_required_var("REPO_HOST"));
+                pop(@split);
+                my $s390_gateway_ip = join(".", @split, "254");
+                my $s390_device = "enca00";
+
+                @split = split(/\./, get_required_var("ZVM_GUEST"));
+                shift(@split);
+                my $s390_domain = join(".", @split);
+
+                if (is_sle()) {
+                    $s390_device = "enc800";
+                }
+                $s390_params .= " ip=${s390_guest_ip}:${s390_guest_hostname}:${s390_gateway_ip}:${s390_guest_subnetmask}:${s390_domain}:${s390_device}:none";
+            }
+            else {
+                $s390_params .= " HostIP=${s390_guest_ip}/${s390_guest_subnetmask}";
+                $s390_params .= " Hostname" . "=${s390_guest_hostname}";
+            }
             set_var("S390_NETWORK_PARAMS", $s390_params);
 
             $hostname = $s390_guest_fqdn;
@@ -683,7 +708,6 @@ sub init_consoles {
                 username => 'root'
             });
     }
-
     return;
 }
 
@@ -819,7 +843,8 @@ sub activate_console {
     # Select configure serial and redirect to root-ssh instead
     return use_ssh_serial_console if (get_var('BACKEND', '') =~ /ikvm|ipmi|spvm|pvm_hmc/ && $console =~ m/^(root-console|install-shell|log-console)$/);
     if ($console eq 'install-shell') {
-        if (get_var("LIVECD")) {
+        # Agama behaves similarly as LIVE but we set a fixed password there
+        if (get_var("LIVECD") && !get_var('AGAMA')) {
             # LIVE CDs do not run inst-consoles as started by inst-linux (it's regular live run, auto-starting yast live installer)
             my $vt = get_root_console_tty();
             assert_screen "tty${vt}-selected", 10;
@@ -829,7 +854,7 @@ sub activate_console {
         else {
             # on s390x we need to login here by providing a password
             handle_password_prompt if is_s390x;
-            assert_screen "inst-console";
+            assert_screen 'inst-console';
         }
     }
 
@@ -1002,3 +1027,4 @@ sub console_selected {
 }
 
 1;
+

@@ -12,7 +12,9 @@ use Exporter 'import';
 
 use testapi;
 use utils;
-use version_utils 'is_sle';
+use version_utils qw(is_sle is_sle_micro);
+use transactional;
+use package_utils;
 
 our @EXPORT = qw(
   install_klp_product is_klp_pkg find_installed_klp_pkg klp_pkg_eq
@@ -20,6 +22,7 @@ our @EXPORT = qw(
 );
 
 sub install_klp_product {
+    my $kver = shift;
     my $arch = get_required_var('ARCH');
     my $version = get_required_var('VERSION');
     my $livepatch_repo = get_var('REPO_SLE_MODULE_LIVE_PATCHING');
@@ -43,16 +46,34 @@ sub install_klp_product {
     }
 
     if ($livepatch_repo) {
-        zypper_ar("$utils::OPENQA_FTP_URL/$livepatch_repo", name => "repo-live-patching");
+        zypper_ar("$utils::OPENQA_HTTP_URL/$livepatch_repo", name => "repo-live-patching");
     }
-    else {
+    elsif (is_sle('<16')) {
         zypper_ar("http://download.suse.de/ibs/SUSE/Products/$lp_module/$version/$arch/product/", name => "kgraft-pool");
         zypper_ar("$release_override http://download.suse.de/ibs/SUSE/Updates/$lp_module/$version/$arch/update/", name => "kgraft-update");
     }
 
-    # install kgraft product
-    zypper_call("in -l -t product $lp_product", exitcode => [0, 102, 103]);
-    zypper_call("mr -e kgraft-update") unless $livepatch_repo;
+    my $livepatch_pack = 'kernel-default-livepatch';
+    if (check_var('SLE_PRODUCT', 'slert')) {
+        $livepatch_pack = 'kernel-rt-livepatch';
+    }
+
+    # Enable live patching
+    if (is_sle_micro) {
+        $livepatch_pack .= "-$kver" if defined($kver);
+        assert_script_run 'cp /etc/zypp/zypp.conf /etc/zypp/zypp.conf.orig';
+        assert_script_run 'sed -i "/^multiversion =.*/c\\multiversion = provides:multiversion(kernel)" /etc/zypp/zypp.conf';
+        assert_script_run 'sed -i "/^multiversion\.kernels =.*/c\\multiversion.kernels = latest" /etc/zypp/zypp.conf';
+        assert_script_run 'echo "LIVEPATCH_KERNEL=\'always\'" >> /etc/sysconfig/livepatching';
+        install_package($livepatch_pack, trup_continue => 1, trup_reboot => 1)
+          unless (is_sle_micro('=6.0') || is_sle_micro('=6.1')) && $livepatch_pack eq 'kernel-rt-livepatch-6.4.0-10.1';
+    }
+    elsif (is_sle('16+')) {
+        install_package($livepatch_pack);
+    } else {
+        zypper_call("in -l -t product $lp_product", exitcode => [0, 102, 103]);
+        zypper_call("mr -e kgraft-update") unless $livepatch_repo;
+    }
 }
 
 sub is_klp_pkg {
@@ -60,17 +81,16 @@ sub is_klp_pkg {
     my $base = qr/(?:kgraft-|kernel-live)patch/;
 
     if ($$pkg{name} =~ m/^${base}-\d+/) {
-        if ($$pkg{name} =~ m/^${base}-(\d+_\d+_\d+-\d+_*\d*_*\d*)-([a-z][a-z0-9]*)$/) {
+        if ($$pkg{name} =~ m/^${base}-(\d+_\d+_\d+-\d+(?:_stage_\d+|(?:_\d+){1,2})?)-([a-z][a-z0-9]*)$/) {
             my $kver = $1;
             my $kflavor = $2;
-            $kver =~ s/_/./g;
+            $kver =~ s/_(?!stage)/./g;
             return {
                 name => $$pkg{name},
                 version => $$pkg{version},
                 kver => $kver,
                 kflavor => $kflavor,
             };
-
         } else {
             die "Unexpected kernel livepatch package name format: \"$$pkg{name}\"";
         }

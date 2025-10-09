@@ -5,7 +5,7 @@
 
 # Summary: Helper class for OpenStack
 #
-# Maintainer: qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::openstack;
 use Mojo::Base 'publiccloud::provider';
@@ -101,6 +101,7 @@ sub cleanup {
     $self->terraform_destroy() if ($self->terraform_applied);
     $self->delete_keypair();
     $self->delete_floating_ip();
+    return 1;
 }
 
 1;

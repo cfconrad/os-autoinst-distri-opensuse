@@ -49,6 +49,7 @@ our @EXPORT = qw(
   oscap_remediate
   oscap_evaluate
   oscap_evaluate_remote
+  oscap_upload_debug_logs
 );
 
 # The file names of scap logs and reports
@@ -61,6 +62,7 @@ our $f_fregex = '\\bfail\\b';
 our $ansible_exclusions;
 our $ansible_playbook_modified = 0;
 our $compliance_as_code_path;
+our $oscap_upload_debug_logs = 0;
 
 # Set default value for 'scap-security-guide' ds file
 our $f_ssg_sle_ds = '/usr/share/xml/scap/ssg/content/ssg-sle15-ds.xml';
@@ -232,7 +234,7 @@ sub replace_ansible_file {
         # Copy built file to correct location
         assert_script_run("cp $ansible_local_full_file_path $full_ansible_file_path");
         record_info("Copied ansible file", "Copied file $ansible_local_full_file_path to $full_ansible_file_path");
-        upload_logs("$full_ansible_file_path") if script_run "! [[ -e $full_ansible_file_path ]]";
+        uload_log_file($full_ansible_file_path);
     }
     #  compliance-as-code-compiled
     elsif ($use_content_type == 2) {
@@ -418,27 +420,43 @@ sub find_ansible_cce_by_task_name_vv {
     $_[4] = \@cce_id_and_name;
     return $cce_ids_size;
 }
-sub upload_logs_reports {
-    # Upload logs & ouputs for reference
-    my $files;
-    if (is_sle) {
-        $files = script_output('ls | grep "^ssg-sle.*.xml"');
-    }
-    else {
-        $files = script_output('ls | grep "^ssg-opensuse.*.xml"');
-    }
-    foreach my $file (split("\n", $files)) {
-        upload_logs("$file");
-    }
 
-    upload_logs("$f_stdout") if script_run "! [[ -e $f_stdout ]]";
-    upload_logs("$f_stderr") if script_run "! [[ -e $f_stderr ]]";
+sub uload_log_file {
+    # Compress and upload single file for reference
+    my $file_name = $_[0];
 
-    if (get_var('UPLOAD_REPORT_HTML')) {
-        upload_logs("$f_report", timeout => 600)
-          if script_run "! [[ -e $f_report ]]";
+    if (script_run "! [[ -e $file_name ]]") {
+        $file_name =~ s/\s//g;    # remove whitespaces
+        script_run "p7zip -k $file_name";
+        if (script_run "! [[ -e $file_name.7z ]]") {
+            upload_logs($file_name . ".7z", timeout => 600);
+            script_run "rm $file_name.7z";
+        }
     }
 }
+
+sub upload_logs_reports {
+    # Upload logs & ouputs for reference
+    if ($oscap_upload_debug_logs) {    # Upload xml logs only if debug needed. Can be set in test command line OSCAP_UPLOAD_DEBUG_LOGS = 1
+        my $files;
+        if (is_sle) {
+            $files = script_output('ls | grep "^ssg-sle.*.xml"');
+        }
+        else {
+            $files = script_output('ls | grep "^ssg-opensuse.*.xml"');
+        }
+        foreach my $file (split("\n", $files)) {
+            uload_log_file($file);
+        }
+    }
+    uload_log_file($f_stdout);
+    uload_log_file($f_stderr);
+
+    if (get_var('UPLOAD_REPORT_HTML')) {
+        uload_log_file($f_report);
+    }
+}
+
 sub download_file_from_https_repo {
     # Downloads file from provided url
     my $url = $_[0];
@@ -569,14 +587,17 @@ sub modify_ds_ansible_files {
         # Write rules to file
         assert_script_run("printf \"$ansible_f\" > \"$ansible_fix_missing\"");
 
-        my $ret_get_ansible_exclusions = 0;
-        my $ansible_exclusions;
+        my ($ansible_exclusions, $ansible_exclusions_diff);
 
         # Get rule exclusions for ansible playbook
-        $ret_get_ansible_exclusions
-          = get_test_exclusions($ansible_exclusions);
+        get_test_exclusions("openqa_tests_exclusions_base", $ansible_exclusions);
+        get_test_exclusions("openqa_tests_exclusions_diff", $ansible_exclusions_diff);
+        if (@$ansible_exclusions_diff > 0) {    # if found SP specific exclusion
+            push(@$ansible_exclusions, @$ansible_exclusions_diff);
+        }
+
         # Write exclusions to the file
-        if ($ret_get_ansible_exclusions == 1) {
+        if (@$ansible_exclusions > 0) {
             my $exclusions = (join "\n", @$ansible_exclusions);
             assert_script_run("printf \"\n$exclusions\" >> \"$ansible_fix_missing\"");
             record_info("Writing ansible exceptions to file", "Writing ansible exclusions:\n$exclusions\n\nto file: $ansible_fix_missing");
@@ -588,7 +609,7 @@ sub modify_ds_ansible_files {
         assert_script_run("rm $f_ssg_sle_ds");
         assert_script_run("cp /tmp/$ssg_sle_ds $f_ssg_sle_ds");
         record_info("Diasble excluded and fix missing rules in ds file", "Command $unselect_cmd");
-        upload_logs("$ansible_fix_missing") if script_run "! [[ -e $ansible_fix_missing ]]";
+        uload_log_file($ansible_fix_missing);
 
         # Generate new playbook without exclusions and fix_missing rules
         my $playbook_gen_cmd = "oscap xccdf generate fix --profile $profile_ID --fix-type ansible $f_ssg_sle_ds > playbook.yml";
@@ -603,21 +624,24 @@ sub modify_ds_ansible_files {
         # Modify and backup ansible playbook
         modify_ansible_playbook();
         # Upload generated playbook for evidence
-        upload_logs("$full_ansible_file_path") if script_run "! [[ -e $full_ansible_file_path ]]";
+        uload_log_file($full_ansible_file_path);
     }
     else {
         my $bash_f = join "\n", @bash_rules;
         # Write rules to file
         assert_script_run("printf \"$bash_f\" > \"$bash_fix_missing\"");
 
-        my $ret_get_bash_exclusions = 0;
-        my $bash_exclusions;
+        my ($bash_exclusions, $bash_exclusions_diff);
 
         # Get rule exclusions for bash playbook
-        $ret_get_bash_exclusions
-          = get_test_exclusions($bash_exclusions);
+        get_test_exclusions("openqa_tests_exclusions_base", $bash_exclusions);
+        get_test_exclusions("openqa_tests_exclusions_diff", $bash_exclusions_diff);
+        if (@$bash_exclusions_diff > 0) {    # if found SP specific exclusion
+            push(@$bash_exclusions, @$bash_exclusions_diff);
+        }
+
         # Write exclusions to the file
-        if ($ret_get_bash_exclusions == 1) {
+        if (@$bash_exclusions > 0) {
             my $exclusions = (join "\n", @$bash_exclusions);
             assert_script_run("printf \"\n$exclusions\" >> \"$bash_fix_missing\"");
             record_info("Writing bash exceptions to file", "Writing bash exclusions:\n$exclusions\n\nto file: $bash_fix_missing");
@@ -629,9 +653,9 @@ sub modify_ds_ansible_files {
         assert_script_run("rm $f_ssg_sle_ds");
         assert_script_run("cp /tmp/$ssg_sle_ds $f_ssg_sle_ds");
         record_info("Diasble excluded and fix missing rules in ds file", "Command $unselect_cmd");
-        upload_logs("$bash_fix_missing") if script_run "! [[ -e $bash_fix_missing ]]";
+        uload_log_file($bash_fix_missing);
     }
-    upload_logs("$f_ssg_sle_ds") if script_run "! [[ -e $f_ssg_sle_ds ]]";
+    uload_log_file($f_ssg_sle_ds);
 
     my $output_full_path = script_output("pwd", quiet => 1);
     $output_full_path =~ s/\r|\n//g;
@@ -646,22 +670,17 @@ sub install_python311 {
     # Install python 3.11 needed for script execution
     # Ansible playbook still executed by python 3.6 because 3.11 breaks many rules
     zypper_call("in python311 python311-rpm");
-    # Set alias persistent
-    my $alias_cmd = "alias python='/usr/bin/python3.11'";
-    my $bashrc_path = "/root/.bashrc";
-    assert_script_run("rm /usr/bin/python3");
-    assert_script_run("ln -s python3.11 /usr/bin/python3");
-    assert_script_run("printf \"" . $alias_cmd . "\" >> \"$bashrc_path\"");
-    assert_script_run("alias python=python3.11");
+    # Set sl for scap scripts
+    assert_script_run("ln -s python3.11 /usr/bin/python");
 }
 sub generate_missing_rules {
     # Generate text file that contains rules that missing implimentation for profile
     my $output_file = "missing_rules.txt";
 
     # Installing python libs to be able to run profile_tool.py
-    my $py_libs = "jinja2 PyYAML pytest pytest-cov Jinja2 setuptools ninja";
-    assert_script_run('pip3 --quiet install --upgrade pip', timeout => 600);
-    assert_script_run("pip3 --quiet install $py_libs", timeout => 600);
+    zypper_call('in python311-Jinja2 python311-PyYAML python311-pytest python311-pytest-cov python311-setuptools', timeout => 180);
+    my $py_libs = "jinja2 ninja";
+    assert_script_run("pip3.11 install $py_libs", timeout => 600);
 
     assert_script_run("cd $compliance_as_code_path");
     assert_script_run("source .pyenv.sh");
@@ -677,7 +696,7 @@ sub generate_missing_rules {
     record_info("Profile missing stat", "Profile missing stat:\n $data");
 
     #Uplaod file to logs
-    upload_logs("$output_file") if script_run "! [[ -e $output_file ]]";
+    uload_log_file($output_file);
 
     assert_script_run("cd /root");
     my $output_full_path = script_output("pwd", quiet => 1);
@@ -706,19 +725,21 @@ sub get_cac_code {
     record_info("Cloned ComplianceAsCode", "Cloned repo $git_repo to folder: $compliance_as_code_path");
     # In case of use CaC master as source - building content
     if ($use_content_type == 3) {
-        zypper_call('in cmake libxslt-tools', timeout => 180);
-        my $py_libs = "lxml pytest pytest_cov json2html sphinxcontrib-jinjadomain autojinja sphinx_rtd_theme myst_parser prometheus_client mypy openpyxl pandas pcre2 cmakelint sphinx";
+        zypper_call('in cmake libxslt-tools python311-lxml python311-pytest python311-sphinx_rtd_theme python311-prometheus_client python311-Jinja2 python311-pytest-cov', timeout => 180);
+        my $py_libs = "json2html sphinxcontrib-jinjadomain autojinja myst_parser  mypy openpyxl pcre2 cmakelint sphinx";
         # On s390x pip requires packages to build modules
         if (is_s390x) {
             zypper_call('in ninja clang15 libxslt-devel libxml2-devel python311-devel', timeout => 180);
-            $py_libs = "lxml pytest pytest_cov json2html sphinxcontrib-jinjadomain autojinja sphinx_rtd_theme myst_parser prometheus_client mypy openpyxl pcre2 cmakelint sphinx";
-            assert_script_run("pip3 --quiet install $py_libs", timeout => 600);
+            assert_script_run("pip3.11 install $py_libs", timeout => 600);
         }
         else {
-            assert_script_run("pip3 --quiet install $py_libs", timeout => 600);
+            assert_script_run("pip3.11 install $py_libs pandas", timeout => 600);
         }
         # Building CaC content
         assert_script_run("cd $compliance_as_code_path");
+        # Set python to version 3.11
+        my $python_ver_fix_cmd = "sed -i \'s/Python_ADDITIONAL_VERSIONS 3/Python_ADDITIONAL_VERSIONS 3.11/g\' CMakeLists.txt";
+        assert_script_run("$python_ver_fix_cmd");
         assert_script_run("sh build_product $sle_version", timeout => 9000);
         record_info("build_product", "sh build_product $sle_version");
         assert_script_run("cd /root");
@@ -772,6 +793,7 @@ sub get_tests_config {
 
 sub get_test_expected_results {
     # Get expected results from remote file
+    my $file_name = $_[0];
     my $eval_match = ();
     my $type = "";
     my $arch = "";
@@ -790,7 +812,7 @@ sub get_test_expected_results {
     my $sles_sp = (split('-', $version))[1];
 
     my $exp_fail_list_name = $sle_version . "-exp_fail_list";
-    my $expected_results_file_name = "openqa_tests_expected_results_" . $benchmark_version . ".yaml";
+    my $expected_results_file_name = $file_name . "_" . $benchmark_version . ".yaml";
     my $url = "https://gitlab.suse.de/seccert-public/compliance-as-code-compiled/-/raw/main/content/";
     my @eval_match = ();
 
@@ -800,18 +822,24 @@ sub get_test_expected_results {
     }
     # In case if expected_results are not defined for specific benchmark_version
     else {
-        $expected_results_file_name = "openqa_tests_expected_results.yaml";
+        $expected_results_file_name = "$file_name.yaml";
         $return = download_file_from_https_repo($url, $expected_results_file_name);
     }
     if ($return == 1) {
-        upload_logs("$expected_results_file_name") if script_run "! [[ -e $expected_results_file_name ]]";
+        uload_log_file($expected_results_file_name);
         my $data = script_output("cat $expected_results_file_name", quiet => 1);
 
         # Phrase the expected results
         my $expected_results = YAML::PP::Load($data);
         record_info("Looking expected results", "Looking expected results for \nprofile_ID: $profile_ID\ntype: $type\narch: $arch\nname: $exp_fail_list_name\nService Pack: $sles_sp");
 
-        $eval_match = $expected_results->{$profile_ID}->{$type}->{$arch}->{$exp_fail_list_name}->{$sles_sp};
+        if ($expected_results_file_name =~ /base/) {
+            $eval_match = $expected_results->{$profile_ID}->{$type}->{$arch}->{$exp_fail_list_name};
+        }
+        else {
+            $eval_match = $expected_results->{$profile_ID}->{$type}->{$arch}->{$exp_fail_list_name}->{$sles_sp};
+        }
+
         if (defined $eval_match) {
             @eval_match = @$eval_match;
             record_info("Got expected results", "Got expected results for \nprofile_ID: $profile_ID\ntype: $type\narch: $arch\nname: $exp_fail_list_name\nService Pack: $sles_sp\nBenchmark: $benchmark_version\nList of expected to fail rules:\n" . (join "\n", @eval_match));
@@ -824,12 +852,13 @@ sub get_test_expected_results {
         record_info("No file for expected results", "Not able to download file with expected results.\nExpected results are not defined.");
     }
 
-    $_[0] = \@eval_match;
+    $_[1] = \@eval_match;
     return 1;
 }
 
 sub get_test_exclusions {
     # Get exclusions from remote file
+    my $file_name = $_[0];
     my $exclusions = ();
     my $found = -1;
     my $type = "";
@@ -855,7 +884,7 @@ sub get_test_exclusions {
         my $sles_sp = (split('-', $version))[1];
 
         my $exclusions_list_name = $sle_version . "-exclusions_list";
-        my $exclusions_file_name = "openqa_tests_exclusions_" . $benchmark_version . ".yaml";
+        my $exclusions_file_name = $file_name . "_" . $benchmark_version . ".yaml";
         my $url = "https://gitlab.suse.de/seccert-public/compliance-as-code-compiled/-/raw/main/content/";
         my @exclusions = ();
 
@@ -865,18 +894,23 @@ sub get_test_exclusions {
         }
         # In case if exclusions are not defined for specific benchmark_version
         else {
-            $exclusions_file_name = "openqa_tests_exclusions.yaml";
+            $exclusions_file_name = "$file_name.yaml";
             $return = download_file_from_https_repo($url, $exclusions_file_name);
         }
         if ($return == 1) {
-            upload_logs("$exclusions_file_name") if script_run "! [[ -e $exclusions_file_name ]]";
+            uload_log_file($exclusions_file_name);
             my $data = script_output("cat $exclusions_file_name", quiet => 1);
 
             # Phrase the expected results
             my $exclusions_data = YAML::PP::Load($data);
             record_info("Looking exclusions", "Looking exclusions for \nprofile_ID: $profile_ID\ntype: $type\narch: $arch\nname: $exclusions_list_name\nService Pack: $sles_sp");
 
-            $exclusions = $exclusions_data->{$profile_ID}->{$type}->{$arch}->{$exclusions_list_name}->{$sles_sp};
+            if ($exclusions_file_name =~ /base/) {
+                $exclusions = $exclusions_data->{$profile_ID}->{$type}->{$arch}->{$exclusions_list_name};
+            }
+            else {
+                $exclusions = $exclusions_data->{$profile_ID}->{$type}->{$arch}->{$exclusions_list_name}->{$sles_sp};
+            }
             # If results defined
             if (defined $exclusions) {
                 @exclusions = @$exclusions;
@@ -891,7 +925,7 @@ sub get_test_exclusions {
             record_info("No file for exclusions", "Not able to download file with exclusions.\nExclusions are not defined.");
         }
 
-        $_[0] = \@exclusions;
+        $_[1] = \@exclusions;
         return $found;
     }
 }
@@ -909,7 +943,7 @@ sub oscap_security_guide_setup {
     }
 
     zypper_call('ref -s', timeout => 180);
-    zypper_call('in openscap-utils scap-security-guide', timeout => 180);
+    zypper_call('in openscap-utils scap-security-guide p7zip', timeout => 180);
     set_ds_file();
 
     $f_ssg_ds = is_sle ? $f_ssg_sle_ds : $f_ssg_tw_ds;
@@ -956,6 +990,8 @@ sub oscap_security_guide_setup {
         # Some packages require PackageHub repo is available
         return unless is_phub_ready();
         add_suseconnect_product(get_addon_fullname('phub'));
+        # Add systems management module for ansible
+        add_suseconnect_product(get_addon_fullname('sysm')) if is_sle('=15-SP7');
         # Need to use pyython3.1x
         add_suseconnect_product(get_addon_fullname('python3'));
         # On SLES 12 ansible packages require dependencies located in sle-module-public-cloud
@@ -972,7 +1008,7 @@ sub oscap_security_guide_setup {
         record_info("$pkg Pkg_ver", "$pkg packages' version:\n $out");
         $out = "";
         #install ansible.posix
-        assert_script_run("pip3 install ansible");
+        assert_script_run("pip3.11 install ansible");
         assert_script_run("ansible-galaxy collection install ansible.posix");
     }
     if (($remove_rules_missing_fixes == 1) or ($use_content_type == 3)) {
@@ -981,10 +1017,10 @@ sub oscap_security_guide_setup {
     }
     # compliance-as-code-compiled or ComplianceAsCode repository master branch
     if (($use_content_type == 2) or ($use_content_type == 3)) {
-        my $ds_file_name = is_sle ? $ssg_sle_ds : $ssg_tw_ds;
+        my $ds_file_name = is_sle() ? $ssg_sle_ds : $ssg_tw_ds;
         replace_ds_file(1, $ds_file_name);
 
-        my $xccdf_file_name = is_sle ? $ssg_sle_xccdf : $ssg_tw_xccdf;
+        my $xccdf_file_name = is_sle() ? $ssg_sle_xccdf : $ssg_tw_xccdf;
         replace_xccdf_file(1, $xccdf_file_name);
 
         if ($ansible_remediation == 1) {
@@ -1024,12 +1060,18 @@ sub oscap_security_guide_setup {
         my $ansible_version = script_output("ansible --version");
         record_info("ansible version", "Ansible version:\n $ansible_version");
     }
-    # Record python3 version for reference
-    my $python3_version = script_output("python3 -VV");
-    record_info("python3 version", "python3 version:\n $python3_version");
-    # Record pip version for reference
-    my $pip_version = script_output("pip -V");
-    record_info("pip version", "pip version:\n $pip_version");
+    # Record python3.6 version for reference
+    my $python36_version = script_output("python3 -VV");
+    record_info("python3.6 version", "python3.6 version:\n $python36_version");
+    # Record python3.11 version for reference
+    my $python311_version = script_output("python3.11 -VV");
+    record_info("python3.11 version", "python3.11 version:\n $python311_version");
+    # Record pip3.6 version for reference
+    my $pip36_version = script_output("pip3.6 -V");
+    record_info("pip3.6 version", "pip3.6 version:\n $pip36_version");
+    # Record pip3.11 version for reference
+    my $pip311_version = script_output("pip3.11 -V");
+    record_info("pip3.11 version", "pip3.11 version:\n $pip311_version");
 }
 
 =ansible return codes
@@ -1162,8 +1204,8 @@ sub oscap_remediate {
         }
 
         # Upload only stdout logs
-        upload_logs("$f_stdout") if script_run "! [[ -e $f_stdout ]]";
-        upload_logs("$f_stderr") if script_run "! [[ -e $f_stderr ]]";
+        uload_log_file($f_stdout);
+        uload_log_file($f_stderr);
     }
     # If doing bash remediation
     else {
@@ -1177,7 +1219,7 @@ sub oscap_remediate {
             $self->result('fail');
         }
         # Upload logs & ouputs for reference
-        upload_logs("$oval_results_fname") if script_run "! [[ -e $oval_results_fname ]]";
+        uload_log_file($oval_results_fname);
         upload_logs_reports();
     }
     $remediated++;
@@ -1195,8 +1237,8 @@ sub oscap_evaluate {
     my ($failed_cce_rules_ref, $failed_id_rules_ref);
     my $lc;
     my ($fail_count, $pass_count);
-    my $expected_eval_match;
-    my $ret_expected_results;
+    my ($expected_eval_match, $expected_eval_match_diff);
+    my ($ret_expected_results, $ret_expected_results_diff);
     my $oval_results_fname = "oval_results.xml";
 
     # Verify detection mode
@@ -1227,16 +1269,21 @@ sub oscap_evaluate {
                 @$failed_rules_ref
             );
             # Upload logs & ouputs for reference
-            upload_logs("$oval_results_fname") if script_run "! [[ -e $oval_results_fname ]]";
+            uload_log_file($oval_results_fname);
             upload_logs_reports();
         }
         else {
             #Verify remediated rules
-            $ret_expected_results = get_test_expected_results($expected_eval_match);
+            $ret_expected_results = get_test_expected_results("openqa_tests_expected_results_base", $expected_eval_match);
+            $ret_expected_results_diff = get_test_expected_results("openqa_tests_expected_results_diff", $expected_eval_match_diff);
             # Found expected results in yaml file
             if ($ret_expected_results == 1) {
                 $n_failed_rules = @$expected_eval_match;
                 $eval_match = $expected_eval_match;
+            }
+            if (@$expected_eval_match_diff > 0) {    # if found SP specific results
+                $n_failed_rules += @$expected_eval_match_diff;
+                push(@$eval_match, @$expected_eval_match_diff);
             }
             record_info('remediated', 'after remediation less rules are failing');
             #Verify failed rules
@@ -1299,7 +1346,7 @@ sub oscap_evaluate {
             assert_script_run("printf \"" . (join "\n", @test_run_report) . "\" >> \"$test_run_report_name\"");
             # Upload logs & ouputs for reference
             upload_logs("$test_run_report_name") if script_run "! [[ -e $test_run_report_name ]]";
-            upload_logs("$oval_results_fname") if script_run "! [[ -e $oval_results_fname ]]";
+            uload_log_file($oval_results_fname);
             upload_logs_reports();
         }
         # Record the source pkgs' versions for reference

@@ -14,10 +14,8 @@
 use base "consoletest";
 use testapi;
 use serial_terminal 'select_serial_terminal';
-use strict;
-use warnings;
 use utils;
-use version_utils qw(is_sle is_jeos);
+use version_utils qw(is_sle is_jeos has_selinux);
 
 sub run {
     select_serial_terminal;
@@ -32,12 +30,15 @@ sub run {
         zypper_call('rm apache2', exitcode => [0, 104]);
     }
 
-    # Even before the installation there should be htdocs so we can create the index
+    # Create index test file
+    assert_script_run 'mkdir -p /srv/www/htdocs';
     assert_script_run 'echo "index" > /srv/www/htdocs/index.html';
 
     # Install and start apache
     zypper_call "in $apache2";
     zypper_call "in apache2-utils" if is_jeos;
+    zypper_call "in policycoreutils-python-utils" if (is_jeos && has_selinux);
+    assert_script_run 'restorecon -Rv /srv/www' if (has_selinux);
     systemctl 'enable apache2';    # Note: The systemd service is always apache2, not apache2-tls13.
     systemctl 'restart apache2';    # apache2 could be already running from previous test runs
     systemctl 'status apache2';
@@ -63,7 +64,7 @@ sub run {
     }
 
     # Check if the server works and serves the right content
-    assert_script_run 'curl -v http://localhost/ | grep "index"';
+    validate_script_output('curl --fail -v http://localhost/', qr/index/);
 
     # Check if the permissions are set correctly
     assert_script_run 'ls -la /srv/www/htdocs | head -n2 | grep "drwxr\-xr\-x"';
@@ -76,7 +77,7 @@ sub run {
 
     # Start apache again
     systemctl 'start apache2';
-    assert_script_run 'curl -v http://[::1]/ | grep "index"';
+    validate_script_output('curl --fail -v http://[::1]/', qr/index/);
 
     # Listen on 85 and create a vhost for it
     assert_script_run 'echo "Listen 85" >> /etc/apache2/listen.conf';
@@ -84,6 +85,9 @@ sub run {
     assert_script_run 'sed -i "s/<VirtualHost \\*:80>/<VirtualHost \\*:85>/g" /etc/apache2/vhosts.d/myvhost.conf';
     assert_script_run 'mkdir -p /srv/www/vhosts/dummy-host.example.com';
     assert_script_run 'touch /srv/www/vhosts/dummy-host.example.com/listed_test_file';
+
+    # Change SELinux policy for port 85, poo#178240
+    assert_script_run 'semanage port -a -t http_port_t -p tcp 85' if has_selinux;
 
     # Create separate vhost for 'localhost'
     assert_script_run 'cp /etc/apache2/vhosts.d/vhost.template /etc/apache2/vhosts.d/localhost.conf';
@@ -133,9 +137,9 @@ sub run {
             assert_script_run q{sed -ie 's/^Group daemon$/Group www/' /tmp/prefork/httpd.conf};
 
             # Run and test this new environment
-            assert_script_run 'httpd2-prefork -f /tmp/prefork/httpd.conf';
-            assert_script_run 'until ps aux|grep wwwrun|grep -E httpd\(2\)?-prefork; do echo waiting for httpd2-prefork pid; done';
-            assert_script_run 'ps aux | grep "\-f /tmp/prefork/httpd.conf" | grep httpd2-prefork';
+            assert_script_run 'httpd-prefork -f /tmp/prefork/httpd.conf';
+            assert_script_run 'until ps aux|grep wwwrun|grep -E httpd\(2\)?-prefork; do echo waiting for httpd-prefork pid; done';
+            assert_script_run 'ps aux | grep "\-f /tmp/prefork/httpd.conf" | grep httpd-prefork';
 
             # Run and test the old environment too
             script_run 'rm /var/run/httpd.pid';
@@ -148,7 +152,7 @@ sub run {
 
             # Stop both instances
             # binary killall is not present in JeOS
-            assert_script_run('kill -TERM $(ps aux| grep [h]ttpd2-prefork| awk \'{print $2}\')');
+            assert_script_run('kill -TERM $(ps aux| grep [h]ttpd-prefork| awk \'{print $2}\')');
             systemctl 'stop apache2';
 
             # Test everything is stopped properly
@@ -177,6 +181,8 @@ sub run {
     assert_script_run('curl -o /etc/apache2/conf.d/authtest.conf ' . data_url('console/apache_authtest.conf'));
 
     # Start the webserver and test the password access
+    record_info('poo#179678', 'Job for apache2.service may fail because start of the service was attempted too often');
+    sleep 5;
     systemctl 'start apache2';
     assert_script_run 'curl -vI -u "joe:secret" "http://localhost/authtest/" | grep -A99 -B99 "HTTP/1.1 200 OK"';
     assert_script_run 'curl -v -u "joe:secret" "http://localhost/authtest/" | grep -A99 -B99 "HI, JOE"';

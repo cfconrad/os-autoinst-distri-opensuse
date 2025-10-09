@@ -15,7 +15,7 @@ use Time::HiRes 'sleep';
 use testapi;
 use Utils::Architectures;
 use utils;
-use version_utils qw(is_opensuse is_microos is_sle_micro is_jeos is_leap is_sle is_selfinstall is_transactional);
+use version_utils qw(is_opensuse is_microos is_sle_micro is_jeos is_leap is_sle is_selfinstall is_transactional is_leap_micro is_bootloader_grub2);
 use mm_network;
 use Utils::Backends;
 
@@ -58,7 +58,6 @@ our @EXPORT = qw(
   add_grub_cmdline_settings
   add_grub_xen_replace_cmdline_settings
   change_grub_config
-  get_cmdline_var
   grep_grub_cmdline_settings
   grep_grub_settings
   grub_mkconfig
@@ -72,9 +71,11 @@ our @EXPORT = qw(
 );
 
 our $zkvm_img_path = "/var/lib/libvirt/images";
+my $in_grub_edit = 0;
 
 use constant GRUB_CFG_FILE => "/boot/grub2/grub.cfg";
 use constant GRUB_DEFAULT_FILE => "/etc/default/grub";
+use constant GRUB_CMDLINE_VAR => "GRUB_CMDLINE_LINUX_DEFAULT";
 
 # prevent grub2 timeout; 'esc' would be cleaner, but grub2-efi falls to the menu then
 # 'up' also works in textmode and UEFI menues.
@@ -108,7 +109,11 @@ And of course the new entries have C<ima_policy=tcb> added to kernel parameters.
 =cut
 
 sub add_custom_grub_entries {
-    my @grub_params = split(/\s*;\s*/, trim(get_var('GRUB_PARAM', '')));
+    # grep: ignore empty items (helps to avoid trailing semicolon)
+    my @grub_params = grep { /\S/ } split(/\s*;\s*/, trim(get_var('GRUB_PARAM', '')));
+
+    bmwqemu::fctinfo("Number of GRUB_PARAM params (empty skipped): " . $#grub_params);
+
     return unless $#grub_params >= 0;
 
     my $script_old = "/etc/grub.d/10_linux";
@@ -133,8 +138,8 @@ sub add_custom_grub_entries {
         $distro = "SLES" . ' \\?' . get_required_var('VERSION');
     }
 
-    bmwqemu::diag("Trying to trigger purging old kernels before changing grub menu");
-    script_run('/sbin/purge-kernels');
+    bmwqemu::diag("Trying to trigger purging old kernels before changing grub menu (if /sbin/purge-kernels installed)");
+    script_run('[ -x /sbin/purge-kernels ] && /sbin/purge-kernels');
 
     assert_script_run("cp " . GRUB_CFG_FILE . " $cfg_old");
     upload_logs($cfg_old, failok => 1);
@@ -148,6 +153,7 @@ sub add_custom_grub_entries {
     foreach my $grub_param (@grub_params) {
         $i++;
         my $script_new = "/etc/grub.d/${i}_linux_openqa";
+        bmwqemu::fctinfo("Processing script '$script_new'");
         my $script_new_esc = $script_new =~ s~/~\\/~rg;
         assert_script_run("cp -v $script_old $script_new");
 
@@ -303,31 +309,44 @@ sub boot_local_disk {
 }
 
 sub boot_into_snapshot {
-    send_key_until_needlematch('boot-menu-snapshot', 'down', 11, 5);
-    send_key 'ret';
-    # assert needle to make sure grub2 page show up
-    assert_screen('grub2-page', 60);
-    # assert needle to avoid send down key early in grub_test_snapshot.
-    if (get_var('OFW') || is_pvm || check_var('SLE_PRODUCT', 'hpc')) {
-        send_key_until_needlematch('snap-default', 'down', 61, 5);
-    }
-    # in upgrade/migration scenario, we want to boot from snapshot 1 before migration.
-    if ((get_var('UPGRADE') && !get_var('ONLINE_MIGRATION', 0)) || get_var('ZDUP')) {
-        send_key_until_needlematch('snap-before-update', 'down', 61, 5);
+    if (is_bootloader_grub2()) {
+        send_key_until_needlematch('boot-menu-snapshot', 'down', 11, 5);
+        send_key 'ret';
+        # assert needle to make sure grub2 page show up
+        assert_screen('grub2-page', 60);
+        # assert needle to avoid send down key early in grub_test_snapshot.
+        if (get_var('OFW') || is_pvm || check_var('SLE_PRODUCT', 'hpc')) {
+            send_key_until_needlematch('snap-default', 'down', 61, 5);
+        }
+        # in upgrade/migration scenario, we want to boot from snapshot 1 before migration.
+        if ((get_var('UPGRADE') && !get_var('ONLINE_MIGRATION', 0)) || get_var('ZDUP')) {
+            send_key_until_needlematch('snap-before-update', 'down', 61, 5);
+            save_screenshot;
+        }
+        # in an online migration
+        send_key_until_needlematch('snap-before-migration', 'down', 61, 5) if (get_var('ONLINE_MIGRATION'));
         save_screenshot;
+        send_key 'ret';
+        # avoid timeout for booting to HDD
+        save_screenshot;
+        send_key 'ret';
+    } else {
+        assert_screen('grub2-bls');
+        send_key 'down';
+        save_screenshot;
+        send_key 'ret';
     }
-    # in an online migration
-    send_key_until_needlematch('snap-before-migration', 'down', 61, 5) if (get_var('ONLINE_MIGRATION'));
-    save_screenshot;
-    send_key 'ret';
-    # avoid timeout for booting to HDD
-    save_screenshot;
-    send_key 'ret';
 }
 
 sub select_bootmenu_option {
     my ($timeout) = @_;
     assert_screen 'inst-bootmenu', $timeout;
+
+    # Special handling for Agama
+    if (get_var('AGAMA')) {
+        send_key_until_needlematch 'boot-agama-installation', 'down', 11, 5;
+        return 0;
+    }
     if (get_var('LIVECD')) {
         # live CDs might have a very short timeout of the initial bootmenu
         # (1-2s with recent kiwi versions) so better stop the timeout
@@ -339,7 +358,6 @@ sub select_bootmenu_option {
         boot_local_disk;
         return 3;
     }
-
     if (get_var('UPGRADE')) {
         # OFW has contralily oriented menu behavior
         send_key_until_needlematch 'inst-onupgrade', get_var('OFW') ? 'up' : 'down', 11, 5;
@@ -458,42 +476,68 @@ sub uefi_bootmenu_params {
 
             # Pass bootparam to firstboot
             type_string_very_slow(" rd.kiwi.install.pass.bootparam ");
-            if (!check_screen('pass-bootparam-to-firstboot', 2)) {
-                next;
-            } else {
-                record_info('Successfully finished grub2 editing.');
-                return;
+            next if (!check_screen('pass-bootparam-to-firstboot', 2));
+
+            # Set disk to install
+            my $_disk = get_var('INSTALL_DISK_WWN', '');
+            record_info("INSTALL_DISK_WWN is $_disk.");
+            if ($_disk) {
+                type_string_very_slow(" rd.kiwi.oem.installdevice=/dev/disk/by-id/$_disk ");
+                save_screenshot;
             }
+
+            # All editing done
+            record_info('Successfully finished grub2 editing.');
+            return;
         }
         die "Failed to edit grub2 after $max_tries tries.";
     }
 
     # Kiwi in TW uses grub2-mkconfig instead of the custom kiwi config
     # Locate gfxpayload parameter and update it
-    if (is_jeos && (!is_sle('=12-SP5') || is_opensuse)) {
+    # The main branch should be used only for bootable pre-installed images that contain already full
+    # grub2 configuration
+    my $linux = 0;
+    if (get_var('BOOT_HDD_IMAGE') && (is_jeos || is_leap_micro || is_microos || is_sle_micro)) {
+        # there is always a blank line
+        # sle 12-sp5 has no load_video
+        # if there is a healthchecker, skip it
+        my $gfx = 2;
+        if (is_leap_micro || is_microos || is_sle_micro) {
+            $gfx += 5;
+        } elsif (is_sle('=12-SP5')) {
+            ;
+        } else {
+            $gfx++;
+        }
 
-        for (1 .. 3) { send_key "down"; }
-        send_key "end";
-        # delete "keep" word
-        for (1 .. 4) { send_key "backspace"; }
-        # hardcoded the value of gfxpayload to 1024x768
-        type_string "1024x768";
-        assert_screen "gfxpayload_changed", 10;
-        # back to the entry position
-        send_key "home";
-        for (1 .. 6) { send_key "down"; }
+        # navigate to gfxpayload=keep and change its settings
+        # OFW images do not have any gfxpayload, so jump over load_video
+        send_key "down" for (1 .. $gfx);
+        if (get_var('OFW')) {
+            $linux = -1;
+        } else {
+            wait_screen_change(sub { send_key "end"; }, 5);
+            # delete "keep" word
+            send_key "backspace" for (1 .. 4);
+            # hardcoded the value of gfxpayload to 1024x768
+            type_string "1024x768";
+            assert_screen "gfxpayload_changed", 10;
+        }
+
+        # navigate to the beginning of the line containing *linux* command
+        wait_screen_change(sub { send_key "home"; }, 5);
+        $linux += is_sle('=12-SP5') ? 2 : 6;
         # On Leap/SLE we need to move down (grub 2.04)
         # skip additional movement downwards in
         # sle15sp4+, leap15.4+ and TW (grub 2.06)
-        if (is_sle('<15-SP4') || is_leap('<15.4')) {
-            for (1 .. 4) { send_key "down"; }
+        $linux += 4 if is_sle('>12-SP5') && is_sle('<15-SP4');
+        if (get_var('FLAVOR', '') =~ /encrypt/i) {
+            $linux += is_sle_micro('6.1+') ? 11 : 10;
         }
     }
     else {
-        if ((is_sle_micro || is_microos) && get_var('BOOT_HDD_IMAGE')) {
-            # skip healthchecker lines
-            for (1 .. 5) { send_key "down"; }
-        }
+        $linux = 4;
         for (1 .. 2) { send_key "down"; }
         send_key "end";
         # delete "keep" word
@@ -504,17 +548,19 @@ sub uefi_bootmenu_params {
         # back to the entry position
         send_key "home";
         for (1 .. 2) { send_key "up"; }
-        if (is_jeos) {
-            send_key "up";
-        }
         sleep 5;
-        for (1 .. 4) { send_key "down"; }
-        if (is_microos && get_var('BOOT_HDD_IMAGE')) {
-            for (1 .. 7) { send_key "down"; }
-        }
     }
 
+    # flag, in order to skip more movement in grub2 submenu in case of powerPC
+    $in_grub_edit = 1 if (get_var('OFW') && is_sle_micro);
+
+    # jump to linux kernel bootparams
+    wait_screen_change(sub {
+            send_key "down" for (1 .. $linux);
+    }, 3);
+
     send_key "end";
+    save_screenshot();
 
     if (get_var("NETBOOT")) {
         type_string_slow " install=" . get_netboot_mirror;
@@ -564,19 +610,46 @@ sub bootmenu_default_params {
     my (%args) = @_;
     my @params;
     if (get_var('OFW')) {
-        # edit menu, wait until we get to grub edit
-        wait_screen_change { send_key "e" };
-        # go down to kernel entry
-        send_key "down";
-        send_key "down";
-        send_key "down";
-        wait_screen_change { send_key "end" };
-        wait_still_screen(1);
+        if (!$in_grub_edit) {
+            # edit menu, wait until we get to grub edit
+            wait_screen_change { send_key "e" };
+            # go down to kernel entry
+            send_key "down";
+            send_key "down";
+            send_key "down";
+            wait_screen_change { send_key "end" };
+            wait_still_screen(1);
+        }
         # load kernel manually with append
         if (check_var('VIDEOMODE', 'text')) {
             push @params, "textmode=1";
         }
         push @params, "Y2DEBUG=1";
+    }
+    elsif (get_var('AGAMA')) {
+        if (!$args{in_grub_edit}) {
+            wait_screen_change { send_key "e" };
+            send_key "down";
+            send_key "down";
+            send_key "down";
+            send_key "down";
+            wait_screen_change { send_key "end" };
+        }
+        # REPO_0 should be set everywhere where we rsync repo (aside from iso)
+        if (get_var('REPO_0')) {
+            my $host = get_var('OPENQA_HOST', 'https://openqa.opensuse.org');
+            my $repo = get_var('REPO_0');
+
+            # Split repodata functionality in Leap 16.0
+            # https://code.opensuse.org/leap/features/issue/193
+            if (get_var('SPLIT_REPODATA')) {
+                $repo .= "/\\\$basearch";
+            }
+
+            # inst.install_url supports comma separated list if more repos are needed ...
+            push @params, "inst.install_url=$host/assets/repo/$repo";
+        }
+        push @params, "live.password=$testapi::password";
     }
     else {
         # On JeOS and MicroOS we don't have YaST installer.
@@ -591,11 +664,6 @@ sub bootmenu_default_params {
         }
 
     }
-    if (get_var('AGAMA_AUTO')) {
-        my $path = data_url(get_var('AGAMA_AUTO'));
-        set_var('EXTRABOOTPARAMS', "agama.auto=\"$path\"");
-    }
-
     if (!get_var("NICEVIDEO")) {
         if (is_microos || is_selfinstall) {
             push @params, get_bootmenu_console_params $args{baud_rate};
@@ -833,6 +901,20 @@ sub specific_bootmenu_params {
         push @params, "autoupgrade=1";
     }
 
+    if (my $inst_auto = get_var('INST_AUTO')) {
+        autoyast::create_file_as_profile_companion() if get_var('AGAMA_PROFILE_OPTIONS') =~ /files=true/;
+        my $url = ($inst_auto =~ /\.libsonnet/) ? autoyast::generate_json_profile($inst_auto) : autoyast::expand_agama_profile($inst_auto);
+        $url = shorten_url($url) if (is_backend_s390x && !is_opensuse);
+        push @params, "inst.auto=$url inst.finish=stop";
+    }
+
+    if (my $agama_install_url = get_var('INST_INSTALL_URL')) {
+        if (get_var('SPLIT_REPODATA')) {
+            $agama_install_url .= "/\\\$basearch";
+        }
+        push @params, "inst.install_url=$agama_install_url";
+    }
+
     # Boot the system with the debug options if shutdown takes suspiciously long time.
     # Please, see https://freedesktop.org/wiki/Software/systemd/Debugging/#index2h1 for the details.
     # Further actions for saving debug logs are done in 'shutdown/cleanup_before_shutdown' module.
@@ -909,6 +991,9 @@ sub specific_bootmenu_params {
     # Enable kernel.softlockup_panic, unless explicitly disabled
     # See bsc#1126782
     push @params, 'kernel.softlockup_panic=1' unless get_var('SOFTLOCKUP_PANIC_DISABLED', 0);
+
+    # qemu workaround on ppc64le https://bugzilla.suse.com/show_bug.cgi?id=1239691#c34
+    push @params, 'disable_ddw=1' if is_ppc64le && is_qemu && is_sle('15-SP6+');
 
     type_boot_parameters(" @params ") if (@params);
     save_screenshot;
@@ -1040,25 +1125,38 @@ sub select_bootmenu_language {
 sub tianocore_enter_menu {
     # we need to reduce this waiting time as much as possible
     my $counter = 300;
-    while (!check_screen('tianocore-mainmenu', 0, no_wait => 1) && $counter--) {
+    while (!check_screen([qw(tianocore-mainmenu tianocore-bootmenu)], 0, no_wait => 1) && $counter--) {
         send_key 'f2';
         sleep 0.1;
+    }
+    if (check_screen('tianocore-bootmenu')) {
+        send_key_until_needlematch("tianocore-bootmenu-EFI-fimware-selected", 'down', 6, 1);
+        send_key "ret";
     }
 }
 
 sub tianocore_disable_secureboot {
-
     my ($basetest, $revert) = @_;
 
     my $neelle_sb_conf_attempt = $revert ? 'tianocore-devicemanager-sb-conf-disabled' : 'tianocore-devicemanager-sb-conf-attempt-sb';
     my $neelle_sb_change_state = $revert ? 'tianocore-devicemanager-sb-conf-enabled' : 'tianocore-devicemanager-sb-conf-attempt-sb';
     my $neelle_sb_config_state = $revert ? 'tianocore-secureboot-enabled' : 'tianocore-secureboot-not-enabled';
-    my $timeout = is_aarch64 ? '30' : '20';
 
     assert_screen 'grub2';
     send_key 'c';
-    sleep 2;
+    sleep 5;
     enter_cmd "exit";
+
+    # There might be a boot menu before the mainmenu.
+    # Wait until the main menu appears and move to the EFI firmware setup, if the boot menu is present
+    while (!check_screen('tianocore-mainmenu')) {
+        wait_still_screen();
+        if (check_screen('tianocore-bootmenu')) {
+            send_key_until_needlematch("tianocore-bootmenu-EFI-fimware-selected", 'down', 6, 1);
+            send_key "ret";
+        }
+    }
+
     assert_screen 'tianocore-mainmenu';
     # Select 'Boot manager' entry
     send_key_until_needlematch('tianocore-devicemanager', 'down', 6, 5);
@@ -1076,7 +1174,6 @@ sub tianocore_disable_secureboot {
     send_key_until_needlematch 'tianocore-devicemanager', 'esc';
     send_key_until_needlematch 'tianocore-mainmenu-reset', 'down';
     send_key 'ret';
-    send_key 'ret' if (!is_aarch64() && check_screen($neelle_sb_config_state, $timeout));
     $basetest->wait_grub;
 }
 
@@ -1319,7 +1416,7 @@ GRUB_CMDLINE_LINUX_DEFAULT) in /etc/default/grub, return 1 if found.
 
 sub grep_grub_cmdline_settings {
     my ($pattern, $search) = @_;
-    $search //= get_cmdline_var();
+    $search //= '^' . GRUB_CMDLINE_VAR;
     return grep_grub_settings($search . ".*${pattern}");
 }
 
@@ -1366,7 +1463,7 @@ sub add_grub_cmdline_settings {
         {
             add => $add,
             update_grub => 0,
-            search => get_cmdline_var(),
+            search => '^' . GRUB_CMDLINE_VAR,
         },
         ['update_grub', 'search'],
         @_
@@ -1418,7 +1515,7 @@ sub replace_grub_cmdline_settings {
             old => $old,
             new => $new,
             update_grub => 0,
-            search => get_cmdline_var(),
+            search => '^' . GRUB_CMDLINE_VAR,
         },
         ['update_grub', 'search'],
         @_
@@ -1477,19 +1574,6 @@ sub grub_mkconfig {
     $config //= GRUB_CFG_FILE;
     my $grub_update = is_transactional ? 'transactional-update -c grub.cfg' : "grub2-mkconfig -o $config";
     assert_script_run "${grub_update}";
-}
-
-=head2 get_cmdline_var
-
-    get_cmdline_var();
-
-Get default grub cmdline variable:
-GRUB_CMDLINE_LINUX for JeOS, GRUB_CMDLINE_LINUX_DEFAULT for the rest.
-=cut
-
-sub get_cmdline_var {
-    my $label = is_jeos() ? 'GRUB_CMDLINE_LINUX' : 'GRUB_CMDLINE_LINUX_DEFAULT';
-    return "^${label}=";
 }
 
 =head2 parse_bootparams_in_serial

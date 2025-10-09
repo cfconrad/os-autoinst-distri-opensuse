@@ -9,8 +9,6 @@
 # Maintainer: Stephan Kulow <coolo@suse.com>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use utils 'zypper_call';
 
@@ -21,8 +19,15 @@ sub run {
 
     zypper_call('in -l perl-solv perl-Data-Dump');
     my $ex = script_run("~$username/data/lsmfip --verbose $packages > \$XDG_RUNTIME_DIR/install_packages.txt 2> /tmp/lsmfip.log");
+    record_info("install_packages.txt", script_output("cat \$XDG_RUNTIME_DIR/install_packages.txt"));
     upload_logs '/tmp/lsmfip.log';
-    die "lsmfip failed" if $ex;
+    if ($ex) {
+        if (script_output('tail -1 /tmp/lsmfip.log') =~ /was requested but nothing was installed/) {
+            record_info('The packages to be released are new ones', 'We do not need to install older packages before');
+            return;
+        }
+        die "lsmfip failed";
+    }
     # make sure we install at least one package - otherwise this test is pointless
     # better have it fail and let a reviewer check the reason
     assert_script_run("test -s \$XDG_RUNTIME_DIR/install_packages.txt");

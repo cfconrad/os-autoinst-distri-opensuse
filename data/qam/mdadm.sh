@@ -26,7 +26,7 @@ tempmnt=$tempdir/mnt
 function run
 {
   echo "# $@"
-  $@ || exit 1
+  "$@" || exit 1
 }
 
 # echo command to log, check for pattern in output and exit on error or pattern not found
@@ -175,6 +175,7 @@ done
 run umount $MD_DEVICE
 run mdadm --detail --scan >/var/tmp/mdadm.sh.conf
 run mdadm --stop $MD_DEVICE
+run sync
 run mdadm --assemble --scan --config=/var/tmp/mdadm.sh.conf
 run mount $MD_DEVICE $tempmnt
 mount | grep -F -q $tempmnt || exit 1
@@ -211,7 +212,7 @@ run losetup $DEV_3 disk3.img
 
 run losetup -l
 
-run yes | mdadm --create --verbose $MD_DEVICE --level=1 --raid-devices=3 --size=522240 $DEV_1 $DEV_2 $DEV_3
+run expect -c "spawn mdadm --create --verbose $MD_DEVICE --level=1 --raid-devices=3 --size=522240 --bitmap=internal $DEV_1 $DEV_2 $DEV_3; expect \"Continue creating array\"; send y\\r; interact"
 
 sleep 1
 rungrep "active raid1" cat /proc/mdstat
@@ -356,7 +357,7 @@ run losetup $DEV_3 disk3.img
 
 run losetup -l
 
-run mdadm --create --verbose $MD_DEVICE --level=5 --raid-devices=3 --size=522240 $DEV_1 $DEV_2 $DEV_3
+run mdadm --create --verbose $MD_DEVICE --level=5 --raid-devices=3 --size=522240 --bitmap=internal $DEV_1 $DEV_2 $DEV_3
 
 sleep 1
 rungrep "active raid5" cat /proc/mdstat

@@ -12,8 +12,6 @@
 #
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
-use strict;
-use warnings;
 use testapi;
 use base 'x11test';
 use repo_tools;
@@ -34,7 +32,7 @@ sub set_language_to_Chinese {
     x11_start_program('xterm');
     wait_still_screen 2, 2;
     become_root;
-    script_run('yast2 language', die_on_timeout => 0);
+    enter_cmd 'yast2 language';
     assert_screen 'yast2-language', 60;
     send_key_until_needlematch 'yast2-lang-simplified-chinese', 'down', 181;
     send_key 'alt-o';

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2019 SUSE LLC
+# Copyright 2019-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: procps
@@ -21,8 +21,6 @@ use base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
-use strict;
-use warnings;
 
 sub run {
     select_serial_terminal;
@@ -43,7 +41,7 @@ sub run {
     validate_script_output("ps -p 1",
         qr/PID\sTTY\s+TIME\sCMD\s+1\s\?\s+\d+:\d+:\d+\s(systemd|init)/);
     validate_script_output("top -b -n 1",
-qr/top - \d+:\d+:\d+ up\s+((\d+:\d+)|(\d+ \w+)|(\d+ \w+,\s+\d+:\d+)),\s+\d+ \w+,\s+load average: \d+.\d+, \d+.\d+, \d+.\d+\s+Tasks:\s+\d+\s+total,\s+\d+\s+running,\s+\d+\s+sleeping.*top/s);
+qr/top - \d+:\d+:\d+ up\s+((\d+:\d+)|(\d+ \w+)|(\d+ \w+,\s+\d+:\d+)),\s+\d+ \w+,\s+load average: \d+.\d+, \d+.\d+, \d+.\d+\s+Tasks:\s+\d+\s+total,\s+\d+\s+running,\s+\d+\s+sleep.*top/s);
 }
 
 1;

@@ -7,8 +7,6 @@
 # Maintainer: Pavel Dostal <pdostal@suse.cz>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use lockapi;
 use mm_network 'setup_static_mm_network';
@@ -52,6 +50,10 @@ sub run {
     barrier_wait 'MM_SETUP_DONE';
     ping_size_check('server') unless $is_server;
     barrier_wait 'MM_SETUP_PING_CHECK_DONE';
+}
+
+sub test_flags {
+    return {fatal => 1, milestone => 0};
 }
 
 1;

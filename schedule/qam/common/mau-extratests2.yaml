@@ -6,8 +6,7 @@ schedule:
   - boot/boot_to_desktop
   - console/prepare_test_data
   - console/consoletest_setup
-  - console/curl_ipv6
-  - console/wget_ipv6
+  - console/dnsmasq
   - console/ca_certificates_mozilla
   - console/unzip
   - console/rsync
@@ -27,15 +26,31 @@ schedule:
   - console/suse_module_tools
   - console/aaa_base
   - console/gd
-  - console/systemtap
   - console/vsftpd
   - network/samba/samba_adcli
+  - console/pciutils
   - '{{version_specific}}'
   - console/coredump_collect
 conditional_schedule:
   version_specific:
     VERSION:
+      15-SP7:
+        - console/curl_ipv6
+        - console/wget_ipv6
+        - console/osinfo_db
+        - console/ovn
+        - console/firewalld
+        - console/libgcrypt
+        - console/zziplib
+        - console/journald_fss
+        - console/nginx
+        - '{{arch_specific}}'
+        - console/valgrind
+        - console/valkey
+        - '{{arch_specific15_sp5plus}}'
       15-SP6:
+        - console/curl_ipv6
+        - console/wget_ipv6
         - console/osinfo_db
         - console/ovn
         - console/firewalld
@@ -45,8 +60,11 @@ conditional_schedule:
         - console/nginx
         - '{{arch_specific}}'
         - console/valgrind
-        - '{{arch_specific15_sp5+}}'
+        - console/valkey
+        - '{{arch_specific15_sp5plus}}'
       15-SP5:
+        - console/curl_ipv6
+        - console/wget_ipv6
         - console/osinfo_db
         - console/ovn
         - console/firewalld
@@ -56,8 +74,10 @@ conditional_schedule:
         - console/nginx
         - '{{arch_specific}}'
         - console/valgrind
-        - '{{arch_specific15_sp5+}}'
+        - '{{arch_specific15_sp5plus}}'
       15-SP4:
+        - console/curl_ipv6
+        - console/wget_ipv6
         - console/osinfo_db
         - console/ovn
         - console/firewalld
@@ -68,6 +88,8 @@ conditional_schedule:
         - '{{arch_specific}}'
         - console/valgrind
       15-SP3:
+        - console/curl_ipv6
+        - console/wget_ipv6
         - console/osinfo_db
         - console/ovn
         - console/firewalld
@@ -78,6 +100,8 @@ conditional_schedule:
         - '{{arch_specific}}'
         - console/valgrind
       15-SP2:
+        - console/curl_ipv6
+        - console/wget_ipv6
         - console/osinfo_db
         - console/ovn
         - console/firewalld
@@ -87,39 +111,20 @@ conditional_schedule:
         - console/nginx
         - '{{arch_specific}}'
         - console/valgrind
-      15-SP1:
-        - console/osinfo_db
-        - console/libgcrypt
-        - console/zziplib
-        - console/journald_fss
-        - console/nginx
-        - console/valgrind
-        - '{{arch_specific}}'
-      15:
-        - console/osinfo_db
-        - console/libgcrypt
-        - console/zziplib
-        - console/journald_fss
-        - console/nginx
-        - console/valgrind
-        - '{{arch_specific}}'
       12-SP5:
+        - console/curl_ipv6
+        - console/wget_ipv6
         - console/osinfo_db
         - console/libgcrypt
         - console/zziplib
         - '{{arch_specific}}'
         - console/valgrind
         - '{{arch_12sp5}}'
-      12-SP4:
-        - console/osinfo_db
-        - console/journald_fss
-        - '{{arch_specific}}'
+        - '{{arch_systemtap}}'
       12-SP3:
         - console/osinfo_db
         - console/journald_fss
         - '{{arch_specific}}'
-      12-SP2:
-        - console/journald_fss
   arch_specific:
     ARCH:
       x86_64:
@@ -130,10 +135,16 @@ conditional_schedule:
         - console/journald_fss
       aarch64:
         - console/journald_fss
-  arch_specific15_sp5+:
+  arch_specific15_sp5plus:
     ARCH:
       x86_64:
         - console/year_2038_detection
       aarch64:
         - console/year_2038_detection
+  arch_systemtap:
+    ARCH:
+      x86_64:
+        - console/systemtap
+      s390x:
+        - console/systemtap
 ...

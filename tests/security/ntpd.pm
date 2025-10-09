@@ -10,8 +10,6 @@
 # fails when ntpd is installed.
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use utils;
 use services::ntpd;
@@ -23,7 +21,7 @@ use registration 'add_suseconnect_product';
 
 sub run {
     select_serial_terminal;
-    add_suseconnect_product('sle-module-legacy') if is_sle('>=15-SP5');
+    add_suseconnect_product('sle-module-legacy') if is_sle('>=15-SP4');
     services::ntpd::install_service();
     services::ntpd::enable_service();
     services::ntpd::start_service();

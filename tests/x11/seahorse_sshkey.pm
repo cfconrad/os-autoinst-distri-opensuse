@@ -8,8 +8,6 @@
 # Maintainer: Zhaocong Jia <zcjia@suse.com> Grace Wang <grace.wang@suse.com>
 
 use base "x11test";
-use strict;
-use warnings;
 use testapi;
 use utils 'zypper_call';
 use version_utils 'is_sle';
@@ -43,7 +41,7 @@ sub run {
     assert_screen 'seahorse-new-sshkey';    # Dialog : "Add password; New ssh key"
     send_key 'alt-d';
     type_string "Keyring test";    # Name of new ssh key
-    send_key 'alt-j';    # Just Create ssh key without setup
+    send_key is_sle('<15-SP6') ? 'alt-j' : 'alt-g';    # Just Create ssh key without setup
     if (check_screen("seahorse-sshkey-inhibit", timeout => 8)) {
         assert_and_click "seahorse-sshkey-inhibit";
     }

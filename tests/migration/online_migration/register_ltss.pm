@@ -8,8 +8,6 @@
 # Maintainer: Julien Adamek <jadamek@suse.com>
 
 use base "opensusebasetest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use registration qw(add_suseconnect_product);
@@ -26,6 +24,9 @@ sub run {
         my $os_sp_version = get_var("HDDVERSION");
         $os_sp_version =~ s/-/_/g;
         add_suseconnect_product("SLES-LTSS", undef, undef, "-r " . get_var("SCC_REGCODE_LTSS_$os_sp_version"), 300, 0);
+    }
+    elsif (grep $_ eq 'ltss_es', @scc_addons) {
+        add_suseconnect_product("SLES-LTSS-Extended-Security", undef, undef, "-r " . get_var("SCC_REGCODE_LTSS_ES"), 300, 0);
     }
 }
 

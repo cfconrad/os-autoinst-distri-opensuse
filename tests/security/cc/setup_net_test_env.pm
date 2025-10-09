@@ -8,8 +8,6 @@
 # Tags: poo#96540 poo#99441, poo#110157, poo#101914
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use autotest;
 use utils;
@@ -18,11 +16,12 @@ use Utils::Architectures;
 use mmapi 'wait_for_children';
 use audit_test qw(compare_run_log prepare_for_test upload_audit_test_logs);
 use scheduler 'get_test_suite_data';
+use serial_terminal 'select_serial_terminal';
 
 sub run {
     my ($self) = shift;
 
-    select_console 'root-console';
+    select_serial_terminal;
 
     zypper_call('in bridge-utils netcat-openbsd');
 
@@ -31,11 +30,6 @@ sub run {
 
     # Get netdev
     my $netdev = 'eth0';
-    if (is_s390x) {
-        $netdev = 'eth1';
-        assert_script_run('ip link set eth1 up');
-        script_run('ip a');
-    }
 
     # Configure the network
     my $data = get_test_suite_data();

@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2020 SUSE LLC
+# Copyright 2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: libssh4 libssh2-1
@@ -26,8 +26,6 @@
 
 package libssh;
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi qw(is_serial_terminal :DEFAULT);
 use utils;
 use Utils::Systemd 'disable_and_stop_service';
@@ -98,8 +96,7 @@ sub run {
     }
 
     # Host is used as server of libssh test
-    my ($running_version, $sp, $host_distri) = get_os_release;
-    install_docker_when_needed($host_distri);
+    install_docker_when_needed();
     # zypper_call("--gpg-auto-import-keys in docker libvirt-daemon-qemu qemu-kvm qemu-block-ssh");
     zypper_call("in libvirt-daemon libvirt-daemon-qemu qemu-kvm qemu-block-ssh");
     #  systemctl("start docker.service libvirtd.service sshd.service");

@@ -21,8 +21,10 @@ use scheduler 'load_yaml_schedule';
 use Utils::Backends qw(is_hyperv is_hyperv_in_gui is_pvm is_ipmi);
 use main_containers;
 use main_publiccloud;
+use main_security;
 use Utils::Architectures;
 use DistributionProvider;
+use virt_autotest::utils qw(is_registered_sles is_sles_mu_virt_test);
 
 BEGIN {
     unshift @INC, dirname(__FILE__) . '/../../lib';
@@ -443,6 +445,11 @@ sub load_feature_tests {
     loadtest "feature/feature_console/zypper_crit_sec_fix_only";
 }
 
+sub load_dms_qemu_tests {
+    boot_hdd_image;
+    loadtest "dms/dms_qemu_test";
+}
+
 sub load_online_migration_tests {
     # stop packagekit service and more
     loadtest "migration/online_migration/online_migration_setup";
@@ -600,6 +607,7 @@ sub load_virt_guest_install_tests {
         loadtest "virt_autotest/set_config_as_glue";
         loadtest "virt_autotest/uefi_guest_verification" if get_var("VIRT_UEFI_GUEST_INSTALL");
         loadtest "virt_autotest/sev_es_guest_verification" if get_var("VIRT_SEV_ES_GUEST_INSTALL");
+        loadtest "virt_autotest/sev_snp_validation" if get_var("VIRT_SEV_SNP_GUEST_INSTALL");
     }
     else {
         loadtest "virt_autotest/guest_installation_run";
@@ -620,6 +628,7 @@ sub load_virt_feature_tests {
     }
     loadtest "virt_autotest/xen_guest_irqbalance" if get_var("ENABLE_XEN_GUEST_IRQBALANCE");
     loadtest "virt_autotest/sriov_network_card_pci_passthrough" if get_var("ENABLE_SRIOV_NETWORK_CARD_PCI_PASSTHROUGH");
+    loadtest "virt_autotest/vgpu" if get_var("VGPU_TEST");
     if (get_var('ENABLE_HOTPLUGGING')) {
         loadtest 'virtualization/universal/hotplugging_guest_preparation';
         loadtest 'virtualization/universal/hotplugging_network_interfaces';
@@ -638,11 +647,19 @@ sub load_virt_feature_tests {
     }
 }
 
+# Workaround as use fake build15.99
+set_var('VERSION', '16.0') if (check_var('VERSION', '15.99'));
 testapi::set_distribution(DistributionProvider->provide());
 
 # set failures
 $testapi::distri->set_expected_serial_failures(create_list_of_serial_failures());
 $testapi::distri->set_expected_autoinst_failures(create_list_of_autoinst_failures());
+
+# Do it only for SLES MU virt test before loadtest
+if (is_sles_mu_virt_test) {
+    set_mu_virt_vars;
+    diag "Set necessary variables for SLES MU virtualization test before loadtest is done!";
+}
 
 if (load_yaml_schedule) {
     if (YuiRestClient::is_libyui_rest_api) {
@@ -672,11 +689,15 @@ elsif (is_systemd_test()) {
     }
     load_upstream_systemd_tests();
 }
+elsif (get_var("DMS_QEMU")) {
+    load_dms_qemu_tests();
+}
 elsif (is_public_cloud) {
     load_publiccloud_tests();
 }
 elsif (is_container_test) {
     load_container_tests();
+    load_helm_chart_tests() if (get_var("HELM_CHART"));
 }
 elsif (get_var("NFV")) {
     load_kernel_baremetal_tests();
@@ -738,7 +759,7 @@ elsif (get_var('VT_PERF')) {
 }
 elsif (get_var("SECURITY_TEST")) {
     prepare_target();
-    load_security_tests;
+    load_security_tests();
 }
 elsif (get_var('SMT')) {
     prepare_target();
@@ -783,8 +804,14 @@ elsif (get_var('XFSTESTS')) {
     if (get_var('KOTD_REPO')) {
         loadtest 'kernel/update_kernel';
     }
-    prepare_target;
-    if (check_var('XFSTESTS_INSTALL', 1) || check_var('XFSTESTS', 'installation') || is_pvm || check_var('ARCH', 's390x')) {
+    if (check_var('ARCH', 'ppc64le') && check_var('BACKEND', 'qemu')) {
+        loadtest "installation/bootloader_start";
+        loadtest "boot/boot_to_desktop";
+    }
+    else {
+        prepare_target;
+    }
+    if (check_var('XFSTESTS_INSTALL', 1) || check_var('XFSTESTS', 'installation') || (is_sle('<16') && (is_pvm || check_var('ARCH', 's390x')))) {
         loadtest 'xfstests/install';
         unless (check_var('NO_KDUMP', '1')) {
             loadtest 'xfstests/enable_kdump';
@@ -794,17 +821,16 @@ elsif (get_var('XFSTESTS')) {
         }
         if (check_var('XFSTESTS', 'installation')) {
             loadtest 'shutdown/shutdown';
+            loadtest 'shutdown/svirt_upload_assets' if check_var('BACKEND', 'svirt');
         }
         else {
             loadtest 'xfstests/partition';
             loadtest 'xfstests/run';
-            loadtest 'xfstests/generate_report';
         }
     }
     else {
         loadtest 'xfstests/partition';
         loadtest 'xfstests/run';
-        loadtest 'xfstests/generate_report';
     }
 }
 elsif (get_var("BTRFS_PROGS")) {
@@ -863,9 +889,8 @@ elsif (get_var("VIRT_AUTOTEST")) {
         loadtest "virt_autotest/install_package";
         loadtest "virt_autotest/update_package";
         # Skip reset_partition for s390x due to there just be 42Gib disk space for each s390x LPAR
-        loadtest "virt_autotest/reset_partition" if (!is_s390x);
-        # Skip reboot_and_wait_up_normal for s390x due to new changes from svirt backend for power_action_utils::power_action (see poo#151786)
-        loadtest "virt_autotest/reboot_and_wait_up_normal" if (!get_var('AUTOYAST') && get_var('REPO_0_TO_INSTALL') && (!is_s390x));
+        loadtest "virt_autotest/reset_partition" if is_x86_64 && get_var('VIRT_PRJ1_GUEST_INSTALL') && !get_var('LTSS');
+        loadtest "virt_autotest/reboot_and_wait_up_normal" if !is_registered_sles && get_var('REPO_0_TO_INSTALL');
         loadtest "virt_autotest/download_guest_assets" if get_var("SKIP_GUEST_INSTALL") && is_x86_64;
     }
     if (get_var("VIRT_PRJ1_GUEST_INSTALL")) {
@@ -975,7 +1000,7 @@ elsif (get_var('LIBSOLV_INSTALLCHECK')) {
 elsif (get_var("EXTRATEST")) {
     boot_hdd_image;
     load_extra_tests();
-    loadtest "console/coredump_collect" unless (check_var('EXTRATEST', 'wicked') || get_var('PUBLIC_CLOUD') || is_jeos);
+    loadtest "console/coredump_collect" unless (get_var('EXTRATEST') =~ /wicked|himmelblau/ || get_var('PUBLIC_CLOUD') || is_jeos);
 }
 elsif (get_var("WINDOWS")) {
     loadtest "installation/win10_installation";

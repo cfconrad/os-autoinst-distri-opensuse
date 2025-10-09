@@ -11,8 +11,6 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#36877, tc#1621145, poo#81730, tc#1767574
 
-use strict;
-use warnings;
 use base "apparmortest";
 use testapi;
 use utils;
@@ -20,7 +18,6 @@ use services::apparmor;
 
 sub run {
     my ($self) = @_;
-    select_console 'root-console';
     services::apparmor::check_aa_enforce($self);
 
     # Verify "https://bugs.launchpad.net/apparmor/+bug/1848227"

@@ -16,8 +16,6 @@
 # Maintainer: apappas@suse.de
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call);
@@ -47,7 +45,7 @@ sub run {
     # except of sle, where it is provided by *sysvinit-tools* rpm
     # since sle(15-SP3+) *sysvinit-tools* is not preinstalled on JeOS
     # as systemd's dependency with *sysvinit-tools* was dropped
-    $test_deps .= ' sysvinit-tools' if (is_sle('>15-sp2') || is_leap('>15.2'));
+    $test_deps .= ' sysvinit-tools' if ((is_sle('<16.0') && is_sle('>15-sp2')) || is_leap('>15.2'));
     zypper_call("in $test_deps");
     # disable debuginfod
     assert_script_run('unset DEBUGINFOD_URLS');
@@ -78,7 +76,7 @@ sub run {
     wait_serial_or_die('in main \(\) at test2\.c:16');
     enter_gdb_cmd("info locals");
     enter_gdb_cmd("up");
-    wait_serial_or_die(qr/1\s+.*\s+in main \(\) at test2\.c:16\s+16\s+char \* newstr = str_dup\(cstr, 5\);/);
+    wait_serial_or_die(qr/1\s+.*\s+in main \(\) at test2\.c:16\s+16\s+char \* newstr = str_dup\(cstr, 32\);/);
     enter_gdb_cmd("info locals");
     wait_serial_or_die("<error: Cannot access memory at ");
     enter_gdb_cmd("quit");

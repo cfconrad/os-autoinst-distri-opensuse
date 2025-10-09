@@ -53,7 +53,6 @@ sub setup_web_browser_env {
             script_run("SUSEConnect -p PackageHub/$version/$arch", 300);
         }
     }
-    zypper_call("--no-refresh --no-gpg-checks search -it pattern fips") if get_var('FIPS_ENABLED');
 }
 
 =head2 run_web_browser_text_based
@@ -70,24 +69,21 @@ sub run_web_browser_text_based {
     my ($browser, $options) = @_;
 
     my %https_url = (
-        google => "https://www.google.com/ncr",
+        tuta => "https://tuta.com/",
         suse => "https://www.suse.com/",
-        OBS => "https://build.opensuse.org/",
     );
 
     for my $p (keys %https_url) {
         enter_cmd "clear";
-        script_run "$browser $options $https_url{$p}", 0;
 
-        # Send key "o" ("OK" button) in case of any popup
-        # Note: key "o" can open "Option Setting Panel" in "w3m"
-        if ($browser ne "w3m") {
-            send_key "o";
+        if ($browser ne "links") {
+            validate_script_output("$browser $options $https_url{$p}", sub { m/.*200 OK.*(?i)Strict-Transport-Security.*/s });
+        } else {
+            my $output_file = "webpage.txt";
+            assert_script_run "$browser $options $https_url{$p} > $output_file";
+            assert_script_run "grep -i $p $output_file";
+            script_run "rm $output_file";
         }
-
-        assert_screen "$browser-connect-$p-webpage";
-        send_key "q";
-        send_key "y";
     }
 }
 

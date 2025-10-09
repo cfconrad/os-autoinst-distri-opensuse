@@ -14,8 +14,6 @@
 package bootloader_svirt;
 
 use base "installbasetest";
-use strict;
-use warnings;
 use testapi;
 use utils;
 use version_utils qw(is_jeos is_microos is_installcheck is_rescuesystem is_sle is_vmware);
@@ -65,15 +63,18 @@ sub run {
     my $repo;
     my $vmware_openqa_datastore;
 
-    # Clear datastore on VMware host
     if (check_var('VIRSH_VMM_FAMILY', 'vmware')) {
+        # Clear datastore on VMware host
         $vmware_openqa_datastore = "/vmfs/volumes/" . get_required_var('VMWARE_DATASTORE') . "/openQA/";
         $svirt->get_cmd_output("set -x; rm -f ${vmware_openqa_datastore}*${name}*", {domain => 'sshVMwareServer'});
-    }
 
-    # Workaround before fix in svirt (https://github.com/os-autoinst/os-autoinst/pull/901) is deployed
-    my $n = get_var('NUMDISKS', 1);
-    set_var('NUMDISKS', defined get_var('RAIDLEVEL') ? 4 : $n);
+        # Remove invalid VM by previous openQA job
+        my @vm_id = split('\n', $svirt->get_cmd_output("vim-cmd vmsvc/getallvms 2>&1 | grep 'invalid VM' | cut -d\\' -f2", {domain => 'sshVMwareServer'}));
+        foreach (@vm_id) {
+            $svirt->run_cmd("vim-cmd vmsvc/reload $_", domain => 'sshVMwareServer');
+            $svirt->run_cmd("vim-cmd vmsvc/unregister $_", domain => 'sshVMwareServer');
+        }
+    }
 
     my $xenconsole = "hvc0";
     if (!get_var('SP2ORLATER')) {
@@ -137,20 +138,13 @@ sub run {
 
     my $hdddir = "$basedir/openqa/${share_factory}hdd $basedir/openqa/${share_factory}hdd/fixed";
     my $size_i = get_var('HDDSIZEGB', '10');
-    foreach my $n (1 .. get_var('NUMDISKS')) {
+    foreach my $n (1 .. get_var('NUMDISKS', 1)) {
         if (my $full_hdd = get_var('HDD_' . $n)) {
             my $hdd = basename($full_hdd);
             my $hddpath = search_image_on_svirt_host($svirt, $hdd, $hdddir);
-            if ($hddpath =~ m/vmdk\.xz$/) {
-                my $nfs_ro = $hddpath;
-                $hddpath = "$vmware_openqa_datastore/$hdd" =~ s/vmdk\.xz/vmdk/r;
+            if ($hddpath =~ m/\.vmdk\.xz$|\.vmdk$/) {
                 # do nothing if the image is already unpacked in datastore
-                if ($svirt->run_cmd("test -e $hddpath", domain => 'sshVMwareServer')) {
-                    my $ret = $svirt->run_cmd("cp $nfs_ro $vmware_openqa_datastore", domain => 'sshVMwareServer');
-                    die "Image copy to datastore failed!\n" if $ret;
-                    $ret = $svirt->run_cmd("xz --decompress --keep --verbose $vmware_openqa_datastore/$hdd", domain => 'sshVMwareServer');
-                    die "Image decompress in datastore failed!\n" if $ret;
-                }
+                $hddpath = $svirt->provide_image_vmware_in_ds($hddpath, $vmware_openqa_datastore, backingfile => 1);
             }
             $svirt->add_disk(
                 {
@@ -229,6 +223,9 @@ sub run {
             });
     }
 
+    if ($vmm_family eq 'xen' && $vmm_type eq 'linux') {
+        $svirt->add_usb_hub();
+    }
     $svirt->add_vnc({port => get_var('VIRSH_INSTANCE', 1) + 5900});
 
     my %ifacecfg = ();
@@ -287,6 +284,12 @@ sub run {
     $svirt->add_interface(\%ifacecfg);
 
     $svirt->define_and_start;
+    if ($vmm_family eq 'xen') {
+        record_info('SUT hostname', get_var('VIRSH_HOSTNAME'));
+        record_info('VM instance', get_var('VIRSH_INSTANCE'));
+        record_info('VNC connection', get_var('VIRSH_HOSTNAME') . ':' . get_var('VIRSH_INSTANCE') . ' -Shared');
+    }
+
 
     # Variable set only in console (here sshVirtsh console) does not propagate
     # to test environment correctly and can be destroyed by bmwqemu::load_vars(),

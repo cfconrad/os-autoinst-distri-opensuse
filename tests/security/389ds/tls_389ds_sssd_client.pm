@@ -9,11 +9,10 @@
 
 use base 'consoletest';
 use testapi;
-use strict;
-use warnings;
 use utils;
 use lockapi;
 use services::389ds_sssd_client;
+use Utils::Logging 'tar_and_upload_log';
 
 sub run {
     select_console("root-console");
@@ -29,8 +28,13 @@ sub run {
 }
 
 sub post_fail_hook {
-    upload_logs("/var/log/messages");
+    tar_and_upload_log("/var/log/sssd", "sssd.tar.bz2");
+    script_run("journalctl -o short-precise -u sssd.service > /tmp/journal.log");
     upload_logs("/etc/sssd/sssd.conf");
+    upload_logs("/etc/openldap/ldap.conf");
+    upload_logs('/tmp/journal.log', failok => 1);
+    upload_logs("/var/log/messages", failok => 1);
+
 }
 
 1;

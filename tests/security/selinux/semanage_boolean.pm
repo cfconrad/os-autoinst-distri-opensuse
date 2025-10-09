@@ -8,12 +8,9 @@
 
 use base 'opensusebasetest';
 use power_action_utils "power_action";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
-use version_utils qw(is_sle_micro);
 use Utils::Backends 'is_pvm';
 
 sub run {
@@ -23,14 +20,13 @@ sub run {
     select_serial_terminal;
 
     # list and verify some (not all as it changes often) boolean(s)
-    validate_script_output(
-        "semanage boolean -l",
-        sub {
-            m/
-            authlogin_.*(off.*,.*off).*
-            daemons_.*(off.*,.*off).*
-            domain_.*(off.*,.*off).*/sx
-        });
+    my $booleans = script_output("semanage boolean -l");
+    for my $prefix (qw(authlogin_ daemons_ domain_)) {
+        die "Missing boolean ${prefix}*" unless $booleans =~ m/^${prefix}.*\(off.*,.*off\)/m;
+    }
+
+    # Save boolean state
+    assert_script_run("semanage boolean -E > ~/oldbooleans");
 
     # test option "-m": to set boolean value "off/on"
     assert_script_run("semanage boolean -m --off $test_boolean");
@@ -48,18 +44,12 @@ sub run {
     validate_script_output("semanage boolean -l | grep $test_boolean", sub { m/${test_boolean}.*(on.*,.*on).*Allow.*to.*/ });
 
     # test option "-C": to list boolean local customizations
-    if (is_sle_micro('>=6.0')) {
-        validate_script_output(
-            "semanage boolean -l -C",
-            sub {
-m/(?=.*SELinux\s+boolean\s+State\s+Default\s+Description)(?=.*${test_boolean}\s+\(on\s+,\s+on\))(?=.*virt_sandbox_use_all_caps\s+\(on\s+,\s+on\))(?=.*virt_use_nfs\s+\(on\s+,\s+on\))/s;
-            });
-    } else {
-        validate_script_output(
-            "semanage boolean -l -C",
-            sub {
-                m/(?=.*SELinux\s+boolean\s+State\s+Default\s+Description)(?=.*${test_boolean}\s+\(on\s+,\s+on\))(?=.*selinuxuser_execmod\s+\(on\s+,\s+on\))/s;
-            });
+    my $local_booleans = script_output("semanage boolean -l -C");
+
+    # Enabled above
+    die "${test_boolean} missing" unless $local_booleans =~ m/${test_boolean}\s+\(on\s+,\s+on\)/;
+    if (script_run('rpm -q container-selinux') == 0) {
+        die "container booleans missing" unless $local_booleans =~ m/virt_sandbox_use_all_caps\s+\(on\s+,\s+on\).*virt_use_nfs\s+\(on\s+,\s+on\)/s;
     }
 
     # test option "-D": to delete boolean local customizations
@@ -71,8 +61,8 @@ m/(?=.*SELinux\s+boolean\s+State\s+Default\s+Description)(?=.*${test_boolean}\s+
         $self->result('fail');
     }
 
-    # clean up: restore the value for "selinuxuser_execmod"
-    assert_script_run("semanage boolean --modify --on selinuxuser_execmod");
+    # clean up: restore previous boolean values
+    assert_script_run("semanage import -f ~/oldbooleans && rm ~/oldbooleans");
 }
 
 1;

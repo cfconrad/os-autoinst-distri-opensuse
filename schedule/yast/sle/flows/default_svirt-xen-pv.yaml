@@ -4,7 +4,7 @@ bootloader:
   - installation/bootloader_start
 setup_libyui:
   - installation/setup_libyui
-access_beta: []
+access_beta:  []
 product_selection:
   - installation/product_selection/install_SLES
 license_agreement:
@@ -30,6 +30,7 @@ software: []
 booting: []
 default_systemd_target: []
 security: []
+security_configuration: []
 installation_settings:
   - installation/installation_settings/validate_ssh_service_enabled
   - installation/installation_settings/open_ssh_port

@@ -11,8 +11,6 @@
 # Maintainer: QE LSG <qa-team@suse.de>
 
 use base 'y2_installbase';
-use strict;
-use warnings;
 use lockapi;
 use testapi;
 use utils;
@@ -45,6 +43,7 @@ sub run {
         # Await server's response "OK, done" (custom_pxeboot.pm)
         mutex_wait("custom_pxe_ready", $jobid_server);
     }
+
     # Reboot
     # alt-o is the "OK" button in popup "the system will reboot in X seconds..."
     if (has_ttys) {

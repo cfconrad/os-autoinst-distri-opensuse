@@ -98,12 +98,13 @@ sub log_versions {
     my $kernel_pkg_log = '/tmp/kernel-pkg.txt';
     my $ver_linux_log = '/tmp/ver_linux_before.txt';
     my $kernel_config = script_output('for f in "/boot/config-$(uname -r)" "/usr/lib/modules/$(uname -r)/config" /proc/config.gz; do if [ -f "$f" ]; then echo "$f"; break; fi; done');
+    my $run_cmd = is_transactional ? 'transactional-update -c run ' : '';
 
-    script_run("rpm -qi $kernel_pkg > $kernel_pkg_log 2>&1");
+    script_run("$run_cmd rpm -qi $kernel_pkg > $kernel_pkg_log 2>&1", timeout => 120);
     upload_logs($kernel_pkg_log, failok => 1);
 
     if (get_var('LTP_COMMAND_FILE') || get_var('LIBC_LIVEPATCH')) {
-        script_run(get_ltproot . "/ver_linux > $ver_linux_log 2>&1");
+        script_run("$run_cmd " . get_ltproot . "/ver_linux > $ver_linux_log 2>&1");
         upload_logs($ver_linux_log, failok => 1);
     }
 
@@ -129,9 +130,8 @@ sub log_versions {
 
     record_info('KERNEL VERSION', script_output('uname -a'));
     record_info('KERNEL DEFAULT PKG', script_output("cat $kernel_pkg_log", proceed_on_failure => 1));
-    record_info('KERNEL EXTRA PKG', script_output('rpm -qi kernel-default-extra', proceed_on_failure => 1));
-
-    record_info('KERNEL pkg', script_output('rpm -qa | grep kernel', proceed_on_failure => 1));
+    record_info('KERNEL EXTRA PKG', script_output("$run_cmd rpm -qi kernel-default-extra", proceed_on_failure => 1));
+    record_info('KERNEL pkg', script_output("$run_cmd rpm -qa | grep kernel", proceed_on_failure => 1));
 
     if (get_var('LTP_COMMAND_FILE') || get_var('LIBC_LIVEPATCH')) {
         record_info('ver_linux', script_output("cat $ver_linux_log", proceed_on_failure => 1));
@@ -166,11 +166,18 @@ sub prepare_ltp_env {
     assert_script_run('cd $LTPROOT/testcases/bin');
 }
 
+sub parse_int {
+    my $val = shift;
+
+    return oct($val) if $val =~ m/^0/;
+    return $val + 0;
+}
+
 sub check_kernel_taint {
     my ($testmod, $softfail) = @_;
 
     my @flag_desc = (
-        undef,    # proprietary module, ignore
+        'Proprietary module was loaded',
         'Module was force loaded',
         'Kernel running on out of specification system',
         'Module was force unloaded',
@@ -181,38 +188,66 @@ sub check_kernel_taint {
         'ACPI table overridden by user',
         'Kernel issued warning',
         'Staging driver was loaded',
-        undef,    # platform firmware bug workaround, ignore
-        undef,    # out-of-tree module, ignore
+        'Workaround for platform firmware bug',
+        'Out of tree module was loaded',
         'Unsigned module was loaded',
         'Soft lockup occurred',
-        undef,    # livepatch, ignore
-        'Auxiliary taint',
-        undef,    # kernel built with struct randomization, ignore
+        'Kernel was live patched',
+        'Externally supported module was loaded or auxiliary taint',
+        'Kernel was built with struct randomization',
         'In-kernel test has been run'
     );
-    my $flag = 1;
-    my @taint;
+    $flag_desc[31] = 'Unsupported module was loaded';
 
+    my $flag = 1;
+    my $taint_undef = 0;
+    my (@taint, @exp_taint);
+
+    # Default taint mask:
+    # - Proprietary module was loaded (0x1)
+    # - Workaround for platform firmware bug (0x800)
+    # - Out of tree module was loaded (0x1000)
+    # - Kernel was live patched (0x8000)
+    # - Externally supported module was loaded or auxiliary taint (0x10000)
+    # - Unsupported module was loaded (0x80000000)
+    my $taint_mask = parse_int(get_var('LTP_TAINT_EXPECTED', 0x80019801));
     my $taint_val = script_output('cat /proc/sys/kernel/tainted');
 
+    my $i = 0;
     for my $desc (@flag_desc) {
-        push @taint, "- $desc" if defined($desc) && $flag & $taint_val;
+        $desc .= sprintf(" (0x%x, 1 << $i)", $flag);
+        if ($flag & $taint_val) {
+            unless (defined($desc)) {
+                $taint_undef = 1;
+            }
+            elsif ($flag & $taint_mask) {
+                push @exp_taint, "- $desc";
+            }
+            else {
+                push @taint, "- $desc";
+            }
+        }
+
         $flag <<= 1;
+        $i += 1;
     }
 
-    push @taint, '- Unknown tainted state' if $taint_val >= $flag;
     my $message = sprintf("Kernel taint: 0x%x", $taint_val);
+    push @taint, '- Unknown tainted state' if $taint_undef;
+    $message = "$message (OK)" unless @taint;
+    $message .= "\n\nUnexpected taint:\n" . join("\n", @taint) if @taint;
+    $message .= "\n\nExpected taint:\n" . join("\n", @exp_taint) if @exp_taint;
 
     unless (@taint) {
-        $testmod->record_resultfile('Kernel taint OK', "$message (OK)",
+        $testmod->record_resultfile('Kernel taint OK', $message,
             result => 'ok');
     }
     elsif ($softfail) {
-        $testmod->record_soft_failure_result("$message:\n" . join("\n", @taint));
+        $testmod->record_soft_failure_result($message);
     }
     else {
-        $testmod->record_resultfile('Kernel tainted',
-            "$message\n" . join("\n", @taint), result => 'fail');
+        $testmod->record_resultfile('Kernel tainted', $message,
+            result => 'fail');
         $testmod->{result} = 'fail';
     }
 }
@@ -229,7 +264,7 @@ sub init_ltp_tests {
         # Disabling IPv4 is needed for iptables tests (net.tcp_cmds).
         # Disabling IPv6 is needed for ICMPv6 tests (net.ipv6).
         # This must be done after stopping network service.
-        my $disable_iptables_script = << 'EOF';
+        my $disable_iptables_script = <<'EOF';
 iptables -P INPUT ACCEPT;
 iptables -P OUTPUT ACCEPT;
 iptables -P FORWARD ACCEPT;
@@ -254,7 +289,7 @@ EOF
         script_run('ip6tables -S');
 
         # display various network configuration
-        script_run('netstat -nap');
+        script_run('ss -nap || netstat -nap');
 
         script_run('cat /etc/resolv.conf');
         script_run('f=/etc/nsswitch.conf; [ ! -f $f ] && f=/usr$f; cat $f');
@@ -369,19 +404,25 @@ sub parse_openposix_runfile {
 sub parse_runtest_file {
     my ($name, $cmds, $cmd_pattern, $cmd_exclude, $test_result_export, $suffix) = @_;
     my $whitelist = LTP::WhiteList->new();
+    my @tests = ();
 
     for my $line (@$cmds) {
         next if ($line =~ /(^#)|(^$)/);
-
         #Command format is "<name> <command> [<args>...] [#<comment>]"
         next if ($line !~ /^\s* ([\w-]+) \s+ (\S.+) #?/gx);
         next if (is_svirt && ($1 eq 'dnsmasq' || $1 eq 'dhcpd'));    # poo#33850
-        my $test = {name => $1 . $suffix, command => $2};
-        my $tinfo = testinfo($test_result_export, test => $test, runfile => $name);
 
+        my $test = {name => $1 . $suffix, command => $2, last => 0};
         if ($test->{name} =~ m/$cmd_pattern/ && !($test->{name} =~ m/$cmd_exclude/)) {
-            loadtest_runltp($test->{name}, $tinfo, $whitelist);
+            push @tests, $test;
         }
+    }
+
+    ${tests [-1]}->{last} = 1 if (@tests);
+
+    for my $test (@tests) {
+        my $tinfo = testinfo($test_result_export, test => $test, runfile => $name);
+        loadtest_runltp($test->{name}, $tinfo, $whitelist);
     }
 }
 
@@ -482,6 +523,7 @@ sub prepare_whitelist_environment {
         flavor => get_var('FLAVOR'),
         arch => get_var('ARCH'),
         backend => get_var('BACKEND'),
+        machine => get_var('MACHINE'),
         kernel => '',
         libc => '',
         gcc => '',

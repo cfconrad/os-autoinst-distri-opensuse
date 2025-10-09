@@ -13,8 +13,6 @@
 # Tags: tc#1503906
 
 use base "x11test";
-use strict;
-use warnings;
 use testapi;
 use version_utils 'is_sle';
 
@@ -30,11 +28,6 @@ sub run {
         assert_screen('menu-favorites-libreoffice');
     }
 
-    unless (check_screen('favorites-list-libreoffice')) {
-        record_soft_failure 'bsc#1195836';
-        type_string 'libre';
-        wait_still_screen(1);
-    }
     # find the LibreOffice
     assert_and_click('favorites-list-libreoffice');
     assert_screen('welcome-to-libreoffice', 90);

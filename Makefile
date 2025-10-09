@@ -18,12 +18,11 @@ prepare:
 os-autoinst/:
 	@test -d os-autoinst || (echo "Missing test requirements, \
 link a local working copy of 'os-autoinst' into this \
-folder or call 'make prepare' to install download a copy necessary for \
+folder or call 'make prepare' to download and setup a copy necessary for \
 testing" && exit 2)
 
 tools/tidy: os-autoinst/
 	@test -e tools/tidy || ln -s ../os-autoinst/tools/tidy tools/
-	@test -e .perltidyrc || ln -s os-autoinst/.perltidyrc ./
 
 tools/lib/: os-autoinst/
 	@test -e tools/lib || ln -s ../os-autoinst/tools/lib tools/
@@ -72,6 +71,10 @@ test-yaml-valid:
 test-modules-in-yaml-schedule:
 	export PERL5LIB=${PERL5LIB_} ; tools/detect_nonexistent_modules_in_yaml_schedule `git diff --diff-filter=d --name-only --exit-code origin/master | grep '^schedule/*'`
 
+.PHONY: test-jsonnet-valid
+test-jsonnet-valid:
+	tools/check_jsonnet
+
 .PHONY: test-metadata
 test-metadata:
 	tools/check_metadata $$(git ls-files "tests/**.pm")
@@ -106,11 +109,13 @@ test-spec:
 	tools/update_spec --check
 
 .PHONY: test-static
-test-static: tidy-check test-yaml-valid test-modules-in-yaml-schedule test-merge test-dry test-no-wait_idle test-deleted-renamed-referenced-files test-unused-modules-changed test-soft_failure-no-reference test-spec test-invalid-syntax test-code-style test-metadata test_pod_whitespace_rule test_pod_errors
+test-static: tidy-check test-yaml-valid test-jsonnet-valid test-modules-in-yaml-schedule test-merge test-dry test-no-wait_idle test-deleted-renamed-referenced-files test-unused-modules-changed test-soft_failure-no-reference test-spec test-invalid-syntax test-code-style test-metadata test_pod_whitespace_rule test_pod_errors
 
 .PHONY: test
 ifeq ($(TESTS),compile)
 test: test-compile
+else ifeq ($(TESTS),compile-changed)
+test: test-compile-changed
 else ifeq ($(TESTS),static)
 test: test-static
 else ifeq ($(TESTS),unit)
@@ -121,12 +126,15 @@ else
 test: unit-test test-static test-compile test-isotovideo perlcritic
 endif
 
-PERLCRITIC=PERL5LIB=tools/lib/perlcritic:$$PERL5LIB perlcritic --stern --include "strict" --include Perl::Critic::Policy::HashKeyQuote \
+PERLCRITIC=PERL5LIB=tools/lib/perlcritic:$$PERL5LIB perlcritic --stern --include Perl::Critic::Policy::HashKeyQuote \
   --verbose "::warning file=%f,line=%l,col=%c,title=%m - severity %s::%e\n" --quiet
 
 .PHONY: perlcritic
+# strictures and warnings are already enforced by os-autoinst basetest.pm so
+# exclude here for test modules
 perlcritic: tools/lib/
-	${PERLCRITIC} $$(git ls-files -- '*.p[ml]' ':!:data/')
+	${PERLCRITIC} --include=strict $$(git ls-files -- '*.p[ml]' ':!:data/' ':!:tests/')
+	${PERLCRITIC} --exclude=strict $$(git ls-files -- ':tests/*.p[ml]')
 
 .PHONY: test-unused-modules-changed
 test-unused-modules-changed:
@@ -147,7 +155,7 @@ test-deleted-renamed-referenced-files:
 
 .PHONY: test-soft_failure-no-reference
 test-soft_failure-no-reference:
-	@! git --no-pager grep -E -e 'record_soft_failure\>.*\;' --and --not -e '([a-zA-Z]+#[a-zA-Z-]*[0-9]+|fate.suse.com/[0-9]+|\$$(reference|bsc))' lib/ tests/
+	@! git --no-pager grep -E -e 'record_soft_failure\>.*\;' --and --not -e '(^use |[a-zA-Z]+#[a-zA-Z-]*[0-9]+|fate.suse.com/[0-9]+|\$$(reference|bsc))' lib/ tests/
 
 .PHONY: test-invalid-syntax
 test-invalid-syntax:

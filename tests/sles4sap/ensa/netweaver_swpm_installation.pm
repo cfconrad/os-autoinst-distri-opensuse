@@ -12,8 +12,8 @@ use testapi;
 use serial_terminal 'select_serial_terminal';
 use lockapi;
 use hacluster;
-use strict;
-use warnings;
+use version_utils qw(has_selinux has_selinux_by_default);
+use sles4sap::sapcontrol;
 
 sub raise_barriers {
     my (%args) = @_;
@@ -49,7 +49,7 @@ sub run {
     my $sar_archives_dir = $media_mount_point . '/' . get_var('SAR_SOURCES', 'SAR_SOURCES'); # relative path from NFS root to the DIR with KERNEL, SWPM... SAR archives
     my $sapcar_bin = $media_mount_point . '/' . get_var('SAPCAR_BIN', 'SAPCAR');    # relative path from NFS root to SAPCAR binary
     my $swpm_sar_filename = get_required_var('SWPM_SAR_FILENAME');
-    my $sapinst_unpack_path = '/tmp/SWPM';
+    my $sapinst_unpack_path = '/usr/sap/SWPM';
     my $sap_install_profile = "$sapinst_unpack_path/inifile.params";
 
     my $product_id = $instance_data->{product_id};
@@ -81,6 +81,12 @@ sub run {
     # Raises instance specific barrier to prevent dependencies from running
     raise_barriers(instance_type => $instance_type, instances => \@instances);
 
+    # We created new unlabeled files so we must relabel them for SELinux
+    if (has_selinux) {
+        assert_script_run('test -d /.snapshots && restorecon -R / -e /.snapshots', timeout => 600);
+        assert_script_run('test -d /.snapshots || restorecon -R /', timeout => 600);
+    }
+
     my $swpm_command = join(' ', $swpm_binary,
         "SAPINST_INPUT_PARAMETERS_URL=$sap_install_profile",
         "SAPINST_USE_HOSTNAME=$hostname",
@@ -90,9 +96,15 @@ sub run {
         '-noguiserver');
 
     record_info('SAPINST EXEC', "Executing sapinst command:\n$swpm_command");
-    assert_script_run($swpm_command, timeout => 300);
+    assert_script_run($swpm_command, timeout => 600);
 
-    $self->sapcontrol_process_check(sidadm => $nw_install_data->{sidadm},
+    # Labelling the newly installed files only for systems with SELinux.
+    if (has_selinux) {
+        assert_script_run('test -d /.snapshots && restorecon -R / -e /.snapshots', timeout => 600);
+        assert_script_run('test -d /.snapshots || restorecon -R /', timeout => 600);
+    }
+
+    sapcontrol_process_check(sidadm => $nw_install_data->{sidadm},
         instance_id => $instance_data->{instance_id},
         expected_state => 'started');
 
@@ -100,8 +112,9 @@ sub run {
     release_barrier(instance_type => $instance_type, instances => \@instances);
     # sync all nodes after installation done and show status info on SAP instances
     barrier_wait('SAPINST_INSTALLATION_FINISHED');
-    $self->sap_show_status_info(netweaver => 1, instance_id => $instance_data->{instance_id})
+    sap_show_status_info(netweaver => 1, instance_id => $instance_data->{instance_id})
       if grep($instance_type, ('ERS', 'ASCS', 'PAS', 'AAS'));
 }
 
 1;
+

@@ -18,6 +18,8 @@ use utils;
 use version_utils qw(is_sle is_leap is_tumbleweed);
 use y2_module_guitest 'launch_yast2_module_x11';
 use x11utils 'turn_off_gnome_screensaver';
+use serial_terminal qw(select_serial_terminal);
+use Utils::Systemd qw(systemctl);
 
 use base 'consoletest';
 
@@ -169,7 +171,7 @@ sub aa_status_stdout_check {
     my $total_line = script_output("aa-status | grep 'profiles are in' | grep $profile_mode | cut -d ' ' -f1");
     my $lines = $start_line + $total_line;
 
-    assert_script_run("aa-status | head -$lines | tail -$total_line | sed 's/[ \t]*//g' | grep -x $profile_name");
+    script_output("aa-status | head -$lines | tail -$total_line | sed 's/[ \t]*//g' | grep -x $profile_name");
 }
 
 =head2 ip_fetch
@@ -198,7 +200,7 @@ Set up mail server with Postfix and Dovecot:
 
 =over
 
-=item * 1. Setting Postfix for outgoing mail by: setting hostname and domain, restart rcnetwork services, double check the setting
+=item * 1. Setting Postfix for outgoing mail by: setting hostname and domain, restart network services, double check the setting
 
 =item * 2. Setting mail sender/recipient as needed
 
@@ -228,8 +230,8 @@ sub setup_mail_server_postfix_dovecot {
     assert_script_run("echo $ip $hostname.$testdomain $hostname >> /etc/hosts");
     set_hostname($hostname);
 
-    # Restart rcnetwork services:
-    assert_script_run("rcnetwork restart");
+    # Restart network services:
+    systemctl 'restart network';
 
     # Double check the setting
     validate_script_output("hostname --short", sub { m/$hostname/ });
@@ -628,9 +630,11 @@ sub adminer_database_delete {
     send_key "tab";
     send_key "tab";
     send_key "ret";
+    wait_still_screen(2, 2);
     assert_and_click("adminer-save-passwd", timeout => 180);
     assert_screen("adminer-select-database");
     assert_and_click("adminer-click-database-test");
+    sleep 1;
     assert_and_click("adminer-click-drop-database-test");
     # Confirm drop
     send_key_until_needlematch("adminer-database-dropped", 'ret', 11, 1);
@@ -675,6 +679,7 @@ sub yast2_apparmor_cleanup {
     select_console("root-console");
     send_key "ctrl-c";
     clear_console;
+    select_serial_terminal;
 
     # Upload logs for reference
     upload_logs("$audit_log");
@@ -786,9 +791,11 @@ Restart auditd and apparmor in root-console
 
 sub pre_run_hook {
     my ($self) = @_;
+    my $audit_service = is_tumbleweed ? 'audit-rules' : 'auditd';
 
-    select_console 'root-console';
-    systemctl('restart auditd');
+    select_serial_terminal;
+    systemctl("restart $audit_service");
+    sleep 3;
     systemctl('restart apparmor');
     $self->SUPER::pre_run_hook;
 }
@@ -806,6 +813,7 @@ sub post_fail_hook {
 
     return if get_var('NOLOGS');
     # Exit x11 and turn to console in case
+    select_console('x11');
     send_key("alt-f4");
     select_console("root-console");
     if (script_run("! [[ -e $audit_log ]]")) {

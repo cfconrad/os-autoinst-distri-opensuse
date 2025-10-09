@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2018-2020 SUSE LLC
+# Copyright 2018-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: systemd
@@ -37,7 +37,7 @@ use constant {
 
 # Tumbleweed uses a persistent journal, Leap 15.3+ (except 15.3 AArch64 JeOS) inherits SLE's default
 sub has_default_persistent_journal {
-    return is_tumbleweed || (is_leap('=15.3') && check_var('FLAVOR', 'JeOS-for-AArch64'));
+    return is_tumbleweed || is_sle('16.0+') || (is_leap('=15.3') && check_var('FLAVOR', 'JeOS-for-AArch64'));
 }
 
 # If the daemon is stopped uncleanly, or if the files are found to be corrupted, they are renamed using the ".journal~" suffix
@@ -152,11 +152,10 @@ sub run {
         # SLES12 on Publiccloud has ntp enabled by default.
         if (!is_public_cloud) {
             # SLE 12 has no chrony by default but uses ntp
+            assert_script_run('echo "server 0.suse.pool.ntp.org" >> /etc/ntp.conf');
             assert_script_run("ntpdate -b 0.suse.pool.ntp.org", fail_message => "forced time sync failed");
             assert_script_run("systemctl enable --now ntpd");
-            # We're not enabling ntp-wait until bsc#1207042 is resolved
-            record_soft_failure("bsc#1207042 - Won't enable ntp-wait due to cron issues");
-            #assert_script_run("systemctl enable ntp-wait.service");
+            assert_script_run("systemctl enable ntp-wait.service");
         }
     } else {
         assert_script_run("systemctl start chronyd");
@@ -177,7 +176,7 @@ sub run {
     # To enable persistent logging in opensuse, we use systemd-logger.rpm that creates */var/log/journal/* directory
     get_current_boot_id \@boots;
     if (has_default_persistent_journal) {
-        if (is_tumbleweed) {
+        if (is_tumbleweed || is_sle('16.0+')) {
             script_output(sprintf("test -d %s && ls --almost-all %s", PERSISTENT_LOG_DIR, PERSISTENT_LOG_DIR));
         } else {
             assert_script_run 'rpm -q systemd-logger';

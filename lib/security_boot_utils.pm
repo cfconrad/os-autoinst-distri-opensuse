@@ -17,6 +17,8 @@ use grub_utils qw(grub_test);
 use utils;
 use testapi;
 use Utils::Architectures;
+use security::config;
+use version_utils 'is_sle';
 
 our @EXPORT = qw(
   boot_has_no_video
@@ -24,7 +26,8 @@ our @EXPORT = qw(
 );
 
 sub boot_has_no_video {
-    return (is_aarch64 && check_var('FULL_LVM_ENCRYPT', '1') && (check_var('FLAVOR', 'Online-QR') || check_var('FLAVOR', 'Full-QR')));
+    my $is_encrypted = check_var('FULL_LVM_ENCRYPT', '1') || check_var('ENCRYPT', '1');
+    return ($is_encrypted && is_aarch64);
 }
 
 sub boot_encrypt_no_video {
@@ -34,7 +37,8 @@ sub boot_encrypt_no_video {
     # used, for example, by aarch64 on 15-SP5 QR (https://progress.opensuse.org/issues/156655)
     assert_screen 'encrypted-disk-no-video';
     wait_serial("Please enter passphrase for disk.*");
-    type_string_slow("$testapi::password");
+    my $password = check_var('SYSTEM_ROLE', 'Common_Criteria') ? $security::config::strong_password : $testapi::password;
+    type_string_slow("$password");
     send_key 'ret';
     wait_still_screen 15;
     $self->wait_boot_past_bootloader;

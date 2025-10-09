@@ -10,8 +10,6 @@
 
 use base 'y2_module_guitest';
 use y2_base;
-use strict;
-use warnings;
 use testapi;
 use utils;
 
@@ -35,6 +33,7 @@ sub configure_system {
 
     # switch to 'Global options'
     assert_and_click 'yast2_network-global_options-click';
+    send_key('alt-f10', wait_screen_change => 10);
     # open the networkmanager dropdown and select 'NetworkManager'
     assert_and_click 'yast2_network-nm_selection-click';
     assert_and_click 'yast2_network-network_manager-click';
@@ -42,7 +41,7 @@ sub configure_system {
     # now apply the settings
     assert_and_click 'yast2_network-apply_settings-click';
     assert_and_click 'yast2_network-applet_warning-click';
-    assert_screen 'yast2_network-is_applying';
+    check_screen 'yast2_network-is_applying';
 
     assert_screen([qw(generic-desktop yast2_network-error_dialog)]);
     if (match_has_tag 'yast2_network-error_dialog') {

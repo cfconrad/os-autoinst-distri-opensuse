@@ -7,8 +7,6 @@
 # Maintainer: qac team <qa-c@suse.de>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use qam;
 use transactional;
@@ -16,18 +14,17 @@ use version_utils 'is_sle_micro';
 use serial_terminal;
 use utils qw(script_retry fully_patch_system);
 
-sub soft_fail_rt_scriptlet {
-    return if (get_var('FLAVOR') !~ /rt/i);
-
-    if (script_run("grep '%post(kernel-rt-5.14.21-150400.15.46.1.x86_64) scriptlet failed, exit status 1' /var/log/zypp/history") == 0) {
-        record_soft_failure('bsc#1213991 - %post(kernel-rt-5.14.21-150400.15.40.1.x86_64) scriptlet failed');
-        select_console 'root-console';
-        trup_shell 'zypper -n update', timeout => 1800;
+sub update_system {
+    # By default we use 'up', but this covers also the case of 'patch'
+    if (get_var('TRANSACTIONAL_UPDATE_PATCH')) {
+        record_info('PATCH', 'Patching system');
+        fully_patch_system(trup_call_timeout => 1800);
     } else {
-        die "Transactional update failed with different error cause";
+        record_info('UPDATE', 'Updating system');
+        trup_call('up', timeout => 1800);
+        process_reboot(trigger => 1);
     }
 }
-
 
 sub run {
     my ($self) = @_;
@@ -40,20 +37,27 @@ sub run {
         assert_script_run 'update-ca-certificates -v';
 
         # Clean the journal to avoid capturing bugs that are fixed after installing updates
-        assert_script_run('journalctl --no-pager -o short-precise | tail -n +2 > /tmp/journal_before');
-        upload_logs('/tmp/journal_before');
-        assert_script_run('journalctl --sync --flush --rotate --vacuum-time=1second');
-        assert_script_run('rm /tmp/journal_before');
+        assert_script_run 'journalctl --no-pager -o short-precise | tail -n +2 > /tmp/journal_before';
+        upload_logs '/tmp/journal_before';
+        assert_script_run 'journalctl --sync --flush --rotate --vacuum-time=1second';
+        assert_script_run 'rm /tmp/journal_before';
     }
 
-    # First we update the system
-    fully_patch_system(trup_call_timeout => 1800);
+    update_system;
 
-    # Now we add the incident repositories and do a zypper patch
+    # Now we add the test repositories and do a system update
     add_test_repositories;
     record_info('Updates', script_output('zypper lu'));
-    my $ret = trup_call('up', timeout => 300, proceed_on_failure => 1);
-    soft_fail_rt_scriptlet if ($ret != 0);
+    update_system;
+
+    # after update, clean the audit log to make sure there aren't any leftovers that were already fixed
+    # see poo#169090
+    if (is_sle_micro) {
+        assert_script_run 'tar czf /tmp/audit_before.tgz /var/log/audit';
+        upload_logs '/tmp/audit_before.tgz';
+        assert_script_run 'rm -f /var/log/audit/* /tmp/audit_before.tgz';
+        # upon reboot, auditd service will be restarted and logfile recreated
+    }
     process_reboot(trigger => 1);
 }
 

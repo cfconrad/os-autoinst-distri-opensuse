@@ -1,4 +1,4 @@
-# Copyright 2021 SUSE LLC
+# Copyright 2025 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Summary: Integrate the Lynis scanner into OpenQA: Checking the "Hardening
@@ -7,8 +7,6 @@
 # Tags: poo#78224, poo#78230
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use utils;
 use lynis::lynistest;

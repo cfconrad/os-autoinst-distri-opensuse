@@ -22,7 +22,7 @@ use LTP::utils;
 sub _kirk_from_git
 {
     my ($cmd, $timeout) = @_;
-    my $repo = get_var('KIRK_REPO', 'https://github.com/acerv/kirk.git');
+    my $repo = get_var('KIRK_REPO', 'https://github.com/linux-test-project/kirk.git');
     my $branch = get_var('KIRK_BRANCH', 'master');
 
     zypper_call("ref");
@@ -99,7 +99,7 @@ sub run
     $cmd .= "--suite-timeout $args{timeout} ";
     $cmd .= "--framework $args{framework} " if $args{framework};
     $cmd .= "--sut $args{sut} " if $args{sut};
-    $cmd .= "--skip-tests $args{skip} " if $args{skip};
+    $cmd .= "--skip-tests '$args{skip}' " if $args{skip};
     $cmd .= "--env $args{envs} " if $args{envs};
     $cmd .= "--run-suite $args{suite} " if $args{suite};
     $cmd .= "$args{opts} " if $args{opts};

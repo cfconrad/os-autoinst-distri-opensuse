@@ -7,8 +7,6 @@ package virt_autotest_base;
 # Summary: virt_autotest: the initial version of virtualization automation test in openqa, with kvm support fully, xen support not done yet
 # Maintainer: alice <xlai@suse.com>
 
-use strict;
-use warnings;
 use File::Basename;
 use base "opensusebasetest";
 use testapi;
@@ -199,7 +197,7 @@ sub run_test {
     my $test_cmd = $self->get_script_run();
     #FOR S390X LPAR
     if (is_s390x) {
-        virt_utils::lpar_cmd("$test_cmd");
+        virt_utils::lpar_cmd("$test_cmd", {timeout => $timeout});
         return;
     }
 

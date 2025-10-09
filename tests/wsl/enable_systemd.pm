@@ -9,14 +9,20 @@
 use Mojo::Base qw(windowsbasetest);
 use testapi;
 use utils qw(zypper_call enter_cmd_slow);
-use version_utils qw(is_opensuse);
+use version_utils qw(is_opensuse is_tumbleweed);
 use wsl qw(is_fake_scc_url_needed);
 
 sub run {
     my $self = shift;
 
-    assert_screen(['windows_desktop', 'powershell-as-admin-window']);
-    $self->open_powershell_as_admin if match_has_tag('windows_desktop');
+    assert_screen(['windows-desktop', 'powershell-as-admin-window', 'welcome_to_wsl']);
+    if (match_has_tag('windows-desktop')) {
+        $self->open_powershell_as_admin;
+    } elsif (match_has_tag('welcome_to_wsl')) {
+        click_lastmatch;
+        send_key 'alt-f4';
+        $self->open_powershell_as_admin;
+    }
 
     # Check that systemd is not enabled by default.
     $self->run_in_powershell(
@@ -27,21 +33,17 @@ sub run {
         }
     );
     $self->run_in_powershell(
-        cmd => q(wsl),
+        cmd => q(wsl --user root),
         code => sub {
-            # become_root is now preferred and expected behavior:
-            # https://bugzilla.suse.com/show_bug.cgi?id=1225075
-            become_root;
             enter_cmd("zypper in -y -t pattern wsl_systemd");
             wait_still_screen stilltime => 3, timeout => 10, similarity_level => 43;
             save_screenshot;
             enter_cmd("exit");
             wait_still_screen stilltime => 3, timeout => 10, similarity_level => 43;
-            # There's need to exit twice, one from the root and another
-            # one from the WSL
-            enter_cmd("exit");
         }
     );
+    # Hopefully temporary workaround for https://github.com/microsoft/WSL/issues/11857
+    $self->run_in_powershell(cmd => q(echo "[wsl2]`nkernelCommandLine = cgroup_no_v1=all" >> ~/.wslconfig)) if is_tumbleweed;
     $self->run_in_powershell(cmd => q(wsl --shutdown));
     $self->run_in_powershell(
         cmd => '$port.WriteLine($(wsl /bin/bash -c "systemctl is-system-running"))',

@@ -13,8 +13,6 @@
 # Tags: bsc#598574
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use utils 'zypper_call';
 
@@ -23,7 +21,7 @@ sub run {
     zypper_call 'in wget';
     select_console 'user-console';
     assert_script_run('rpm -q wget');
-    assert_script_run('wget -O- -q www3.zq1.de/test.txt');
+    assert_script_run('wget -O- -6 -q www3.zq1.de/test.txt');
 }
 
 1;

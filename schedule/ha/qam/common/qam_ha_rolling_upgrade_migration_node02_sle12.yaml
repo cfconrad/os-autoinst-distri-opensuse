@@ -27,7 +27,6 @@ schedule:
   - ha/filesystem
   - ha/drbd_passive
   - ha/filesystem
-  - ha/ctdb
   - ha/haproxy
   - ha/await_upgrade_or_update
   - migration/version_switch_upgrade_target
@@ -53,5 +52,8 @@ conditional_schedule:
         - console/console_reboot
   register_ltss:
     LTSS_TO_LTSS:
+      1:
+        - migration/online_migration/register_ltss
+    LTSS_TO_LTSS_ES:
       1:
         - migration/online_migration/register_ltss

@@ -1,23 +1,23 @@
 # SUSE's openQA tests
 #
-# Copyright 2020-2021 SUSE LLC
+# Copyright 2020-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: engine subclass for podman specific implementations
 # Maintainer: qac team <qa-c@suse.de>
 
 package containers::podman;
+use strict;
+use warnings;
 use Mojo::Base 'containers::engine';
 use testapi;
 use containers::utils qw(registry_url);
 use containers::common qw(install_podman_when_needed);
 use utils qw(file_content_replace);
-use version_utils qw(get_os_release);
 has runtime => "podman";
 
 sub init {
-    my ($running_version, $sp, $host_distri) = get_os_release;
-    install_podman_when_needed($host_distri);
+    install_podman_when_needed();
     configure_insecure_registries();
 }
 
@@ -31,8 +31,7 @@ sub configure_insecure_registries {
 }
 
 sub get_storage_driver {
-    my $json = shift->info(json => 1);
-    my $storage = $json->{store}->{graphDriverName};
+    my $storage = script_output("podman info -f '{{.Store.GraphDriverName}}'");
     record_info 'Storage', "Detected storage driver=$storage";
 
     return $storage;

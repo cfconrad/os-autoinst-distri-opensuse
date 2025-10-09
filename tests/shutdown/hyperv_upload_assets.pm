@@ -7,21 +7,11 @@
 # Maintainer: Michal Nowak <mnowak@suse.com>
 
 use base 'installbasetest';
-use strict;
-use warnings;
 use testapi;
 use version_utils;
 
 use File::Basename 'fileparse_set_fstype';
-
-sub hyperv_cmd {
-    my ($cmd, $args) = @_;
-    $args->{ignore_return_code} ||= 0;
-    my $ret = console('svirt')->run_cmd($cmd);
-    diag "Command on Hyper-V returned: $ret";
-    die 'Command on Hyper-V failed' unless ($args->{ignore_return_code} || !$ret);
-    return $ret;
-}
+use virt_autotest::hyperv_utils 'hyperv_cmd';
 
 sub extract_assets {
     my ($args) = @_;

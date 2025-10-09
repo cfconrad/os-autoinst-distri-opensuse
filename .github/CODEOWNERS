@@ -1,7 +1,7 @@
 # GitHub CODEOWNERS https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # Public Cloud
-lib/publiccloud/ @pdostal @grisu48 @asmorodskyi @ricardobranco777 @mpagot @m-dati
+lib/publiccloud/ @pdostal @grisu48 @asmorodskyi @ricardobranco777 @mpagot @m-dati @alvarocarvajald @BillAnastasiadis
 tests/publiccloud/ @pdostal @grisu48 @asmorodskyi @ricardobranco777 @m-dati
 data/publiccloud/ @pdostal @grisu48 @asmorodskyi @ricardobranco777
 lib/main_publiccloud.pm @pdostal @grisu48 @asmorodskyi @ricardobranco777
@@ -11,7 +11,7 @@ lib/qesapdeploymnet.pm @mpagot
 lib/containers/ @pdostal @grisu48 @mloviska @ricardobranco777
 tests/containers/ @pdostal @grisu48 @mloviska @ricardobranco777
 data/containers/ @pdostal @grisu48 @mloviska @ricardobranco777
-lib/main_containers.pm @pdostal @grisu48 @jlausuch @mloviska @ricardobranco777
+lib/main_containers.pm @pdostal @grisu48 @mloviska @ricardobranco777
 
 # Transactional systems
 products/microos/ @mloviska @ricardobranco777
@@ -20,7 +20,7 @@ products/sle-micro/ @mloviska @ricardobranco777
 products/alp/ @mloviska @ricardobranco777
 tests/jeos/ @mloviska @ricardobranco777
 tests/transactional/ @mloviska @ricardobranco777
-lib/main_micro_alp.pm @mloviska @jlausuch @ricardobranco777
+lib/main_micro_alp.pm @mloviska @ricardobranco777
 
 # pdostal
 tests/console/sshd.pm @pdostal
@@ -41,3 +41,28 @@ tests/hpc/ @b10n1k @schlad
 data/hpc/ @b10n1k @schlad
 schedule/hpc/ @b10n1k @schlad
 tests/publiccloud/nvidia.pm @b10n1k
+
+# QE-SAP
+data/ha/ @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+data/sles4sap/ @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+lib/hacluster.pm @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+lib/qesapdeployment.pm @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+lib/sles4sap.pm @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+lib/sles4sap/ @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+lib/sles4sap_publiccloud.pm @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+lib/sles4sap_publiccloud_basetest.pm @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+schedule/ha/ @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+schedule/sles4sap/ @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+tests/ha/ @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+tests/sles4sap/ @a-kpappas @alvarocarvajald @Amrysliu @BillAnastasiadis @emiura @jankohoutek @lilyeyes @lpalovsky @mpagot
+
+# Security
+data/security/ @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda
+lib/security/ @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda
+lib/main_security.pm @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda
+lib/eal4_test.pm @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda
+lib/selinuxtest.pm @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda
+schedule/security/ @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda
+test_data/security/ @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda
+tests/security/ @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda
+tests/fips/ @feri @ilmanzo @paolostivanin @realcharmer @tjyrinki @fsimorda

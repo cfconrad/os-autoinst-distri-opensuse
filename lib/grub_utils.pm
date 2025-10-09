@@ -9,7 +9,7 @@ use opensusebasetest qw(handle_uefi_boot_disk_workaround);
 use testapi;
 use Utils::Architectures;
 use utils;
-use version_utils qw(is_sle is_livecd);
+use version_utils qw(is_sle is_livecd is_bootloader_grub2_bls);
 use bootloader_setup qw(stop_grub_timeout boot_into_snapshot);
 use Utils::Backends;
 
@@ -37,7 +37,8 @@ sub grub_test {
     unlock_bootloader;
     # 60 due to rare slowness e.g. multipath poo#11908
     # 90 as a workaround due to the qemu backend fallout
-    assert_screen('grub2', $timeout);
+    assert_screen(is_bootloader_grub2_bls ? 'grub2-bls' : 'grub2', $timeout);
+    assert_screen('grub2_timeout') if get_var('AGAMA_PROFILE_OPTIONS', '') =~ /bootloader_timeout/;
     stop_grub_timeout;
     boot_into_snapshot if get_var("BOOT_TO_SNAPSHOT");
     send_key_until_needlematch("bootmenu-xen-kernel", 'down', 11, 5) if get_var('XEN');
@@ -64,7 +65,8 @@ sub handle_installer_medium_bootup {
     assert_screen 'inst-bootmenu', 180;
 
     # Layout of live is different from installation media
-    my $key = is_livecd() ? 'down' : 'up';
+    # Agama has same layout of live
+    my $key = is_livecd() || get_var("AGAMA") ? 'down' : 'up';
     send_key_until_needlematch 'inst-bootmenu-boot-harddisk', $key;
     send_key 'ret';
 

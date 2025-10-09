@@ -10,6 +10,7 @@
 use Mojo::Base 'publiccloud::k8sbasetest';
 use testapi;
 use containers::k8s qw(apply_manifest wait_for_k8s_job_complete find_pods validate_pod_log);
+use version_utils qw(is_sle);
 
 sub run {
     my ($self, $run_args) = @_;
@@ -49,21 +50,27 @@ spec:
             memory: 128Mi
       restartPolicy: Never
   backoffLimit: 4
+  ttlSecondsAfterFinished: 30
+  activeDeadlineSeconds: 1700
 EOT
 
     record_info('Manifest', "Applying manifest:\n$manifest");
     apply_manifest($manifest);
     wait_for_k8s_job_complete($job_name);
     my $pod = find_pods("job-name=$job_name");
-    validate_pod_log($pod, "SUSE Linux Enterprise Server");
+    validate_pod_log($pod, is_sle('16.0+') ? "SUSE Linux" : "SUSE Linux Enterprise Server");
     record_info('cmd', "Command `$cmd` successfully executed in the image.");
 }
 
 sub cleanup {
     my ($self) = @_;
     record_info('Cleanup', 'Deleting kubectl job and image.');
-    script_run("kubectl delete job --grace-period=0 --force " . $self->{job_name}) if defined $self->{job_name};
+    # wait for confirmation that resource has been removed
+    assert_script_run("kubectl delete job --force $self->{job_name}", timeout => 120);
     $self->{provider}->delete_container_image($self->{image_tag});
+    script_run("kubectl describe job $self->{job_name}");
+    # might be useful for future debug, sometimes the jobs keep hanging
+    record_info('jobs', script_output('kubectl get jobs', timeout => 120, proceed_on_failure => 1));
 }
 
 sub post_fail_hook {

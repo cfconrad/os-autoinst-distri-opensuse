@@ -7,16 +7,15 @@
 # Summary: Configure iSCSI target for HA tests
 # Maintainer: QE-SAP <qe-sap@suse.de>, Loic Devulder <ldevulder@suse.com>
 
-use base 'opensusebasetest';
-use strict;
-use warnings;
+use base 'haclusterbasetest';
 use Utils::Backends qw(is_remote_backend);
 use utils qw(zypper_call systemctl ping_size_check);
 use testapi;
 use hacluster;
-use version_utils qw(is_sle);
+use version_utils qw(is_sle package_version_cmp);
 
 sub run {
+    return record_info('Skip iscsi on sles 16', 'Yast2 is not longer supported by sles 16') if (is_sle('>=16'));
     my $iscsi_server = get_var('USE_SUPPORT_SERVER') ? 'ns' : get_required_var('ISCSI_SERVER');
 
     # Perform a ping size check to several hosts which need to be accessible while
@@ -43,13 +42,12 @@ sub run {
     zypper_call 'in --recommends yast2-iscsi-client';
 
     # open-iscsi & iscsiuio were dropped as dependencies for yast2-iscsi-client. See gh#yast/yast-iscsi-client#121
-    if (script_run('rpm -q open-iscsi iscsiuio')) {
-        # Verify if the recommendation was added to the release notes in SLES 15-SP5
-        my $reln_chk = is_sle('15-SP5+') ? script_run('curl --silent https://www.suse.com/releasenotes/' .
-              get_required_var('ARCH') . '/SUSE-SLES/15-SP5/index.html | grep -q bsc-1204978') : 1;
-        record_soft_failure 'bsc#1204528 bsc#1204978 - Some yast2-iscsi-client dependencies were not installed with --recommends' if $reln_chk;
-        zypper_call 'in open-iscsi iscsiuio';
-    }
+    zypper_call 'in open-iscsi iscsiuio' if script_run('rpm -q open-iscsi iscsiuio');
+
+    my $iscsi_client = script_output("rpm -q --qf '%{VERSION}\n' yast2-iscsi-client");
+    record_info('iscsi_client version', $iscsi_client);
+
+    my $cmp_result = package_version_cmp($iscsi_client, '4.6.4');
 
     # Configuration of iSCSI client
     script_run("yast2 iscsi-client; echo yast2-iscsi-client-status-\$? > /dev/$serialdev", 0);
@@ -61,12 +59,17 @@ sub run {
     for (1 .. 40) { send_key 'backspace'; }
     type_string 'iqn.1996-04.de.suse:01:' . get_hostname . '.' . get_cluster_name;
     wait_still_screen 3;
-    send_key 'alt-v';    # discoVered targets
+
+    # According to https://bugzilla.suse.com/show_bug.cgi?id=1231385#c9, change the hotkey
+    $cmp_result >= 0 ? send_key 'alt-d' : send_key 'alt-v';    # discovered targets
     wait_still_screen 3;
 
     # Go to Discovered Targets screen can take time
     assert_screen 'iscsi-client-discovered-targets', 120;
-    send_key_until_needlematch 'iscsi-client-discovery', 'alt-d';
+
+    # According to https://bugzilla.suse.com/show_bug.cgi?id=1231385#c9, change the hotkey
+    $cmp_result >= 0 ? send_key_until_needlematch 'iscsi-client-discovery', 'alt-i' : send_key_until_needlematch 'iscsi-client-discovery', 'alt-d';
+
     assert_screen 'iscsi-client-discovery';
     send_key 'alt-i';    # Ip address
     wait_still_screen 3;

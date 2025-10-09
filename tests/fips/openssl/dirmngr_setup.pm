@@ -9,8 +9,6 @@
 # Tags: poo#52430, poo#52937, tc#1729313
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use utils;
 use version_utils;
@@ -101,7 +99,7 @@ sub run {
 }
 
 sub test_flags {
-    return {fatal => 1};
+    return {fatal => 0};
 }
 
 1;

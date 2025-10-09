@@ -15,8 +15,6 @@
 #   in /etc/systemd/journald.conf and restart systemd-journalctl
 # Maintainer: Oleksandr Orlov <oorlov@suse.de>
 
-use strict;
-use warnings;
 use base 'opensusebasetest';
 use testapi;
 use serial_terminal 'prepare_serial_console';
@@ -31,7 +29,7 @@ sub run {
     # Please see https://freedesktop.org/wiki/Software/systemd/Debugging/#index2h1 for the details.
     # Boot options that are required to make logs more detalized are located in 'bootloader_setup.pm'
     if (get_var('DEBUG_SHUTDOWN')) {
-        my $script = << "END_SCRIPT";
+        my $script = <<"END_SCRIPT";
              echo -e '#!/bin/sh
              echo --- dmesg log ---  > /dev/$serialdev
              dmesg -T >> /dev/$serialdev

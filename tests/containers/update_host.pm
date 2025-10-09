@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2022-2023 SUSE LLC
+# Copyright 2022-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 #
 # Copying and distribution of this file, with or without modification,
@@ -36,11 +36,15 @@ sub run {
     } elsif ($host_distri eq 'ubuntu') {
         assert_script_run("dhclient -v");
         script_retry("apt-get update -y", timeout => $update_timeout);
+        # We can't rely on DEBIAN_FRONTEND alone here due to
+        # https://bugs.launchpad.net/ubuntu/+source/docker.io/+bug/1950314
+        script_retry("yes yes | DEBIAN_FRONTEND=noninteractive apt-get upgrade -y", timeout => $update_timeout);
     } elsif ($host_distri eq 'centos') {
-        assert_script_run("dhclient -v");
-        script_retry("yum update -y --nobest", timeout => $update_timeout);
+        # dhclient is no longer available in CentOS 10
+        script_run("dhclient -v");
+        script_retry("dnf update -y --nobest", timeout => $update_timeout);
     } elsif ($host_distri eq 'rhel') {
-        script_retry("yum update -y", timeout => $update_timeout);
+        script_retry("dnf update -y", timeout => $update_timeout);
         $self->disable_selinux();
     } else {
         die("Host OS not supported");

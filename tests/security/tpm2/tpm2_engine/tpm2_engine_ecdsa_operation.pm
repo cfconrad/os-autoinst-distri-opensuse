@@ -8,14 +8,19 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#64902, tc#1742298
 
-use strict;
-use warnings;
 use base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
+use version_utils 'is_sle';
 
 sub run {
     select_serial_terminal;
+
+    # only skip if FIPS is enabled
+    if (check_var('FIPS_ENABLED', '1')) {
+        record_info('SKIPPING TEST', "ECDSA is not supported in FIPS mode.");
+        return;
+    }
 
     # ECDSA operations
     # There is an known issue bsc#1159508
@@ -28,7 +33,8 @@ sub run {
     assert_script_run "cd $test_dir";
     assert_script_run "echo tpm2test > $test_file";
     assert_script_run "tpm2tss-genkey -a ecdsa -s 2048 $my_key";
-    assert_script_run "openssl ec -engine tpm2tss -inform engine -in $my_key -pubout -outform pem -out $my_key.pub";
+    my $extra_opts = is_sle('<=15-SP5') ? "-engine tpm2tss -inform engine" : "-provider tpm2";
+    assert_script_run "openssl ec $extra_opts -in $my_key -pubout -outform pem -out $my_key.pub";
     assert_script_run "sha256sum $test_file | cut -d ' ' -f 1 | base64 -d > $test_file.hash";
     assert_script_run "openssl pkeyutl -engine tpm2tss -keyform engine -inkey $my_key -sign -in $test_file.hash -out $my_sig";
     validate_script_output "openssl pkeyutl -engine tpm2tss -keyform engine -inkey $my_key -verify -in $test_file.hash -sigfile $my_sig", sub {

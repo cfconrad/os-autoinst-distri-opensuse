@@ -16,25 +16,23 @@ use base 'consoletest';
 use testapi;
 use utils;
 use zypper;
-use version_utils 'is_sle';
+use version_utils qw(is_sle is_agama is_tumbleweed);
 use serial_terminal 'prepare_serial_console';
 use bootloader_setup qw(change_grub_config grub_mkconfig);
 use registration;
 use services::registered_addons 'full_registered_check';
 use List::MoreUtils 'uniq';
 use migration 'modify_kernel_multiversion';
-use strict;
 use Utils::Architectures 'is_ppc64le';
-use warnings;
+use Utils::Backends 'is_pvm';
+use transactional qw(process_reboot);
+use suseconnect_register qw(command_register);
 
 sub run {
     my ($self) = @_;
     select_console 'root-console';
-
     ensure_serialdev_permissions;
-
     prepare_serial_console;
-
     if (!check_var('DESKTOP', 'textmode')) {
         # Make sure packagekit is not running, or it will conflict with SUSEConnect.
         quit_packagekit;
@@ -48,7 +46,8 @@ sub run {
         if (is_sle('15+') && check_var('SLE_PRODUCT', 'sles')) {
             add_suseconnect_product(get_addon_fullname('base'), undef, undef, undef, 300, 1);
             add_suseconnect_product(get_addon_fullname('serverapp'), undef, undef, undef, 300, 1);
-            add_suseconnect_product(get_addon_fullname('desktop'), undef, undef, undef, 300, 1) if is_sle('=12-sp5', get_var('ORIGIN_SYSTEM_VERSION')) && is_ppc64le;
+            add_suseconnect_product(get_addon_fullname('desktop'), undef, undef, undef, 300, 1)
+              if is_sle('=12-sp5', get_var('ORIGIN_SYSTEM_VERSION')) && is_ppc64le;
         }
         if (is_sle('15+') && check_var('SLE_PRODUCT', 'sled')) {
             add_suseconnect_product(get_addon_fullname('base'), undef, undef, undef, 300, 1);
@@ -69,11 +68,23 @@ sub run {
         }
     }
 
-    # bsc#997263 - VMware screen resolution defaults to 800x600
-    if (check_var('VIRSH_VMM_FAMILY', 'vmware')) {
-        change_grub_config('=.*', '=1024x768x32', 'GFXMODE=');
-        change_grub_config('=.*', '=1024x768x32', 'GFXPAYLOAD_LINUX=');
+    # This workaround is intentionally guarded for Tumbleweed only - SLE must never ever accept that as a workaround
+    if (is_tumbleweed) {
+        my $nss_systemd = script_run('if [ -f /usr/etc/nsswitch.conf -a -f /etc/nsswitch.conf ]; then grep passwd.*systemd /etc/nsswitch.conf; fi');
+        if ($nss_systemd) {
+            assert_script_run('rm /etc/nsswitch.conf');
+            record_soft_failure("boo#1250513 - /etc/nsswitch.conf does not handle nss_systemd");
+        }
+    }
+
+    # bsc#997263 - VMware screen resolution defaults to 800x600 and longer GRUB_TIMEOUT for better needle detection
+    # Also for HA ha_cluster_crash_test test cases
+    if (check_var('VIRSH_VMM_FAMILY', 'vmware') || (check_var('CLUSTER_NAME', 'crashtest') && is_pvm)) {
+        #change_grub_config('=.*', '=1024x768x32', 'GFXMODE=');
+        #change_grub_config('=.*', '=1024x768x32', 'GFXPAYLOAD_LINUX=');
+        change_grub_config('=.*', '=30', 'GRUB_TIMEOUT=');
         grub_mkconfig;
+        process_reboot(trigger => 1);
     }
 
     # Save output info to logfile

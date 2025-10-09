@@ -7,7 +7,7 @@
 # Summary: This tests will deploy the public cloud instance, create user,
 #   prepare ssh config and permit password login
 #
-# Maintainer: <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'publiccloud::basetest';
 use publiccloud::ssh_interactive qw(select_host_console);
@@ -34,16 +34,17 @@ sub run {
     my $additional_disk_type = get_var('PUBLIC_CLOUD_HDD2_TYPE', '');    # Optional variable, also if PUBLIC_CLOUD_HDD2_SIZE is set
 
     # Create public cloud instance
-    my $provider = $self->provider_factory();
     my %instance_args;
     $instance_args{check_connectivity} = 1;
     $instance_args{use_extra_disk} = {size => $additional_disk_size, type => $additional_disk_type} if ($additional_disk_size > 0);
-    $args->{my_provider} = $provider;
-    my $instance = $provider->create_instance(%instance_args);
-    $args->{my_instance} = $instance;
-    $instance->ssh_opts("");    # Clear $instance->ssh_opts which ombit the known hosts file and strict host checking by default
+    $args->{my_provider} = $self->provider_factory();
+    $args->{my_instance} = $args->{my_provider}->create_instance(%instance_args);
+    $args->{my_instance}->wait_for_guestregister() if (is_ondemand);
+    my $provider = $args->{my_provider};
+    my $instance = $args->{my_instance};
 
     $instance->network_speed_test();
+    $instance->check_cloudinit() if (is_cloudinit_supported);
 
     # ssh-tunnel settings
     prepare_ssh_tunnel($instance) if (is_tunneled());
@@ -62,7 +63,7 @@ sub run {
 sub test_flags {
     return {
         fatal => 1,
-        milestone => 0,
+        milestone => 1,
         publiccloud_multi_module => 1
     };
 }

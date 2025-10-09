@@ -7,14 +7,13 @@
 # Maintainer: Martin Kravec <mkravec@suse.com>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use utils;
 
 sub run_rcshell_checks {
     # Check that system is using UTC timezone
-    assert_script_run 'date +"%Z" | grep -x UTC';
+    my $timezone = get_var('FIRST_BOOT_CONFIG', '') =~ /cloud-init/ ? 'CES?T' : 'UTC';
+    validate_script_output("date +\"%Z\"", sub { m/$timezone/ });
 }
 
 sub run_common_checks {

@@ -5,7 +5,7 @@
 
 # Summary: Helper class for Azure connection and authentication
 #
-# Maintainer: qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 package publiccloud::azure_client;
 use Mojo::Base -base;
@@ -20,8 +20,9 @@ has credentials_file_content => undef;
 has container_registry => sub { get_var('PUBLIC_CLOUD_CONTAINER_IMAGES_REGISTRY', 'suseqectesting') };
 
 sub init {
-    my ($self) = @_;
-    my $data = get_credentials('azure.json');
+    my ($self, %args) = @_;
+    $args{namespace} //= get_required_var('PUBLIC_CLOUD_NAMESPACE');
+    my $data = get_credentials(url_suffix => 'azure.json', namespace => $args{namespace});
     $self->subscription($data->{subscription_id});
     define_secret_variable("ARM_SUBSCRIPTION_ID", $self->subscription);
     define_secret_variable("ARM_CLIENT_ID", $data->{client_id});

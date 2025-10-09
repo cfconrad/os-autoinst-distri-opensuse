@@ -9,8 +9,6 @@
 # Tags: poo#88873, tc#1768663
 
 use base 'opensusebasetest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -23,7 +21,7 @@ sub run {
     select_serial_terminal;
 
     # Install runtime dependencies
-    zypper_call("in sudo");
+    zypper_call("in sudo device-mapper");
 
     # Simulate a ram device
     assert_script_run("modprobe brd rd_nr=1 rd_size=512000");

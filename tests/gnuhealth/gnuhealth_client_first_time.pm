@@ -7,8 +7,6 @@
 # Maintainer: Oliver Kurz <okurz@suse.de>
 
 use base 'x11test';
-use strict;
-use warnings;
 use testapi;
 use version_utils 'is_leap';
 
@@ -51,14 +49,12 @@ sub run {
         send_key 'alt-o';
     }
     assert_screen "$gnuhealth-admin_view", 300;
+    send_key 'alt-f4';
+    assert_and_click "$gnuhealth-admin-confirm_close";
 }
 
 sub test_flags {
     return {fatal => 1};
-}
-
-# overwrite the base class check for a clean desktop
-sub post_run_hook {
 }
 
 1;

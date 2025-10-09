@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2021-2024 SUSE LLC
+# Copyright 2021-2025 SUSE LLC
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -8,7 +8,7 @@
 # without any warranty.
 
 # Summary: Create VM in EC2 using aws binary
-# Maintainer: qa-c team <qa-c@suse.de>
+# Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'publiccloud::basetest';
 use testapi;
@@ -25,14 +25,17 @@ sub run {
 
     # If 'aws' is preinstalled, we test that version
     if (script_run("which aws") != 0) {
-        add_suseconnect_product(get_addon_fullname('pcm'), (is_sle('=12-sp5') ? '12' : undef));
+        # Public Cloud module is not needed since SLE 16 to install aws cli
+        add_suseconnect_product(get_addon_fullname('pcm'), (is_sle('=12-sp5') ? '12' : undef)) unless (is_sle('16+'));
         add_suseconnect_product(get_addon_fullname('phub')) if is_sle('=12-sp5');
         zypper_call 'in aws-cli jq';
     }
 
     my $provider = $self->provider_factory();
 
-    my $image_id = script_output("aws ec2 describe-images --filters 'Name=name,Values=suse-sles-15-sp5-v*-x86_64' 'Name=state,Values=available' --query 'Images[?Name != `ecs`]|[0].ImageId' --output=text", 240);
+    # 013907871322 is the official SUSE account ID
+    my $ownerId = get_var('PUBLIC_CLOUD_EC2_ACCOUNT_ID', '013907871322');
+    my $image_id = script_output("aws ec2 describe-images --filters 'Name=name,Values=suse-sles-15-sp6-v*-x86_64' 'Name=state,Values=available' --owners '$ownerId' --query 'Images[?Name != `ecs`]|[0].ImageId' --output=text", 240);
     record_info("EC2 AMI", "EC2 AMI query: " . $image_id);
 
     my $ssh_key = "openqa-cli-test-key-$job_id";
@@ -68,15 +71,36 @@ sub run {
 }
 
 sub cleanup {
+    my ($assert) = @_;
+    $assert //= 0;
+
     my $job_id = get_current_job_id();
-    my $instance_id = script_output("aws ec2 describe-instances --filters 'Name=tag:openqa-cli-test-tag,Values=$job_id' --output=text --query 'Reservations[*].Instances[*].InstanceId'", 90);
     my $security_group_name = "openqa-cli-test-sg-$job_id";
-    record_info("InstanceId", "InstanceId: " . $instance_id);
-    assert_script_run("aws ec2 terminate-instances --instance-ids $instance_id", 240);
     my $ssh_key = "openqa-cli-test-key-$job_id";
-    assert_script_run "aws ec2 delete-key-pair --key-name $ssh_key";
-    # The security group can be deleted only after the instance is terminated which takes a moment
-    script_retry "aws ec2 delete-security-group --group-name $security_group_name", delay => 15, retry => 12;
+
+    my $instance_id = script_output("aws ec2 describe-instances --filters 'Name=tag:openqa-cli-test-tag,Values=$job_id' --output=text --query 'Reservations[*].Instances[*].InstanceId'", timeout => 90, proceed_on_failure => 1);
+    record_info("InstanceId", "InstanceId: " . $instance_id);
+
+    if ($assert) {
+        assert_script_run("aws ec2 terminate-instances --instance-ids $instance_id", 240);
+        script_retry("aws ec2 describe-instances --instance-ids $instance_id --query 'Reservations[*].Instances[*].State.Name' --output text | grep 'terminated'", delay => 15, retry => 12);
+        assert_script_run("aws ec2 delete-key-pair --key-name $ssh_key");
+        script_retry("aws ec2 delete-security-group --group-name $security_group_name", delay => 15, retry => 12);
+    } else {
+        script_run("aws ec2 terminate-instances --instance-ids $instance_id", 240);
+        script_retry("aws ec2 describe-instances --instance-ids $instance_id --query 'Reservations[*].Instances[*].State.Name' --output text | grep 'terminated'", delay => 15, retry => 12, die => 0);
+        script_run("aws ec2 delete-key-pair --key-name $ssh_key");
+        script_retry("aws ec2 delete-security-group --group-name $security_group_name", delay => 15, retry => 12, die => 0);
+    }
+    return 1;
+}
+
+sub post_run_hook {
+    cleanup(1);
+}
+
+sub post_fail_hook {
+    cleanup();
 }
 
 sub test_flags {
@@ -84,4 +108,3 @@ sub test_flags {
 }
 
 1;
-

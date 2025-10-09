@@ -1,6 +1,6 @@
 # SUSE's openQA tests
 #
-# Copyright 2017-2020 SUSE LLC
+# Copyright 2017-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Package: openvpn dhcp-server wicked git
@@ -82,6 +82,7 @@ EOT
     if (check_var('IS_WICKED_REF', '1')) {
         $package_list .= ' radvd' if (check_var('WICKED', 'ipv6'));
         # Common REF Configuration
+        record_info('INFO', 'Setup DHCP server');
         $package_list .= ' dhcp-server';
         zypper_call("-q in $package_list", timeout => 400);
         if ($need_reboot) {
@@ -139,9 +140,8 @@ EOT
         } elsif (my $wicked_repo = get_var('WICKED_REPO')) {
             record_info('REPO', $wicked_repo);
             if ($wicked_repo =~ /suse\.de/ && script_run('rpm -qi ca-certificates-suse') == 1) {
-                my $version = generate_version('_');
-                zypper_call("ar --refresh http://download.suse.de/ibs/SUSE:/CA/$version/SUSE:CA.repo");
-                zypper_call("in ca-certificates-suse");
+                zypper_call("ar --refresh https://download.opensuse.org/repositories/SUSE:/CA/openSUSE_Tumbleweed/SUSE:CA.repo");
+                zypper_call("--gpg-auto-import-keys -n in ca-certificates-suse");
             }
             zypper_ar($wicked_repo, priority => 10, params => '-n wicked_repo', no_gpg_check => 1);
             my ($resolv_options, $repo_id) = (' --allow-vendor-change  --allow-downgrade ', 'wicked_repo');
@@ -190,9 +190,12 @@ EOT
     }
 
     # Disable firewall by default.
-    # Tests which need firewall, should explicit enable it
+    # Tests which need firewall, should explicit enable it.
+    # "systemctl disable --now" doesn't work with SuSEfirewall2, see poo#182003,
+    # So stop firewall at first before disabling it
     if (script_run('systemctl is-active -q ' . opensusebasetest::firewall) == 0) {
-        systemctl("disable --now " . opensusebasetest::firewall);
+        systemctl("stop " . opensusebasetest::firewall);
+        systemctl("disable " . opensusebasetest::firewall);
     }
     record_info('PKG', script_output(q(rpm -qa 'wicked*' --qf '%{NAME}\n' | sort | uniq | xargs rpm -qi)));
 }

@@ -87,6 +87,8 @@ sub prepare_serial_console {
         return;
     }
 
+    ensure_testuser_present;
+
     record_info('getty before', script_output('systemctl | grep serial-getty'));
 
     my $console = 'hvc1';
@@ -120,7 +122,14 @@ wait_serial(get_login_message(), 300);
 
 sub get_login_message {
     my $arch = get_required_var("ARCH");
-    return is_sle() ? qr/Welcome to SUSE Linux Enterprise .*\($arch\)/
+
+    # this is only a temporary measure for BCI s390x tests that run on slem 6.0 and 6.1
+    if (is_s390x && get_var('BCI_TESTS', '') && get_var('HOST_VERSION', '') =~ /slem/i) {
+        return qr/Welcome to SUSE Linux Micro 6.[01].*\(s390x\)/;
+    }
+    my $agama_opts = get_var('AGAMA_PROFILE_OPTIONS', '');
+    return is_sle() && $agama_opts =~ /software_only_required/ ? qr/\blogin:/
+      : is_sle() ? qr/Welcome to SUSE Linux Enterprise .*\($arch\)/
       : is_sle_micro() ? qr/Welcome to SUSE Linux.* Micro .*\($arch\)/
       : is_leap() ? qr/Welcome to openSUSE Leap.*/
       : qr/Welcome to openSUSE Tumbleweed 20.*/;
@@ -137,6 +146,8 @@ Set serial terminal prompt to given string.
 sub set_serial_prompt {
     $serial_term_prompt = shift // '';
 
+    # Some (older) versions of bash don't take changes to the terminal during runtime into account. Re-exec it.
+    enter_cmd('export PAGER=cat TERM=dumb; stty cols 2048; exec $SHELL') if (is_sle('>=16') && is_s390x);
     die "Invalid prompt string '$serial_term_prompt'"
       unless $serial_term_prompt =~ s/\s*$//r;
     enter_cmd(qq/PS1="$serial_term_prompt"/);
@@ -171,7 +182,7 @@ sub login {
     die 'Failed to wait for login prompt' unless wait_serial(qr/login:\s*$/i);
     enter_cmd("$user");
 
-    my $re = qr/$user/i;
+    my $re = qr/$user[\r\n]/i;
     if (!wait_serial($re, timeout => 3)) {
         record_info('RELOGIN', 'Need to retry login to workaround virtio console race', result => 'softfail');
         enter_cmd("$user");
@@ -186,7 +197,7 @@ sub login {
     die 'Failed to confirm that login was successful' unless wait_serial(qr/$escseq* \w+:~(\s\#|>) $escseq* \s*$/x);
 
     # Some (older) versions of bash don't take changes to the terminal during runtime into account. Re-exec it.
-    enter_cmd('export TERM=dumb; stty cols 2048; exec $SHELL');
+    enter_cmd('export PAGER=cat TERM=dumb; stty cols 2048; exec $SHELL');
     die 'Failed to confirm that shell re-exec was successful' unless wait_serial(qr/$escseq* \w+:~(\s\#|>) $escseq* \s*$/x);
     set_serial_prompt($prompt);
     # TODO: Send 'tput rmam' instead/also
@@ -363,7 +374,6 @@ use root-ssh console directly.
 
 sub select_serial_terminal {
     my $root = shift // 1;
-    my $prompt = shift // ($root ? '# ' : '> ');
 
     my $backend = get_required_var('BACKEND');
     my $console;

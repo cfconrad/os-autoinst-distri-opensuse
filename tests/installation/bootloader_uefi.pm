@@ -32,8 +32,6 @@
 package bootloader_uefi;
 
 use base "installbasetest";
-use strict;
-use warnings;
 
 use Time::HiRes 'sleep';
 
@@ -43,7 +41,7 @@ use lockapi 'mutex_wait';
 use bootloader_setup;
 use registration;
 use utils;
-use version_utils qw(is_jeos is_microos is_opensuse is_sle is_selfinstall is_sle_micro);
+use version_utils qw(is_jeos is_microos is_opensuse is_sle is_selfinstall is_sle_micro is_leap_micro is_bootloader_sdboot is_bootloader_grub2_bls);
 use Utils::Backends qw(is_ipmi);
 
 # hint: press shift-f10 trice for highest debug level
@@ -90,14 +88,24 @@ sub run {
     }
 
     # aarch64 firmware 'tianocore' can take longer to load
-    my $bootloader_timeout = is_aarch64 ? 90 : 15;
+    my $bootloader_timeout = is_aarch64 ? 90 : 25;
+    $bootloader_timeout += 90 if get_var('FLAVOR', '') =~ /encrypted/i;
     if (get_var('UEFI_HTTP_BOOT') || get_var('UEFI_HTTPS_BOOT')) {
         tianocore_http_boot;
     }
 
     # Some aach64 JeOS jobs take too long to match the first grub2 needle.
     # By pressing a random key, we stop the grub timeout
-    send_key 'backspace' if (is_jeos && is_aarch64);
+    send_key 'backspace' if (is_aarch64 && is_sle_micro('6.0+') || is_jeos);
+
+    if (get_var('FLAVOR') =~ /VMware-Updates/) {
+        # VMware guests have a short GRUB timeout, which can cause issues with needle matching.
+        # After the VMware guest boots to the OS, we press the left arrow key to stop the GRUB timeout.
+        assert_screen('bootloader-vmware');
+        record_info('Flavor is VMWare-Updates', 'Flavor is VMWare-Updates');
+        wait_screen_change(sub { sleep(0.1); }, 90, similarity_level => 20);
+        send_key 'left';
+    }
 
     if (get_var('VERSION') =~ /agama/) {
         # For agama test, it is too short time to match the grub2(10s), so we create
@@ -105,13 +113,21 @@ sub run {
         assert_screen("bootloader-grub2-agama", $bootloader_timeout);
     }
     else {
-        assert_screen([qw(bootloader-shim-import-prompt bootloader-grub2)], $bootloader_timeout);
+        assert_screen([qw(bootloader-shim-import-prompt bootloader-grub2 grub2-bls bootloader-sdboot)], $bootloader_timeout);
     }
     if (match_has_tag("bootloader-shim-import-prompt")) {
         send_key "down";
         send_key "ret";
-        assert_screen "bootloader-grub2", $bootloader_timeout;
+        assert_screen([qw(bootloader-grub2 bootloader-sdboot grub2-bls)], $bootloader_timeout);
     }
+    if (match_has_tag("bootloader-sdboot")) {
+        return if is_bootloader_sdboot;
+    }
+
+    if (match_has_tag('grub2-bls') && is_bootloader_grub2_bls) {
+        return;
+    }
+
     if (get_var('DISABLE_SECUREBOOT') && (get_var('BACKEND') eq 'qemu')) {
         $self->tianocore_disable_secureboot;
     }
@@ -135,8 +151,9 @@ sub run {
     elsif (get_var('VERSION') !~ /agama/) {
         if (get_var("PROMO") || get_var('LIVETEST') || get_var('LIVECD')) {
             send_key_until_needlematch("boot-live-" . get_var("DESKTOP"), 'down', 11, 3);
-        }
-        elsif (!(is_jeos || (is_sle_micro && !is_selfinstall)) && !is_microos('VMX')) {
+        } elsif (get_var("AGAMA")) {
+            select_bootmenu_option;
+        } elsif (!(is_jeos || ((is_sle_micro || is_leap_micro) && !is_selfinstall)) && !is_microos('VMX')) {
             send_key_until_needlematch('inst-oninstallation', 'down', 11, 0.5);
         }
     }
@@ -145,7 +162,7 @@ sub run {
 
     # Ipmi backend sol console is not reliable enough to change bootmenu params,
     # so skip bootmenu_default_params which is not necessary now.
-    # However, serial console and AGAMA_AUTO settings are actually useful.
+    # However, serial console and INST_AUTO settings are actually useful.
     # If agama provides support for installation via ssh connection or others,
     # we will then consider adding them back.
     if (is_ipmi && is_uefi_boot && is_selfinstall) {
@@ -159,7 +176,8 @@ sub run {
         return;
     }
 
-    bootmenu_default_params;
+    bootmenu_default_params(in_grub_edit => 1);
+    save_screenshot();
     unless (is_selfinstall) {
         bootmenu_remote_target;
         specific_bootmenu_params unless is_microos || is_jeos;

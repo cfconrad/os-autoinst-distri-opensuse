@@ -4,8 +4,6 @@
 # Summary: After reboot, setup the system again and set HDD as registered.
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
-use strict;
-use warnings;
 use base "consoletest";
 use testapi;
 use migration;
@@ -19,7 +17,7 @@ sub run {
 
     # Stop packagekitd
     quit_packagekit;
-    script_run("source /etc/bash.bashrc.local", die_on_timeout => 0);
+    script_run("source /etc/bash.bashrc.local");
 }
 
 1;

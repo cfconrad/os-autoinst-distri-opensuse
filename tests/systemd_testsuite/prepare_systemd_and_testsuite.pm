@@ -18,7 +18,7 @@ use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils qw(is_sle);
-use registration qw(add_suseconnect_product get_addon_fullname);
+use registration qw(add_suseconnect_product get_addon_fullname is_phub_ready);
 
 sub run {
     my $test_opts = {
@@ -47,8 +47,10 @@ sub run {
     );
 
     select_serial_terminal();
+    # Package requires PackageHub is available
+    return if (!is_phub_ready() && is_sle('<16'));
 
-    if (is_sle) {
+    if (is_sle("<16")) {
         add_suseconnect_product(get_addon_fullname('legacy'));
         add_suseconnect_product(get_addon_fullname('desktop'));
         add_suseconnect_product(get_addon_fullname('sdk'));
@@ -56,6 +58,9 @@ sub run {
         add_suseconnect_product(get_addon_fullname('python3'));
         my $repo = sprintf('http://download.suse.de/download/ibs/SUSE:/SLE-%s:/GA/standard/',
             get_var('VERSION'));
+        zypper_call("ar $repo systemd-tests");
+    } else {
+        my $repo = get_var('SYSTEMD_TESTS_REPO');
         zypper_call("ar $repo systemd-tests");
     }
 

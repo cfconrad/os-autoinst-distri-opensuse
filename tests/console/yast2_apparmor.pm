@@ -13,8 +13,6 @@
 # Create a new profile for 'top' binary;
 # Maintainer: Sergio R Lemke <slemke@suse.com>;
 
-use strict;
-use warnings;
 use base "y2_module_consoletest";
 use testapi;
 use utils qw(zypper_call systemctl);
@@ -32,7 +30,7 @@ sub install_extra_packages_requested {
 sub toggle_mode {
     wait_still_screen(3);
     if (is_pre_15()) {
-        record_soft_failure 'bsc#1126289 - yast2_apparmor - cannot toggle first profile in the list';
+        record_info 'bsc#1126289 - yast2_apparmor - cannot toggle first profile in the list';
         # try out with second element in the list
         send_key 'tab';
         wait_still_screen(2);

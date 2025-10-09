@@ -17,8 +17,6 @@
 # Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
 
 use base 'y2_installbase';
-use strict;
-use warnings;
 use testapi;
 use Utils::Architectures;
 use lockapi;
@@ -29,18 +27,22 @@ use ipmi_backend_utils;
 
 sub run {
     my ($self) = @_;
+
     my $dasd_path = get_var('DASD_PATH', '0.0.0150');
     select_console 'install-shell';
 
     # on a CC enabled system, root ssh login is disabled by default, but we need it enabled
     if (check_var('SYSTEM_ROLE', 'Common_Criteria') && is_sle && is_s390x) {
-        my $vg_name = "vg-system";
-        my $lv_name = "lv-root";
-        my $crypt_name = "encrypted_disk";
         my $stor_inst = "/var/log/YaST2/storage-inst/*committed.yml";
-        my $root_hd = get_var('ENCRYPT') ? "/dev/$vg_name/$lv_name " : script_output("cat $stor_inst | grep -B4 'mount_point: \"/\"' | grep name | awk -F \\\" '{print \$2}'");
+        my $is_encrypted = check_var('ENCRYPT', '1') || check_var('FULL_LVM_ENCRYPT', '1');
+        my $root_hd = script_output("cat $stor_inst | grep -B4 'mount_point: \"/\"' | grep name | awk -F \\\" '{print \$2}'");
+        if ($is_encrypted) {
+            $root_hd = "/dev/mapper/" . script_output("dmsetup ls | grep root | awk '{print \$1}'");
+        }
+
         assert_script_run("mount $root_hd /mnt");
         assert_script_run("sed -i -e 's/PermitRootLogin no/PermitRootLogin yes/g' /mnt/etc/ssh/sshd_config");
+        assert_script_run("sed -i -e 's/PermitRootLogin prohibit-password/PermitRootLogin yes/g' /mnt/etc/ssh/sshd_config.d/51-permit-root-login.conf") if is_sle('>=15-SP6');
         assert_script_run('umount /mnt');
     }
 
@@ -71,7 +73,7 @@ sub run {
             set_grub_on_vh('/mnt', '', 'xen') if (get_var('XEN') || check_var('HOST_HYPERVISOR', 'xen'));
             set_grub_on_vh('/mnt', '', 'kvm') if (check_var('HOST_HYPERVISOR', 'kvm') || check_var('SYSTEM_ROLE', 'kvm'));
             adjust_for_ipmi_xen('/mnt') if (get_var('REGRESSION') && (get_var('XEN') || check_var('HOST_HYPERVISOR', 'xen')));
-            set_pxe_efiboot('/mnt') if is_aarch64;
+            set_pxe_efiboot('/mnt') if (is_aarch64 && !(get_var("VIRT_AUTOTEST")));
         }
     }
     else {

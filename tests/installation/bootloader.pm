@@ -24,11 +24,10 @@
 package bootloader;
 
 use base "installbasetest";
-use strict;
-use warnings;
 
 use testapi;
 use lockapi 'mutex_wait';
+use autoyast qw(expand_agama_profile);
 use bootloader_setup;
 use bootloader_pvm;
 use registration;
@@ -48,6 +47,11 @@ sub run {
     if (is_livecd && check_var('LIVECD_LOADER', 'grub2')) {
         $boot_cmd = 'ctrl-x';
         uefi_bootmenu_params;
+    }
+    # Agama gets extra param from bootmenu_default_params
+    # including agama.install_url
+    if (get_var('AGAMA')) {
+        $boot_cmd = 'ctrl-x';
     }
     my @params;
     push @params, bootmenu_default_params;

@@ -13,7 +13,7 @@
 
 use Mojo::Base qw(consoletest);
 use utils qw(zypper_call script_retry);
-use db_utils qw(push_image_data_to_db);
+use version_utils;
 use containers::common;
 use testapi;
 use serial_terminal 'select_serial_terminal';
@@ -33,15 +33,22 @@ sub run {
     # If multiple engines are defined (e.g. CONTAINER_RUNTIMES=podman,docker), we use just one. podman is preferred.
     my $engines = get_required_var('CONTAINER_RUNTIMES');
     my $engine;
-    if ($engines =~ /podman/) {
+    if ($engines =~ /podman|k3s/) {
         $engine = 'podman';
+        return if is_sle("=12-SP5", get_var("HOST_VERSION", get_required_var("VERSION")));    # podman is not available on 12-SP5.
     } elsif ($engines =~ /docker/) {
         $engine = 'docker';
     } else {
         die('No valid container engines defined in CONTAINER_RUNTIMES variable!');
     }
 
-    script_retry("$engine pull -q $image", timeout => 300, delay => 60, retry => 3);
+    # Avoid unnecessary load on IBS by holding back all test runs except 15-SP7, so that registry.suse.de can load the images into the cache
+    # This is a temporary workaround until https://progress.opensuse.org/issues/189813 is done.
+    sleep(150 + rand(150)) unless (get_var("CASEDIR") || check_var('HOST_VERSION', '15-SP7'));
+
+    die "Pulling container image '$image' timed out. Likely a new build is already being prepared. Look for a new build and ignore this test run.\n"
+      if script_run("timeout 300 $engine pull -q $image", timeout => 330) == 124;
+    script_retry("$engine pull -q $image", timeout => 300, delay => 60, retry => 2);
     record_info('Inspect', script_output("$engine inspect $image"));
 
     if ($build && $build ne 'UNKNOWN') {
@@ -49,22 +56,6 @@ sub run {
         # Note: Both lines are aligned, thus the additional space
         record_info('builds', "CONTAINER_IMAGE_BUILD:  $build\norg.opensuse.reference: $reference");
         die('Missmatch in image build number. The image build number is different than the one triggered by the container bot!') if ($reference !~ /$buildrelease$/);
-    }
-
-    ## Pull container and collect container stats, but only for podman.
-    # podman and docker collect the image size differently. To remain consistent we only collect the image size as reported by podman
-    if ($image && get_var('IMAGE_STORE_DATA') && $engine =~ /podman/) {
-        script_retry("podman pull -q $image", retry => 3, delay => 120);
-        my $size_mb = script_output("podman inspect --format \"{{.VirtualSize}}\" $image") / 1000000;
-        my %args;
-        $args{arch} = get_required_var('ARCH');
-        $args{distri} = 'bci';
-        $args{flavor} = get_required_var('BCI_IMAGE_NAME');
-        $args{flavor} =~ s/^bci-//;    # Remove optional bci prefix from the image name because the distri already determines that this is bci.
-        $args{type} = 'VirtualSize';
-        $args{version} = get_required_var('VERSION');
-        $args{build} = get_required_var('BUILD');
-        push_image_data_to_db('containers', $image, $size_mb, %args);
     }
 }
 

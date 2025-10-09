@@ -11,27 +11,40 @@ package bootloader_zkvm;
 
 use base "installbasetest";
 
-use strict;
-use warnings;
 
 use bootloader_setup;
 use registration;
 use testapi;
 use utils qw(OPENQA_FTP_URL type_line_svirt save_svirt_pty);
 use ntlm_auth;
+use version_utils qw(is_agama);
+use autoyast qw(expand_agama_profile parse_dud_parameter);
 
 sub set_svirt_domain_elements {
     my ($svirt) = shift;
 
     if (!get_var('BOOT_HDD_IMAGE') or (get_var('PATCHED_SYSTEM') and !get_var('ZDUP'))) {
-        my $repo = "$utils::OPENQA_FTP_URL/" . get_required_var('REPO_0');
+        my $repo = "$utils::OPENQA_HTTP_URL/" . get_required_var('REPO_0');
         $repo = get_var('MIRROR_HTTP') if get_var('NTLM_AUTH_INSTALL');
-
         my $name = $svirt->name;
 
         my $ntlm_p = get_var('NTLM_AUTH_INSTALL') ? $ntlm_auth::ntlm_proxy : '';
-        my $cmdline = get_var('VIRSH_CMDLINE') . " $ntlm_p install=$repo";
-        $cmdline .= remote_install_bootmenu_params;
+        my $cmdline = get_var('VIRSH_CMDLINE') . $ntlm_p . " ";
+        if (is_agama) {
+            $cmdline .= " root=live:http://" . get_var('OPENQA_HOSTNAME') .
+              ((get_var('FLAVOR') eq "Full") ?
+                  "/assets/repo/" . get_required_var('REPO_0') . "/LiveOS/squashfs.img" :
+                  "/assets/iso/" . get_required_var('ISO'));
+            $cmdline .= " live.password=$testapi::password";
+            # add extra boot params for agama network, e.g. ip=2c-ea-7f-ea-ad-0c:dhcp
+            $cmdline .= ' ' . get_var('AGAMA_NETWORK_PARAMS') if get_var('AGAMA_NETWORK_PARAMS');
+
+            # additional parameters requiring parsing
+            $cmdline .= parse_dud_parameter(get_var('INST_DUD')) if get_var('INST_DUD');
+        } else {
+            $cmdline .= "install=$repo";
+            $cmdline .= remote_install_bootmenu_params;
+        }
         if (get_var('UPGRADE')) {
             $cmdline .= "upgrade=1 ";
         }
@@ -41,8 +54,11 @@ sub set_svirt_domain_elements {
         }
 
         $cmdline .= ' ' . get_var("EXTRABOOTPARAMS") if get_var("EXTRABOOTPARAMS");
+        # inst.auto and inst.install_url are defined in 'specific_bootmenu_params'
         $cmdline .= specific_bootmenu_params;
-        $cmdline .= registration_bootloader_cmdline if check_var('SCC_REGISTER', 'installation') && !get_var('NTLM_AUTH_INSTALL');
+        if (!(is_agama && check_var('FLAVOR', 'Full'))) {
+            $cmdline .= registration_bootloader_cmdline if check_var('SCC_REGISTER', 'installation') && !get_var('NTLM_AUTH_INSTALL');
+        }
 
         $svirt->change_domain_element(os => initrd => "$zkvm_img_path/$name.initrd");
         $svirt->change_domain_element(os => kernel => "$zkvm_img_path/$name.kernel");
@@ -50,9 +66,9 @@ sub set_svirt_domain_elements {
 
         # show this on screen and make sure that kernel and initrd are actually saved
         enter_cmd "wget $repo/boot/s390x/initrd -O $zkvm_img_path/$name.initrd";
-        assert_screen "initrd-saved";
+        assert_screen("initrd-saved", timeout => 300);
         enter_cmd "wget $repo/boot/s390x/linux -O $zkvm_img_path/$name.kernel";
-        assert_screen "kernel-saved";
+        assert_screen("kernel-saved", timeout => 300);
     }
     # after installation we need to redefine the domain, so just shutdown
     # on zdup and online migration we need to redefine in between
@@ -79,6 +95,10 @@ sub run {
     record_info('VM instance', get_var('VIRSH_INSTANCE'));
     record_info('Guest ip', get_var('VIRSH_GUEST'));
 
+    if (is_agama) {
+        wait_serial('Connect to the Agama installer using these URLs', 300) || die "Agama installer didn't start";
+        return;
+    }
     if (!get_var("BOOT_HDD_IMAGE") or (get_var('PATCHED_SYSTEM') and !get_var('ZDUP'))) {
         if (check_var("VIDEOMODE", "text")) {
             wait_serial("run 'yast.ssh'", 300) || die "linuxrc didn't finish";

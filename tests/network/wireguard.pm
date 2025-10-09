@@ -12,8 +12,6 @@
 use base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
-use strict;
-use warnings;
 use utils;
 use version_utils 'is_sle';
 use registration;
@@ -58,7 +56,7 @@ sub run {
         $remote = '10.0.2.101';
     }
 
-    if (is_sle()) {
+    if (is_sle('<16')) {
         add_suseconnect_product('sle-module-desktop-applications');
         add_suseconnect_product(get_addon_fullname('we'), undef, undef, "-r " . get_required_var('SCC_REGCODE_WE'), 300, 1);
         # Workaround https://bugzilla.suse.com/show_bug.cgi?id=1181941
@@ -111,7 +109,6 @@ sub run {
     assert_script_run 'ip link delete dev wg0';
 
     ## Test wg-quick
-    assert_script_run('set -eo pipefail');
     assert_script_run('cd /etc/wireguard');
     if (get_var('IS_MM_SERVER')) {
         # Prepare new keys
@@ -136,14 +133,14 @@ sub run {
         barrier_wait('WG_QUICK_READY');
         # client2
         assert_script_run('echo -e "[Interface]\nPrivateKey = `cat /etc/wireguard/client2`\nAddress = 192.168.2.3\n" > /etc/wireguard/wg2.conf');
-        assert_script_run('echo -e "[Peer]\nPublicKey = `cat /etc/wireguard/server.pub`\nEndpoint=' . "$remote:51820\n" . '\nAllowedIPs = 192.168.2.0/24" >> /etc/wireguard/wg2.conf');
+        assert_script_run('echo -e "[Peer]\nPublicKey = `cat /etc/wireguard/server.pub`\nEndpoint=' . "$remote:51820" . '\n\nAllowedIPs = 192.168.2.0/24" >> /etc/wireguard/wg2.conf');
         script_run('cat /etc/wireguard/wg2.conf');
         start_wgquick("wg2");
         script_retry("ping -c10 $vpn_remote", delay => 3, retry => 10);
         assert_script_run('systemctl stop wg-quick@wg2');
         # client1 - the server expects client1 to be online after WG_QUICK_ENABLED
         assert_script_run('echo -e "[Interface]\nPrivateKey = `cat /etc/wireguard/client1`\nAddress = 192.168.2.2\n" > /etc/wireguard/wg1.conf');
-        assert_script_run('echo -e "[Peer]\nPublicKey = `cat /etc/wireguard/server.pub`\nEndpoint=' . "$remote:51820\n" . '\nAllowedIPs = 192.168.2.0/24" >> /etc/wireguard/wg1.conf');
+        assert_script_run('echo -e "[Peer]\nPublicKey = `cat /etc/wireguard/server.pub`\nEndpoint=' . "$remote:51820" . '\n\nAllowedIPs = 192.168.2.0/24" >> /etc/wireguard/wg1.conf');
         script_run('cat /etc/wireguard/wg1.conf');
         start_wgquick("wg1");
         barrier_wait('WG_QUICK_ENABLED');

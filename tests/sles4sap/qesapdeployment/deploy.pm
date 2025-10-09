@@ -4,28 +4,29 @@
 # Summary: Deployment steps for qe-sap-deployment
 # Maintainer: QE-SAP <qe-sap@suse.de>, Michele Pagot <michele.pagot@suse.com>
 
-use strict;
-use warnings;
 use Mojo::Base 'publiccloud::basetest';
 use testapi;
-use qesapdeployment;
+use sles4sap::qesap::qesapdeployment;
+use sles4sap::qesap::azure;
 
 sub run {
     my ($self) = @_;
     my $provider = get_required_var('PUBLIC_CLOUD_PROVIDER');
-    my @ret = qesap_execute_conditional_retry(
+    my %qesap_exec_args_terraform = (
         cmd => 'terraform',
         logname => 'qesap_exec_terraform.log.txt',
         verbose => 1,
-        timeout => 1800,
-        retries => 1,
-        error_string => 'An internal execution error occurred. Please retry later');
+        timeout => 1800);
+    $qesap_exec_args_terraform{cmd_options} = '--parallel ' . get_var('QESAPDEPLOY_TERRAFORM_PARALLEL') if get_var('QESAPDEPLOY_TERRAFORM_PARALLEL');
+
+    my @ret = qesap_execute(%qesap_exec_args_terraform);
+    die "Retry failed, original ansible return: $ret[0]" if ($ret[0]);
 
     my $inventory = qesap_get_inventory(provider => $provider);
     upload_logs($inventory, failok => 1);
 
-    # Set up azure native fencing
-    if (get_var('QESAPDEPLOY_FENCING') eq 'native' && $provider eq 'AZURE') {
+    # Set up azure native fencing for MSI
+    if (get_var('QESAPDEPLOY_FENCING') eq 'native' && $provider eq 'AZURE' && check_var('QESAPDEPLOY_AZURE_FENCE_AGENT_CONFIGURATION', 'msi')) {
         my @nodes = qesap_get_nodes_names(provider => $provider);
         foreach my $host_name (@nodes) {
             if ($host_name =~ /hana/) {
@@ -47,6 +48,7 @@ sub run {
         logname => 'qesap_exec_ansible.log.txt',
         verbose => 1,
         timeout => 3600);
+    record_info('ANSIBLE RESULT', "ret0:$ret[0] ret1:$ret[1]");
     my $find_cmd = join(' ',
         'find',
         '/tmp/results/',
@@ -57,8 +59,8 @@ sub run {
         #enter_cmd("rm $log");
     }
     if ($ret[0]) {
-        # Retry to deploy terraform + ansible
-        if (qesap_terrafom_ansible_deploy_retry(error_log => $ret[1], provider => $provider)) {
+        record_info("Retry to deploy terraform + ansible");
+        if (qesap_terraform_ansible_deploy_retry(error_log => $ret[1], provider => $provider)) {
             die "Retry failed, original ansible return: $ret[0]";
         }
     }

@@ -9,8 +9,6 @@
 # Maintainer: QE-SAP <qe-sap@suse.de>
 
 use base 'consoletest';
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils 'systemctl';
@@ -25,6 +23,17 @@ sub run {
         record_info("Disable cluster", "Cluster is disabled at boot");
         systemctl("disable pacemaker");
     }
+}
+
+sub post_run_hook {
+    # this post_run is almost identical to the parent's post_run function
+    # excluding the 'record_avc_selinux_alerts' call, which causes
+    # needle failures due to unexpected console output
+    my ($self) = @_;
+
+    # start next test in home directory
+    enter_cmd "cd";
+    $self->clear_and_verify_console;
 }
 
 1;

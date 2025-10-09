@@ -27,8 +27,6 @@
 # - Exit firefox
 # Maintainer: wnereiz <wnereiz@gmail.com>
 
-use strict;
-use warnings;
 use base "x11test";
 use testapi;
 use version_utils;
@@ -63,11 +61,21 @@ sub run {
     # Start Firefox
     $self->start_firefox_with_profile;
 
+    # until is 128 version on all versions
+    send_key 'alt-tab';
+    wait_still_screen 1;
+    my $version = script_output q(firefox --version|awk -F "[ .]" '{print $3}');
+    my $key = ($version >= 128) ? 'd' : 'l';
+    send_key 'alt-tab';
+    wait_still_screen 1;
+
     $self->firefox_preferences;
     assert_and_click('firefox-passwd-security');
-    send_key_until_needlematch('firefox-primary-passwd-selected', 'alt-shift-u', 4, 1);
-    send_key 'spc';
-    assert_screen('firefox-passwd-master_setting');
+    send_key_until_needlematch([qw(firefox-primary-passwd-selected firefox-passwd-master_setting)], 'alt-shift-u', 4, 2);
+    if (check_screen('firefox-passwd-master_setting', 3)) {
+        assert_and_click('firefox-passwd-master_setting');
+    }
+    assert_and_click("firefox-enter-new-password");
     # We should use strong password due to bsc#1208951
     type_string $masterpw, 150;
     send_key "tab";
@@ -84,7 +92,7 @@ sub run {
     type_string "squiddy";
     send_key "tab";
     type_string "calamari";
-    send_key "ret";
+    assert_and_click('firefox-passwd-login');
     wait_still_screen(2);
     assert_and_click('firefox-passwd-confirm_remember');
     confirm_master_pw;
@@ -92,13 +100,21 @@ sub run {
 
     $self->firefox_preferences;
     assert_and_click('firefox-passwd-security');
-    send_key_until_needlematch 'firefox-saved-logins-button', 'alt-shift-l', 6, 1;
+    if ($version >= 128) {
+        # jump to logins, alt-shift-d does not rotate between multiple places :(
+        wait_still_screen(3);
+        send_key 'alt-shift-f';
+        send_key 'alt-shift-f';
+        send_key "alt-shift-$key";
+    }
+    send_key_until_needlematch 'firefox-saved-logins-button', "alt-shift-$key", 6, 2;
     wait_still_screen 3;
     send_key 'spc';
     assert_screen('firefox-passwd-saved');
     assert_and_click('firefox-saved-logins-remove');
+    wait_still_screen 1;
     send_key 'spc';
-    send_key_until_needlematch('firefox-passwd-auto_filled', 'ctrl-w', 4, 2);
+    send_key_until_needlematch('firefox-passwd-auto_filled', 'ctrl-tab', 4, 2);
     send_key 'f5';
     assert_screen('firefox-passwd-removed');
 

@@ -6,13 +6,13 @@
 # Tags: poo#48929
 
 use base "opensusebasetest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
 use bootloader_setup qw(add_grub_cmdline_settings replace_grub_cmdline_settings);
 use power_action_utils "power_action";
+use version_utils qw(is_sle);
+use Utils::Architectures qw(is_aarch64);
 
 sub run {
     my ($self) = @_;
@@ -57,15 +57,20 @@ sub run {
 
         # Reboot to make settings work
         power_action('reboot', textmode => 1);
-        $self->wait_boot;
+        my $boot_method = ((is_aarch64 && is_sle('>=16')) ? 'wait_boot_past_bootloader' : 'wait_boot');
+        $self->$boot_method;
         select_serial_terminal;
 
         my $meas_tmpfile = "/tmp/ascii_runtime_measurements-" . @$k{name};
         assert_script_run("cp $meas_file $meas_tmpfile");
         upload_logs "$meas_tmpfile";
-
-        my $out = script_output("grep '@$k{pattern}' $meas_file |wc -l");
-        die('Too few items') if ($out < 600);
+        my $retries = 30;
+        while ($retries--) {
+            sleep 0.1;
+            my $out = script_output("grep '@$k{pattern}' $meas_file |wc -l");
+            last if ($out >= 600);    # 600 is a rough estimate, not a strict requirement
+        }
+        die('Too few items') unless $retries;
     }
 }
 

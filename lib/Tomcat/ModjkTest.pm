@@ -36,7 +36,7 @@ sub func_conn_apache2_tomcat() {
     select_serial_terminal();
     systemctl('stop apache2');
     systemctl('stop tomcat');
-    assert_script_run(
+    script_output(
         "echo  \"\$(cat <<EOF
 JkMount /*       ajp13
 JkMount /*.jsp   ajp13
@@ -61,7 +61,7 @@ sub conn_apache2_tomcat() {
 
     # Define a worker "ajp13" which listens behind the above AJP 1.3 Connector address and port
     assert_script_run('cp /usr/share/doc/packages/apache2-mod_jk/workers.properties /etc/tomcat/workers.properties');
-    assert_script_run(
+    script_output(
         "echo \"\$(cat <<EOF
 worker.list=ajp13
 worker.ajp13.reference=worker.template
@@ -74,18 +74,6 @@ EOF
     # Connection from apache2 to tomcat: apache2 part
     systemctl('stop apache2');
     assert_script_run('cp -ai /usr/share/doc/packages/apache2-mod_jk/jk.conf /etc/apache2/conf.d');
-    if (is_sle('=15') or is_sle('<12-sp4')) {
-        # apache2-mod_jk package includes jk.conf is required to specify valid JkShmFile and Aliases.
-        record_soft_failure 'boo#1167896 included jk.conf broken';
-        assert_script_run(
-            "echo \"\$(cat <<EOF
-JkShmFile /var/log/tomcat/jk-runtime-status
-EOF
-        )\" >> /etc/apache2/conf.d/jk.conf", timeout => 180
-        );
-        assert_script_run("sed -i 's|servlets-examples|examples/servlets|g' /etc/apache2/conf.d/jk.conf");
-        assert_script_run("sed -i 's|jsp-examples|examples/jsp|g' /etc/apache2/conf.d/jk.conf");
-    }
     systemctl('start tomcat');
 }
 

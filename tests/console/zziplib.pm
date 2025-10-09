@@ -17,8 +17,6 @@
 # Maintainer: Marcelo Martins <mmartins@suse.cz>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -30,7 +28,7 @@ sub run {
     select_serial_terminal;
 
     # development module needed for dependencies, released products are tested with sdk module
-    if (!main_common::is_updates_tests()) {
+    if (is_sle('<16') && !main_common::is_updates_tests()) {
         cleanup_registration;
         register_product;
         add_suseconnect_product('sle-module-desktop-applications');
@@ -64,7 +62,7 @@ sub run {
     #Clean files used:
     assert_script_run "cd ; rm -rf /tmp/zip ; rm /tmp/$filezip";
     # unregister SDK
-    if (!main_common::is_updates_tests()) {
+    if (is_sle('<16') && !main_common::is_updates_tests()) {
         remove_suseconnect_product(get_addon_fullname('sdk'));
     }
 }

@@ -30,13 +30,12 @@
 
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils 'zypper_call';
 use apachetest qw(setup_apache2 setup_pgsqldb test_pgsql destroy_pgsqldb postgresql_cleanup);
 use Utils::Systemd 'systemctl';
+use Utils::Architectures 'is_aarch64';
 use version_utils qw(is_leap is_sle php_version);
 
 sub run {
@@ -56,9 +55,18 @@ sub run {
     # setup database
     setup_pgsqldb;
 
+    # For aarch64, sometimes serial terminal will stuck which causes failure.
+    # So use root-console for aarch64. See poo#178639
+    select_console 'root-console' if (is_aarch64);
+
+    if (is_sle('=16.0')) {
+        assert_script_run("setsebool -P httpd_can_network_connect_db 1");
+    }
+
     # test itself
     test_pgsql;
 
+    select_serial_terminal if (is_aarch64);
     # destroy database
     destroy_pgsqldb;
 

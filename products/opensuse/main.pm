@@ -15,7 +15,7 @@ use File::Basename;
 use DistributionProvider;
 use scheduler 'load_yaml_schedule';
 use main_containers;
-
+use main_security;
 BEGIN {
     unshift @INC, dirname(__FILE__) . '/../../lib';
 }
@@ -24,6 +24,7 @@ use version_utils qw(is_jeos is_gnome_next is_krypton_argon is_leap is_tumblewee
 use main_common;
 use main_ltp_loader 'load_kernel_tests';
 use known_bugs;
+use Utils::Architectures qw(is_aarch64);
 use YuiRestClient;
 
 init_main();
@@ -59,6 +60,9 @@ $testapi::distri->set_expected_serial_failures(create_list_of_serial_failures())
 $testapi::distri->set_expected_autoinst_failures(create_list_of_autoinst_failures());
 
 set_var('DESKTOP', check_var('VIDEOMODE', 'text') ? 'textmode' : 'kde') unless get_var('DESKTOP');
+# See https://github.com/agama-project/agama/issues/2143
+# Autologin is not possible in agama as of now
+set_var("NOAUTOLOGIN", 1) if (is_leap("16.0+") && !get_var("ZDUP", 0));
 
 if (check_var('DESKTOP', 'minimalx')) {
     set_var("NOAUTOLOGIN", 1);
@@ -313,7 +317,7 @@ elsif (get_var('CPU_BUGS')) {
 }
 elsif (get_var('SECURITY_TEST')) {
     prepare_target();
-    load_security_tests;
+    load_security_tests();
 }
 elsif (get_var('XFSTESTS')) {
     prepare_target();
@@ -339,7 +343,12 @@ else {
         }
         load_boot_tests();
         loadtest "installation/finish_desktop";
-        loadtest "installation/opensuse_welcome" if opensuse_welcome_applicable;
+        # Not available on the TW aarch64 kde live (poo#157174).
+        # Can't be part of opensuse_welcome_applicable because it's present after
+        # live installation.
+        unless (check_var('FLAVOR', 'KDE-Live') && is_tumbleweed && is_aarch64) {
+            loadtest "installation/opensuse_welcome" if opensuse_welcome_applicable;
+        }
         if (get_var('LIVE_INSTALLATION') || get_var('LIVE_UPGRADE')) {
             loadtest "installation/live_installation";
             load_inst_tests();
@@ -405,6 +414,7 @@ else {
         || is_systemd_test())
     {
         loadtest "console/system_prepare";
+        loadtest "x11/disable_screensaver" if (check_var('FLAVOR', 'NET') && check_var('UPGRADE', '1') && check_var('ORIGINAL_VERSION', '15.0'));
         load_system_update_tests();
         load_rescuecd_tests();
         if (consolestep_is_applicable) {

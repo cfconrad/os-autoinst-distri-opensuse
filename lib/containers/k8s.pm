@@ -17,7 +17,7 @@ use testapi;
 use utils qw(zypper_call script_retry file_content_replace validate_script_output_retry random_string);
 use Utils::Systemd qw(systemctl);
 use containers::utils 'registry_url';
-use version_utils qw(is_sle is_microos is_public_cloud is_transactional is_sle_micro is_leap is_leap_micro);
+use version_utils qw(is_sle is_microos is_public_cloud is_transactional is_sle_micro is_leap is_leap_micro is_tumbleweed);
 use registration qw(add_suseconnect_product get_addon_fullname);
 use transactional qw(trup_call check_reboot_changes);
 
@@ -28,25 +28,31 @@ sub check_k3s {
     record_info('kubectl version', script_output('k3s kubectl version'));
     assert_script_run('uname -a');
     assert_script_run('test -e /etc/rancher/k3s/k3s.yaml');
-    assert_script_run('k3s check-config');
+    if (script_run('k3s check-config | tee /tmp/k3s-config.txt') != 0) {
+        if (script_run('test $(grep -cE "CONFIG_CGROUP_(CPUACCT|DEVICE|FREEZER).*missing \(fail\)" /tmp/k3s-config.txt) -eq 3') == 0) {
+            record_soft_failure("gh#k3s-io/k3s#11676", "k3s check-config fails on pure cgroups v2 systems without legacy controllers");
+        } else {
+            upload_logs('/tmp/k3s-config.txt');
+            die "k3s check-config failed";
+        }
+    }
     validate_script_output('k3s kubectl config get-clusters', qr/default/);
     validate_script_output('k3s kubectl config get-users', qr/default/);
     validate_script_output('k3s kubectl config get-contexts --no-headers=true -o name', qr/default/);
     assert_script_run('k3s kubectl config view --raw');
     validate_script_output_retry("k3s kubectl get nodes", qr/ Ready.*control-plane,master /, retry => 6, delay => 15, timeout => 90);
     validate_script_output_retry("k3s kubectl get namespaces", qr/default.*Active/, timeout => 120, delay => 60, retry => 3);
-    validate_script_output_retry('k3s kubectl get events -A', qr/Started container local-path-provisioner/, retry => 6, delay => 30, timeout => 90);
 
     # the default service account should be ready by now
-    assert_script_run("k3s kubectl get serviceaccount default -o name");
+    script_retry("k3s kubectl get serviceaccount default -o name", retry => 10, delay => 60, timeout => 300);
     # expect that k3s api to be ready and is accessible
     record_info("k3s api resources", script_output("k3s kubectl api-resources"));
-    assert_script_run("k3s kubectl auth can-i 'create' 'pods'");
-    assert_script_run("k3s kubectl auth can-i 'create' 'deployments'");
+    assert_script_run("k3s kubectl auth can-i 'create' 'pods'", timeout => 300);
+    assert_script_run("k3s kubectl auth can-i 'create' 'deployments'", timeout => 300);
 }
 
 sub ensure_k3s_start {
-    systemctl('start k3s');
+    systemctl('start k3s', timeout => 180);
     systemctl('is-active k3s');
 }
 
@@ -93,7 +99,7 @@ sub install_k3s {
     # github.com/k3s-io/k3s#5946 - The kubectl delete namespace helm-ns-413 command freezes and does nothing
     my $disables = '--disable=metrics-server';
     $disables .= ' --disable-helm-controller' unless (get_var('K3S_ENABLE_HELM_CONTROLLER'));
-    $disables .= ' --disable=traefik';
+    $disables .= ' --disable=traefik' unless get_var('K3S_ENABLE_TRAEFIK');
     $disables .= ' --disable=coredns' unless get_var('K3S_ENABLE_COREDNS');
 
     while (my ($key, $value) = each %k3s_args) {
@@ -104,10 +110,15 @@ sub install_k3s {
     }
 
     if (get_var('K3S_INSTALL_UPSTREAM') || (is_sle || is_leap || is_sle_micro || is_leap_micro)) {
-        script_retry("curl -sfL https://get.k3s.io  -o install_k3s.sh", timeout => 180, delay => 60, retry => 3);
+        if (is_tumbleweed && !is_microos) {
+            zypper_call('in k3s-selinux');
+            record_soft_failure("gh#k3s-io/k3s#10876 - Support selinux on Tumbleweed");
+        }
+        my $curl_opts = "-sfL --retry 3 --retry-delay 60 --retry-max-time 180";
+        assert_script_run("curl $curl_opts https://get.k3s.io -o install_k3s.sh");
         assert_script_run("sh install_k3s.sh $disables", timeout => 300);
         script_run("rm -f install_k3s.sh");
-        zypper_call('in apparmor-parser') if is_sle('<15-SP4');
+        zypper_call('in apparmor-parser') if is_sle('<15-SP4', get_var('HOST_VERSION', get_required_var('VERSION')));
         setup_and_check_k3s;
         return;
     }
@@ -145,27 +156,33 @@ Installs kubectl from the respositories
 =cut
 
 sub install_kubectl {
-    if (script_run("which kubectl") == 0) {
-        record_info('kubectl preinstalled', script_output('kubectl version --client'));
-        return;
-    }
+    return if (script_run("which kubectl") == 0);
 
     # kubectl is in the container module
-    add_suseconnect_product(get_addon_fullname('contm')) if (is_sle);
-    my $k8s_pkg = get_var('K8S_CLIENT', 'kubernetes-client-provider');
-    if (!get_var('K8S_CLIENT') && (is_sle || is_sle_micro)) {
-        die '"K8S_CLIENT" was not set in test suite definition';
-    }
+    add_suseconnect_product(get_addon_fullname('contm')) if (is_sle("<16"));
+    my $k8s_version = shift;
+    my $k8s_pkg = defined($k8s_version) ? "kubernetes$k8s_version-client" : get_var('K8S_CLIENT', 'kubernetes-client-provider');
     zypper_call("in -C $k8s_pkg");
     record_info('kubectl version', script_output('kubectl version --client'));
 }
 
 =head2 install_helm
-Installs helm from our repositories
+Installs helm from our upstream or repositories
 =cut
 
 sub install_helm {
-    zypper_call("in helm");
+    return if (script_run("which helm") == 0);
+
+    if (get_var('HELM_INSTALL_UPSTREAM')) {
+        assert_script_run("curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3");
+        assert_script_run("chmod 700 get_helm.sh");
+        assert_script_run("./get_helm.sh");
+    } elsif (is_transactional) {
+        trup_call("pkg install helm");
+        check_reboot_changes;
+    } else {
+        zypper_call("in helm");
+    }
     record_info('helm', script_output("helm version"));
 }
 

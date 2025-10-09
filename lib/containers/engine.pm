@@ -1,20 +1,20 @@
 # SUSE's openQA tests
 #
-# Copyright 2020-2024 SUSE LLC
+# Copyright 2020-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Abstraction layer to operate docker and podman containers through same interfaces
 # Maintainer: qac team <qa-c@suse.de>
 
 package containers::engine;
+use strict;
+use warnings;
 use Mojo::Base -base;
 use testapi;
 use Carp 'croak';
 use Test::Assert 'assert_equals';
 use utils qw(systemctl file_content_replace script_retry);
 use version_utils qw(package_version_cmp);
-use containers::utils qw(get_podman_version);
-use Mojo::JSON qw(decode_json);
 use overload
   '""' => sub { return shift->runtime },
   bool => sub { return 1 },
@@ -180,69 +180,6 @@ sub pull {
     return $self->_engine_script_retry("pull $image_name", timeout => $args{timeout} // 300, retry => 3, delay => 30, die => $die);
 }
 
-=head2 enum_images
-
-Return an array ref of the images
-
-=cut
-
-sub enum_images {
-    my ($self) = shift;
-    my $images_s = $self->_engine_script_output("images -q");
-    record_info "Images", $images_s;
-    my @images = split /[\n\t]/, $images_s;
-    return \@images;
-}
-
-=head2 enum_images
-
-Return an array ref of the containers
-
-=cut
-
-sub enum_containers {
-    my ($self) = shift;
-    my $containers_s = $self->_engine_script_output("container ls -q");
-    record_info "Containers", $containers_s;
-    my @containers = split /[\n\t]/, $containers_s;
-    return \@containers;
-}
-
-=head2 info
-
-Assert a C<property> against given expected C<value> if C<value> is given.
-Otherwise it prints the output of info.
-
-=cut
-
-sub info {
-    my ($self, %args) = @_;
-    my $stdout;
-
-    if (exists $args{json} && $args{json}) {
-        my $raw = $self->_engine_script_output("info -f '{{json .}}' 2> ./error", proceed_on_failure => 1);
-        # issue related to podman v2.0 (sle15sp2, s390x) -> bsc#1200623
-        # extract only the json part as there might be other error messages from info output
-        # e.g. 2023-09-11T08:01:40.788854+02:00 susetest systemd[31629]: Failed to start podman-31709.scope
-        if ($raw =~ m/(?s)(\{(?:[^{}"]++|"(?:\\.|[^"])*+"|(?1))*\})/gm) {
-            $raw = $1;
-        }
-        $stdout = decode_json($raw);
-    } else {
-        $stdout = $self->_engine_script_output("info 2> ./error", proceed_on_failure => 1);
-    }
-
-    if (script_run('test -s ./error') == 0) {
-        my $error = script_output('cat ./error');
-
-        if ($error !~ /$args{expected_error}/) {
-            die "Error found executing info";
-        }
-    }
-
-    return $stdout;
-}
-
 =head2 get_container_logs($container, $filename)
 
 Request container's logs.
@@ -274,17 +211,6 @@ sub remove_container {
     }
 }
 
-=head2 check_image_in_host
-
-Returns true if host contains C<img> or false.
-
-=cut
-
-sub check_image_in_host {
-    my ($self, $img) = @_;
-    grep { $img eq $_ } @{$self->enum_images()};
-}
-
 =head2 configure_insecure_registries
 
 Updates the registry files for the running container runtime to allow access to
@@ -306,28 +232,18 @@ Asserts that everything was cleaned up unless c<assert> is set to 0.
 =cut
 
 sub cleanup_system_host {
-    my ($self, $assert) = @_;
-    $assert //= 1;
+    my ($self) = @_;
     $self->_engine_assert_script_run("ps -q | xargs -r " . $self->runtime . " stop", 180);
 
     # all containers should be stopped before running prune
     # https://github.com/containers/podman/issues/19038
     if ($self->runtime eq 'podman') {
-        if (package_version_cmp(get_podman_version(), '4.0.0') < 0) {
-            $self->_engine_script_run("pod rm --force --all", 120);
-        }
-        $self->_engine_assert_script_run("rm --force --all", 120);
-        # podman system prune -f --external was added to podman 4.0.0
-        # and it allows to prune external containers created by buildah
-        $self->_engine_script_run("system prune -f --external", 300);
+        # retry because on older hosts there can be remnants that take some time before they are cleaned
+        $self->_engine_script_retry("rm --force --all", timeout => 120, retry => 3, delay => 60);
+        $self->_engine_script_run("system prune -f --external", timeout => 300);
     }
-    $self->_engine_assert_script_run("volume prune -f", 300);
-    $self->_engine_assert_script_run("system prune -a -f", 300);
-
-    if ($assert) {
-        assert_equals(0, scalar @{$self->enum_containers()}, "containers have not been removed");
-        assert_equals(0, scalar @{$self->enum_images()}, "images have not been removed");
-    }
+    $self->_engine_script_run("volume prune -f", timeout => 300);
+    $self->_engine_script_run("system prune -a -f", timeout => 300);
 }
 
 1;

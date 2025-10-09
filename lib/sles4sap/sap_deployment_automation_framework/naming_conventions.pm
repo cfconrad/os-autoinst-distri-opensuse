@@ -13,8 +13,8 @@ use warnings;
 use testapi;
 use Exporter qw(import);
 use Carp qw(croak);
-use sles4sap::sap_deployment_automation_framework::deployment_connector qw(find_deployment_id);
 use mmapi qw(get_current_job_id);
+use sles4sap::sap_deployment_automation_framework::deployment_connector qw(find_deployment_id);
 
 =head1 SYNOPSIS
 
@@ -24,7 +24,12 @@ Please try not to add here complex functions that do much beyond returning a str
 
 =cut
 
+our $deployer_private_key_path = '~/.ssh/id_rsa';
+our $sut_private_key_path = '~/.ssh/sut_id_rsa';
+
 our @EXPORT = qw(
+  $deployer_private_key_path
+  $sut_private_key_path
   homedir
   deployment_dir
   log_dir
@@ -36,6 +41,10 @@ our @EXPORT = qw(
   convert_region_to_long
   convert_region_to_short
   generate_deployer_name
+  get_workload_vnet_code
+  get_sdaf_inventory_path
+  get_sut_sshkey_path
+  get_sizing_filename
 );
 
 =head2 %sdaf_region_matrix
@@ -73,13 +82,16 @@ my %sdaf_region_matrix = (
 
     convert_region_to_long($sdaf_region_code);
 
-B<$sdaf_region_code>: Region name abbreviation containing 4 uppercase alphanumeric characters
-
 Performs region name conversion from 4 letter SDAF abbreviation to full region name.
 You can find definitions in the function B<get_region_code> located in sdaf shell script:
 
 L<https://github.com/Azure/sap-automation/blob/3c5d0d882f5892ae2159e262062e29c2b3fe59d9/deploy/scripts/deploy_utils.sh#L403>
 
+=over
+
+=item * B<$sdaf_region_code>: Region name abbreviation containing 4 uppercase alphanumeric characters
+
+=back
 =cut
 
 sub convert_region_to_long {
@@ -94,19 +106,22 @@ sub convert_region_to_long {
 
     convert_region_to_short($region);
 
-B<$region>: Full region name. Can contain only lowercase alphanumeric characters.
-
 Performs region name conversion from full region name to 4 letter SDAF abbreviation.
 You can find definitions in the function B<get_region_code> located in sdaf shell script:
 
 L<https://github.com/Azure/sap-automation/blob/3c5d0d882f5892ae2159e262062e29c2b3fe59d9/deploy/scripts/deploy_utils.sh#L403>
 
+=over
+
+=item * B<$region>: Full region name. Can contain only lowercase alphanumeric characters.
+
+=back
 =cut
 
 sub convert_region_to_short {
     my ($region) = @_;
     croak 'Missing mandatory argument "$region"' unless $region;
-    croak "Abbreviation must use lowercase alphanumeric characters. Got: '$region'" unless $region =~ /^[a-z0-9]+$/;
+    croak "Region name must use lowercase alphanumeric characters. Got: '$region'" unless $region =~ /^[a-z0-9]+$/;
 
     my @found_results = grep { $_ if $sdaf_region_matrix{$_} eq $region } keys(%sdaf_region_matrix);
 
@@ -133,11 +148,14 @@ sub homedir {
 
     deployment_dir([create=>1]);
 
-B<create>: Create directory if it does not exist.
-
 Returns deployment directory path with job ID appended as unique identifier.
 Optionally it can create directory if it does not exists.
 
+=over
+
+=item * B<create>: Create directory if it does not exist.
+
+=back
 =cut
 
 sub deployment_dir {
@@ -152,11 +170,14 @@ sub deployment_dir {
 
     log_dir([create=>1]);
 
-B<create>: Create directory if it does not exist.
-
 Returns logging directory path with job ID appended as unique identifier.
 Optionally creates the directory.
 
+=over
+
+=item * B<create>: Create directory if it does not exist.
+
+=back
 =cut
 
 sub log_dir {
@@ -204,18 +225,21 @@ sub env_variable_file {
 Returns path to config root directory for deployment type specified.
 Root config directory is deployment type specific and usually contains tfvar file, inventory file, SUT ssh keys, etc...
 
-B<deployment_type>: Type of the deployment (workload_zone, sap_system, library... etc)
+=over
 
-B<env_code>:  SDAF parameter for environment code (for our purpose we can use 'LAB')
+=item * B<deployment_type>: Type of the deployment (workload_zone, sap_system, library... etc)
 
-B<sdaf_region_code>: SDAF parameter to choose PC region. Note SDAF is using internal abbreviations (SECE = swedencentral)
+=item * B<env_code>:  SDAF parameter for environment code (for our purpose we can use 'LAB')
 
-B<vnet_code>: SDAF parameter for virtual network code. Library and deployer use different vnet than SUT env
+=item * B<sdaf_region_code>: SDAF parameter to choose PC region. Note SDAF is using internal abbreviations (SECE = swedencentral)
 
-B<sap_sid>: SDAF parameter for sap system ID
+=item * B<vnet_code>: SDAF parameter for virtual network code. Library and deployer use different vnet than SUT env
 
-B<job_id>: Specify job id instead of using current one. Default: current job id
+=item * B<sap_sid>: SDAF parameter for sap system ID
 
+=item * B<job_id>: Specify job id instead of using current one. Default: current job id
+
+=back
 =cut
 
 sub get_sdaf_config_path {
@@ -253,16 +277,19 @@ sub get_sdaf_config_path {
 
 Returns full tfvars filepath respective to deployment type.
 
-B<deployment_type>: Type of the deployment (workload_zone, sap_system, library... etc)
+=over
 
-B<env_code>:  SDAF parameter for environment code (for our purpose we can use 'LAB')
+=item * B<deployment_type>: Type of the deployment (workload_zone, sap_system, library... etc)
 
-B<sdaf_region_code>: SDAF parameter to choose PC region. Note SDAF is using internal abbreviations (SECE = swedencentral)
+=item * B<env_code>:  SDAF parameter for environment code (for our purpose we can use 'LAB')
 
-B<vnet_code>: SDAF parameter for virtual network code. Library and deployer use different vnet than SUT env
+=item * B<sdaf_region_code>: SDAF parameter to choose PC region. Note SDAF is using internal abbreviations (SECE = swedencentral)
 
-B<sap_sid>: SDAF parameter for sap system ID. Required only for 'sap_system' deployment type
+=item * B<vnet_code>: SDAF parameter for virtual network code. Library and deployer use different vnet than SUT env
 
+=item * B<sap_sid>: SDAF parameter for sap system ID. Required only for 'sap_system' deployment type
+
+=back
 =cut
 
 sub get_tfvars_path {
@@ -288,11 +315,14 @@ sub get_tfvars_path {
 
     generate_resource_group_name(deployment_type=>$deployment_type);
 
-B<$deployment_type>: Type of the deployment (workload_zone, sap_system, library... etc)
-
 Returns name of the resource group for the deployment type specified by B<$deployment_type> .
 Resource group pattern: I<SDAF-OpenQA-[deployment type]-[deployment id]-[OpenQA job id]>
 
+=over
+
+=item * B<$deployment_type>: Type of the deployment (workload_zone, sap_system, library... etc)
+
+=back
 =cut
 
 sub generate_resource_group_name {
@@ -307,14 +337,106 @@ sub generate_resource_group_name {
 
 =head2 generate_deployer_name
 
-    generate_deployer_name();
+    generate_deployer_name([job_id=>$job_id]);
 
 Generates resource name for deployer VM in format B<test_id-OpenQA_Deployer_VM>.
 
+=over 1
+
+=item * B<$job_id>: Specify job id to be used. Default: current job ID
+
+=back
 =cut
 
 sub generate_deployer_name {
     my (%args) = @_;
     $args{job_id} //= get_current_job_id();
     return "$args{job_id}-OpenQA_Deployer_VM";
+}
+
+=head2 get_workload_vnet_code
+
+    get_workload_vnet_code([job_id=>$job_id]);
+
+Returns VNET code used for workload zone and sap systems resources. VNET code must be unique for each landscape,
+therefore it contains test ID as an identifier.
+
+=over
+
+=item * B<$job_id>: Specify job id to be used. Default: current job ID
+
+=back
+=cut
+
+sub get_workload_vnet_code {
+    my (%args) = @_;
+    $args{job_id} //= find_deployment_id();
+    die('no deployment ID found') unless $args{job_id};
+    # Try to keep vnet code as short as possible. Later this is used in the name for the peering in a format:
+    # deployer-vnet_to_workload-vnet
+    # if it is too long you might hit name length limit and test ID gets clipped.
+    return ($args{job_id});
+}
+
+=head2 get_sdaf_inventory_path
+
+    get_sdaf_inventory_path(config_root_path=>'/config/path', sap_sid=>'QAS');
+
+Returns full Ansible inventory filepath respective to deployment type.
+B<config_root_path> can be obtained from function B<get_sdaf_config_path>.
+
+=over
+
+=item * B<config_root_path>: SDAF config root path
+
+=item * B<sap_sid>: SDAF parameter for sap system ID.
+
+=back
+=cut
+
+sub get_sdaf_inventory_path {
+    my (%args) = @_;
+    for my $argument (qw(sap_sid config_root_path)) {
+        croak "Missing mandatory argument '$argument'" unless $args{$argument};
+    }
+
+    # file name is hard coded in SDAF
+    return "$args{config_root_path}/$args{sap_sid}_hosts.yaml";
+}
+
+=head2 get_sut_sshkey_path
+
+    get_sut_sshkey_path(config_root_path=>'/config/path');
+
+Returns full SUT private sshkey filepath located on deployer VM after deployment.
+B<config_root_path> can be obtained from function B<get_sdaf_config_path>.
+
+=over
+
+=item * B<config_root_path>: SDAF config root path
+
+=back
+=cut
+
+sub get_sut_sshkey_path {
+    my (%args) = @_;
+    croak 'Missing mandatory argument $args{config_root_path}' unless $args{config_root_path};
+
+    # file name is hard coded in SDAF
+    return "$args{config_root_path}/sshkey";
+}
+
+=head2 get_sizing_filename
+
+    get_sizing_filename();
+
+Returns custom sizing file name located in B<data/sles4sap/sap_deployment_automation_framework> according to deployment
+type specified in OpenQA setting B<SDAF_DEPLOYMENT_SCENARIO>.
+
+=cut
+
+sub get_sizing_filename {
+    get_var('SDAF_DEPLOYMENT_SCENARIO') =~ 'ensa' ?
+      return 'custom_sizes_S4HANA.json' :    # Customized for S4Hana deployment - required for ENSA2
+      return 'custom_sizes_default.json';    # Minimal Hana sizing - good for sindgle DB, HanaSR or standard NW 7.5 setup
 }

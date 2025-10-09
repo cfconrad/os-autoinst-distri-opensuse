@@ -7,9 +7,7 @@
 #          mr_test repo: https://gitlab.suse.de/qa/mr_test
 # Maintainer: QE-SAP <qe-sap@suse.de>, Ricardo Branco <rbranco@suse.de>, llzhao <llzhao@suse.com>
 
-use strict;
-use warnings;
-use base "sles4sap";
+use base 'sles4sap';
 use autotest;
 use testapi;
 use serial_terminal 'select_serial_terminal';
@@ -50,9 +48,11 @@ sub setup {
     quit_packagekit;
     # Install saptune
     zypper_call "in saptune";
-    zypper_call "in sapconf";
-    if (systemctl("-q is-active sapconf.service", ignore_failure => 1)) {
-        record_soft_failure("bsc#1190787 - sapconf is not started");
+    unless (is_sle('16+')) {
+        zypper_call "in sapconf";
+        if (systemctl("-q is-active sapconf.service", ignore_failure => 1)) {
+            record_soft_failure("bsc#1190787 - sapconf is not started");
+        }
     }
     # Install mr_test dependencies
     # 'zypper_call "-n in python3-rpm"' returns error message:
@@ -71,16 +71,20 @@ sub setup {
     }
 
     # Remove any configuration set by sapconf
-    assert_script_run "sed -i.bak '/^@/,\$d' /etc/security/limits.conf";
-    script_run "mv /etc/systemd/logind.conf.d/sap.conf{,.bak}" unless check_var('DESKTOP', 'textmode');
-    systemctl '--now disable sapconf';
+    unless (is_sle('16+')) {
+        assert_script_run "sed -i.bak '/^@/,\$d' /etc/security/limits.conf";
+        script_run "mv /etc/systemd/logind.conf.d/sap.conf{,.bak}" unless check_var('DESKTOP', 'textmode');
+        systemctl '--now disable sapconf';
+    }
     assert_script_run 'saptune service enablestart';
     if (is_qemu) {
         # Ignore disk_elevator on VM's
         assert_script_run "sed -ri '/:scripts\\/disk_elevator/s/^/#/' \$(grep -F -rl :scripts/disk_elevator Pattern/)";
         # Skip nr_requests on VM's. Fix bsc#1177888
+        assert_script_run 'sed -i "/:scripts\/nr_requests/s/^/#/" Pattern/SLE16/testpattern_*';
         assert_script_run 'sed -i "/:scripts\/nr_requests/s/^/#/" Pattern/SLE15/testpattern_*';
         # Skip tcp_keepalive on public cloud
+        assert_script_run 'sed -i "/:\/proc\/sys\/net\/ipv4\/tcp_keepalive/s/^/#/" Pattern/SLE16/testpattern_*';
         assert_script_run 'sed -i "/:\/proc\/sys\/net\/ipv4\/tcp_keepalive/s/^/#/" Pattern/SLE15/testpattern_*';
         assert_script_run 'sed -i "/:\/proc\/sys\/net\/ipv4\/tcp_keepalive/s/^/#/" Pattern/SLE12/testpattern_*';
     }
@@ -99,13 +103,11 @@ sub run {
     my ($self, $run_args) = @_;
 
     # This test module is using sles4sap and not sles4sap_publiccloud_basetest
-    # as base class. network_peering_present and ansible_present are propagated here
+    # as base class. ansible_present is propagated here
     # to a different context than usual
-    $self->{network_peering_present} = 1 if ($run_args->{network_peering_present});
     $self->{ansible_present} = 1 if ($run_args->{ansible_present});
     record_info('MR_TEST CONTEXT', join(' ',
             'cleanup_called:', $self->{cleanup_called} // 'undefined',
-            'network_peering_present:', $self->{network_peering_present} // 'undefined',
             'ansible_present:', $self->{ansible_present} // 'undefined')
     );
 
@@ -123,13 +125,8 @@ sub post_fail_hook {
     if (get_var('PUBLIC_CLOUD_SLES4SAP')) {
         select_host_console(force => 1);
         my $run_args = OpenQA::Test::RunArgs->new();
-        record_info('CONTEXT LOG', join(' ', 'network_peering_present:', $self->{network_peering_present} // 'undefined'));
-        if ($self->{network_peering_present}) {
-            delete_network_peering();
-            $run_args->{network_peering_present} = $self->{network_peering_present} = 0;
-        }
         $run_args->{my_provider} = $self->{provider};
-        $run_args->{my_provider}->cleanup($run_args);
+        $run_args->{my_provider}->finalize($run_args);
         return;
     }
     $self->SUPER::post_fail_hook;

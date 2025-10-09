@@ -9,11 +9,9 @@
 # Maintainer: QA-C team <qa-c@suse.de>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use transactional qw(process_reboot);
-use version_utils qw(is_leap_micro is_microos is_sle_micro is_public_cloud);
+use version_utils qw(has_selinux_by_default is_leap_micro is_microos is_sle_micro is_public_cloud);
 use Utils::Systemd qw(systemctl);
 use Utils::Logging 'save_and_upload_log';
 use transactional qw(trup_call check_reboot_changes process_reboot);
@@ -57,12 +55,8 @@ sub run {
 
     # install and enable SELinux if not done by default
     if (!is_enforcing) {
-        if (is_sle_micro('5.4+') || is_leap_micro('5.4+') || is_microos) {
-            if (is_sle_micro('=5.4')) {
-                record_soft_failure("bsc#1211917 - SELinux not in enforcing mode on SLEM 5.4");
-            } else {
-                die("SELinux should be enabled by default on " . get_required_var("DISTRI") . " " . get_required_var("VERSION"));
-            }
+        if (has_selinux_by_default) {
+            die("SELinux should be enabled by default on " . get_required_var("DISTRI") . " " . get_required_var("VERSION"));
         }
 
         trup_call('setup-selinux');

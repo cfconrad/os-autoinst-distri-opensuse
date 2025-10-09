@@ -4,12 +4,10 @@
 # Summary: Destroy SAP Landscape created with qe-sap-deployment
 # Maintainer: QE-SAP <qe-sap@suse.de>, Michele Pagot <michele.pagot@suse.com>
 
-use strict;
-use warnings;
 use Mojo::Base 'publiccloud::basetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
-use qesapdeployment 'qesap_upload_logs';
+use sles4sap::qesap::qesapdeployment 'qesap_upload_logs';
 use trento;
 
 sub run {

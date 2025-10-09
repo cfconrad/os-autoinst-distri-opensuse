@@ -23,15 +23,86 @@ use Net::IP qw(:PROC);
 use File::Basename;
 use LWP::Simple 'head';
 use Utils::Architectures;
+use Utils::Backends;
 use IO::Socket::INET;
+use mm_network;
 use Carp;
 
-our @EXPORT = qw(is_vmware_virtualization is_hyperv_virtualization is_fv_guest is_pv_guest guest_is_sle is_guest_ballooned is_xen_host is_kvm_host reset_log_cursor check_failures_in_journal check_host_health check_guest_health
-  is_monolithic_libvirtd turn_on_libvirt_debugging_log
-  print_cmd_output_to_file ssh_setup ssh_copy_id create_guest import_guest install_default_packages ensure_default_net_is_active ensure_guest_started
-  ensure_online add_guest_to_hosts restart_libvirtd check_libvirtd remove_additional_disks remove_additional_nic collect_virt_system_logs shutdown_guests wait_guest_online start_guests restore_downloaded_guests save_original_guest_xmls restore_original_guests save_guests_xml_for_change restore_xml_changed_guests
-  is_guest_online wait_guests_shutdown remove_vm setup_common_ssh_config add_alias_in_ssh_config parse_subnet_address_ipv4 backup_file manage_system_service setup_rsyslog_host
-  check_port_state is_registered_system do_system_registration check_system_registration subscribe_extensions_and_modules download_script download_script_and_execute is_sev_es_guest upload_virt_logs recreate_guests download_vm_import_disks enable_nm_debug check_activate_network_interface upload_nm_debug_log restart_modular_libvirt_daemons check_modular_libvirt_daemons get_guest_regcode);
+our @EXPORT = qw(
+  is_vmware_virtualization
+  is_hyperv_virtualization
+  is_fv_guest
+  is_pv_guest
+  is_sev_es_guest
+  guest_is_sle
+  is_guest_ballooned
+  is_xen_host
+  is_kvm_host
+  is_sles_mu_virt_test
+  is_monolithic_libvirtd
+  turn_on_libvirt_debugging_log
+  restart_libvirtd
+  check_libvirtd
+  restart_modular_libvirt_daemons
+  check_modular_libvirt_daemons
+  reset_log_cursor
+  check_failures_in_journal
+  check_host_health
+  check_guest_health
+  print_cmd_output_to_file
+  collect_virt_system_logs
+  setup_rsyslog_host
+  download_script
+  download_script_and_execute
+  upload_virt_logs
+  enable_nm_debug
+  upload_nm_debug_log
+  ssh_setup
+  setup_common_ssh_config
+  add_alias_in_ssh_config
+  install_default_packages
+  parse_subnet_address_ipv4
+  backup_file
+  manage_system_service
+  check_port_state
+  is_registered_sles
+  is_registered_system
+  do_system_registration
+  check_system_registration
+  subscribe_extensions_and_modules
+  check_activate_network_interface
+  wait_for_host_reboot
+  create_guest
+  import_guest
+  ssh_copy_id
+  add_guest_to_hosts
+  ensure_default_net_is_active
+  remove_additional_disks
+  remove_additional_nic
+  start_guests
+  is_guest_online
+  ensure_online
+  wait_guest_online
+  restore_downloaded_guests
+  save_original_guest_xmls
+  restore_original_guests
+  save_guests_xml_for_change
+  restore_xml_changed_guests
+  shutdown_guests
+  wait_guests_shutdown
+  remove_vm
+  recreate_guests
+  download_vm_import_disks
+  get_guest_regcode
+  execute_over_ssh
+  reboot_virtual_machine
+  reconnect_console_if_not_good
+  get_guest_settings
+  reselect_openqa_console
+  select_backend_console
+  double_check_xen_role
+  check_kvm_modules
+);
 
 my %log_cursors;
 
@@ -54,7 +125,7 @@ sub check_modular_libvirt_daemons {
     my @daemons = @_;
 
     if (!@daemons) {
-        @daemons = qw(network nodedev nwfilter secret storage lock);
+        @daemons = qw(network nodedev secret storage lock);
         # For details, please refer to poo#137096
         (is_xen_host) ? push @daemons, 'xen' : push @daemons, ('qemu', 'log');
     }
@@ -79,7 +150,7 @@ sub restart_modular_libvirt_daemons {
     my @daemons = @_;
 
     if (!@daemons) {
-        @daemons = qw(network nodedev nwfilter secret storage lock);
+        @daemons = qw(network nodedev secret storage lock);
         # For details, please refer to poo#137096
         (is_xen_host) ? push @daemons, 'xen' : push @daemons, ('qemu', 'log');
     }
@@ -119,6 +190,11 @@ sub is_hyperv_virtualization {
     return get_var("REGRESSION", '') =~ /hyperv/;
 }
 
+# Return 1 if it is SLES MU virt test, otherwise return 0
+sub is_sles_mu_virt_test {
+    return is_sle && get_var('REGRESSION', '') =~ /xen|kvm|qemu|hyperv|vmware/ && !get_var("VIRT_AUTOTEST");
+}
+
 #return 1 if it is a fv guest judging by name
 #feel free to extend to support more cases
 sub is_fv_guest {
@@ -145,7 +221,7 @@ sub guest_is_sle {
 
     # Version check
     $guest_name =~ /sles-*(\d{2})(?:-*sp(\d))?/;
-    my $version = $2 eq '' ? "$1-sp0" : "$1-sp$2";
+    my $version = defined($2) ? "$1-sp$2" : "$1-sp0";
     return check_version($query, $version, qr/\d{2}(?:-sp\d)?/);
 }
 
@@ -211,7 +287,7 @@ sub check_libvirtd {
 # Developer asked to use different log file as log_output per daemon.
 sub turn_on_libvirt_debugging_log {
 
-    my @libvirt_daemons = is_monolithic_libvirtd ? "libvirtd" : qw(virtqemud virtstoraged virtnetworkd virtnodedevd virtsecretd virtnwfilterd virtlockd);
+    my @libvirt_daemons = is_monolithic_libvirtd ? "libvirtd" : qw(virtqemud virtstoraged virtnetworkd virtnodedevd virtsecretd virtlockd);
     # For details, please refer to poo#137096
     push @libvirt_daemons, 'virtlogd' if is_kvm_host;
 
@@ -301,11 +377,15 @@ sub check_failures_in_journal {
     if ($failures) {
         if (get_var('KNOWN_BUGS_FOUND_IN_JOURNAL')) {
             record_soft_failure("Found failures: \n" . $failures . "There are known kernel bugs " . get_var('KNOWN_BUGS_FOUND_IN_JOURNAL') . ". Please look into journal files to determine if it is a known bug. If it is a new issue, please take action as described in poo#151361.");
+            record_info("Found failures in journal log", "Found failures: \n" . $failures . "There are known kernel bugs " . get_var('KNOWN_BUGS_FOUND_IN_JOURNAL') . ". Please look into journal files to determine if it is a known bug. If it is a new issue, please take action as described in poo#151361.", result => 'fail');
         }
         else {
             record_soft_failure("Found new failures: " . $failures . " please take actions as described in poo#151361.\n");
+            record_info("Found failures in journal log", "Found new failures: " . $failures . " please take actions as described in poo#151361.\n", result => 'fail');
         }
-        script_run("rsync root\@$machine:$logfile $logfile", die_on_timeout => 0) if $machine ne 'localhost';
+        # ignore the attempt timing out with "timeout 20" which exits before
+        # the script_run internal timeout
+        script_run("timeout 20 rsync root\@$machine:$logfile $logfile") if $machine ne 'localhost';
         upload_logs($logfile);
     }
     return $failures;
@@ -348,7 +428,11 @@ sub check_guest_health {
     if ($vmstate eq "ok") {
         $failures = caller 0 eq 'validate_system_health' ? check_failures_in_journal($vm, no_cursor => 1) : check_failures_in_journal($vm);
         return 'fail' if $failures;
-        record_info("Healthy guest!", "$vm looks good so far!");
+        if (script_run("ssh root\@$vm 'ping -c3 www.opensuse.org'") == 0 or script_run("ssh root\@$vm 'ping -c3 www.qemu.org'") == 0) {
+            record_info("Healthy guest!", "$vm looks good so far!");
+        } else {
+            record_info("Possible network inaccessibility", "Unable to access outside network from $vm!", result => 'fail');
+        }
     }
     else {
         record_info("Skip check_failures_in_journal for $vm", "$vm is not in desired state judged by either virsh or xl tool stack", result => 'softfail');
@@ -405,11 +489,21 @@ sub download_script {
             # Have to output debug info at here because no logs will be uploaded if there are connection problems
             if (script_run("ssh root\@$machine 'hostname'") == 0) {
                 $script_url =~ /^https?:\/\/([\w\.]+)(:\d+)?\/.*/;
-                script_run("ssh root\@$machine 'ping $1'");
+                record_info("Guest $machine ssh accessible from host", "Debugging its network availability", result => 'fail');
+                # Debug: to check where the access problem lies in.
+                script_run("ssh root\@$machine 'ping -c3 $1'");
                 script_run("ssh root\@$machine 'traceroute $1'");
+                script_run("ssh root\@$machine 'ip route show'");
                 script_run("ssh root\@$machine 'ping -c3 openqa.suse.de'");
+                # Debug: to check if there is problem with DNS resolution: OSD <=> 10.145.10.207
+                script_run("ssh root\@$machine 'ping -c3 10.145.10.207'");
+                # Debug: to check if the guest can access its host
+                script_run("ssh root\@$machine 'ping -c3 192.168.123.1'");
                 script_run("ssh root\@$machine 'nslookup " . get_var('WORKER_HOSTNAME', 'openqa.suse.de') . "'");
+                script_run("ssh root\@$machine 'ip a'");
                 script_run("ssh root\@$machine 'cat /etc/resolv.conf'");
+                script_run('cat /etc/resolv.conf');
+                record_info("Debugging done", "for Guest $machine", result => 'fail');
             }
             else {
                 record_info("machine is not ssh accessible", "$machine", result => 'fail');
@@ -475,6 +569,12 @@ sub create_guest {
     my ($guest, $method) = @_;
     my $v_type = $guest->{name} =~ /HVM/ ? "-v" : "";
 
+    # Ensure UEFI firmware package is installed if this guest requires UEFI mode
+    if ($guest->{boot_firmware} && $guest->{boot_firmware} eq 'efi' && script_run("rpm -q ovmf") != 0) {
+        record_info("Installing OVMF", "Installing OVMF package for UEFI support for guest $guest->{name}");
+        zypper_call("in ovmf");
+    }
+
     my $name = $guest->{name};
     my $location = $guest->{location};
     my $autoyast = $guest->{autoyast};
@@ -487,7 +587,6 @@ sub create_guest {
     my $vcpus = $guest->{vcpus} // "2";
     my $maxvcpus = $guest->{maxvcpus} // $vcpus + 1;    # same as for memory, test functionality but don't waste resources
     my $extra_args = get_var("VIRTINSTALL_EXTRA_ARGS", "") . " " . get_var("VIRTINSTALL_EXTRA_ARGS_" . uc($name), "");
-    my $linuxrc = $guest->{linuxrc};
     $extra_args = trim($extra_args);
 
     if ($method eq 'virt-install') {
@@ -497,11 +596,16 @@ sub create_guest {
         my ($autoyastURL, $diskformat, $virtinstall);
         $autoyastURL = $autoyast;
         $diskformat = get_var("VIRT_QEMU_DISK_FORMAT") // "qcow2";
-        $extra_args = "$linuxrc autoyast=$autoyastURL $extra_args";
+        $extra_args = "autoyast=$autoyastURL $extra_args";
         $extra_args = trim($extra_args);
         $virtinstall = "virt-install $v_type $guest->{osinfo} --name $name --vcpus=$vcpus,maxvcpus=$maxvcpus --memory=$memory,maxmemory=$maxmemory --vnc";
         $virtinstall .= " --disk path=/var/lib/libvirt/images/$name.$diskformat,size=20,format=$diskformat --noautoconsole";
-        $virtinstall .= " --network network=default,mac=$macaddress --autostart --location=$location --wait -1";
+        $virtinstall .= " --network bridge=br0 --autostart --location=$location --wait -1";
+        # Configure boot firmware based on guest configuration
+        if ($guest->{boot_firmware} && $guest->{boot_firmware} eq 'efi') {
+            $virtinstall .= " --boot firmware=efi";
+            record_info("Boot Firmware", "Guest $name configured for EFI boot");
+        }
         $virtinstall .= " --events on_reboot=$on_reboot" unless ($on_reboot eq '');
         $virtinstall .= " --extra-args '$extra_args'" unless ($extra_args eq '');
         record_info("$name", "Creating $name guests:\n$virtinstall");
@@ -557,7 +661,7 @@ sub install_default_packages {
 sub ensure_online {
     my ($guest, %args) = @_;
 
-    my $hypervisor = $args{HYPERVISOR} // " ";
+    my $hypervisor = defined $args{HYPERVISOR} ? $args{HYPERVISOR} : (get_var('VIRT_AUTOTEST') ? "192.168.123.1" : "192.168.122.1");
     my $dns_host = $args{DNS_TEST_HOST} // "www.suse.com";
     my $skip_ssh = $args{skip_ssh} // 0;
     my $skip_network = $args{skip_network} // 0;
@@ -565,8 +669,6 @@ sub ensure_online {
     my $ping_delay = $args{ping_delay} // 15;
     my $ping_retry = $args{ping_retry} // 60;
     my $use_virsh = $args{use_virsh} // 1;
-
-    $hypervisor = get_var('VIRT_AUTOTEST') ? "192.168.123.1" : "192.168.122.1";
 
     # Ensure guest is running
     # Only xen/kvm support to reboot guest at the moment
@@ -616,7 +718,9 @@ sub ensure_default_net_is_active {
 sub add_guest_to_hosts {
     my ($hostname, $address) = @_;
     assert_script_run "sed -i '/ $hostname /d' /etc/hosts";
-    assert_script_run "echo '$address $hostname # virtualization' >> /etc/hosts";
+    my $ret = assert_script_run "echo '$address $hostname # virtualization' >> /etc/hosts";
+    record_info("Content of /etc/hosts", script_output("cat /etc/hosts"));
+    return $ret;
 }
 
 # Remove additional disks from the given guest. We remove all disks that match the given pattern or 'vd[b-z]' if no pattern is given
@@ -733,15 +837,16 @@ sub start_guests {
 
 #Add common ssh options to host ssh config file to be used for all ssh connections when host tries to ssh to another host/guest.
 sub setup_common_ssh_config {
-    my $ssh_config_file = shift;
+    my %args = @_;
+    $args{ssh_config_file} //= '/root/.ssh/config';
+    $args{ssh_id_file} //= '';
 
-    $ssh_config_file //= '/root/.ssh/config';
-    if (script_run("test -f $ssh_config_file") ne 0) {
-        script_run "mkdir -p " . dirname($ssh_config_file);
-        assert_script_run("touch $ssh_config_file");
+    if (script_run("test -f $args{ssh_config_file}") ne 0) {
+        script_run "mkdir -p " . dirname($args{ssh_config_file});
+        assert_script_run("touch $args{ssh_config_file}");
     }
-    if (script_run("grep \"Host \\\*\" $ssh_config_file") ne 0) {
-        type_string("cat >> $ssh_config_file <<EOF
+    if (script_run("grep \"Host \\\*\" $args{ssh_config_file}") ne 0) {
+        type_string("cat >> $args{ssh_config_file} <<EOF
 Host *
     UserKnownHostsFile /dev/null
     StrictHostKeyChecking no
@@ -749,8 +854,11 @@ Host *
 EOF
 ");
     }
-    assert_script_run("chmod 600 $ssh_config_file");
-    record_info("Content of $ssh_config_file after common ssh config setup", script_output("cat $ssh_config_file;ls -lah $ssh_config_file"));
+    if ($args{ssh_id_file} and script_run("grep \"IdentityFile $args{ssh_id_file}\" $args{ssh_config_file}") ne 0) {
+        assert_script_run("sed -i -r \'/^Host \\*/a \\    IdentityFile $args{ssh_id_file}\' $args{ssh_config_file}");
+    }
+    assert_script_run("chmod 600 $args{ssh_config_file}");
+    record_info("Content of $args{ssh_config_file} after common ssh config setup", script_output("cat $args{ssh_config_file};ls -lah $args{ssh_config_file}"));
     return;
 }
 
@@ -909,6 +1017,16 @@ sub check_port_state {
     }
     record_info("Port $dst_port is not open", "The port $dst_port is not open on machine $dst_machine") if ($port_state == 0);
     return $port_state;
+}
+
+#Detect whether SUT host is installed with scc registration
+sub is_registered_sles {
+    if ((!get_var('SCC_REGISTER') or check_var('SCC_REGISTER', 'none')) and (!get_var('REGISTER') or check_var('REGISTER', 'none'))) {
+        return 0;
+    }
+    else {
+        return 1;
+    }
 }
 
 =head2 is_registered_system
@@ -1253,7 +1371,7 @@ in to preserve order. For multiple guest patterns, an empty registration
 code for specific guest pattern will not be filled out by any default
 value and at the same time this  means registration code is not needed
 for it at all. This subroutine has one argument separator and returns
-generated registration codes joined together by specified separator.  
+generated registration codes joined together by specified separator.
 
 =cut
 
@@ -1268,8 +1386,263 @@ sub get_guest_regcode {
     my $regcode_ltss = get_var("GUEST_SCC_REGCODE_LTSS", "");
     my $count = ($args{separator} eq '|' ? scalar(split("\\$args{separator}", $guest)) : scalar(split("$args{separator}", $guest)));
     $regcode = join("$args{separator}", (get_var("SCC_REGCODE", "")) x $count) if (!$regcode);
-    $regcode_ltss = join("$args{separator}", (get_var("SCC_REGCODE_LTSS_15", "")) x $count) if (!$regcode_ltss);
+    if (!$regcode_ltss) {
+        my @guest_parts = $args{separator} eq '|' ? split("\\$args{separator}", $guest) : split("$args{separator}", $guest);
+        my @regcode_ltss_parts;
+        for my $part (@guest_parts) {
+            push @regcode_ltss_parts, ($part =~ /12/ ? get_var("SCC_REGCODE_LTSS_12", "") : $part =~ /15/ ? get_var("SCC_REGCODE_LTSS_15", "") : "");
+        }
+        $regcode_ltss = join($args{separator}, @regcode_ltss_parts);
+    }
     return $regcode, $regcode_ltss;
+}
+
+sub wait_for_host_reboot {
+    select_console 'sol', await_console => 0;
+    # Wait for reboot and show screenshots
+    foreach (1 .. 10) {
+        save_screenshot;
+        sleep 20;
+    }
+    assert_screen([qw(sol-console-wait-typing-ret linux-login text-login)], 120);
+    if (match_has_tag('sol-console-wait-typing-ret')) {
+        send_key 'ret';
+        assert_screen([qw(inux-login text-login)], 120);
+    }
+    record_info("Host rebooted");
+    reset_consoles;
+    select_console('root-ssh');
+}
+
+=head2 execute_over_ssh
+
+  execute_over_ssh(username => $user, address => $address,
+      command => $command, timeout => $timeout, assert => $assert)
+
+Run command over passwordless ssh session. Arguments include username default 
+value of which is 'root', address which can take the form of FQDN or IP and is
+mandatory, command to be executed, timeout value to wait before next step and
+assert which determines assertive call or not.
+
+=cut
+
+sub execute_over_ssh {
+    my %args = @_;
+    $args{username} //= 'root';
+    $args{address} //= '';
+    $args{command} //= '';
+    $args{timeout} //= 90;
+    $args{assert} //= 1;
+    croak('Argument address and command must be given to run over ssh') if (!$args{address} or !$args{command});
+
+    wait_guest_online($args{address});
+    my $command = "ssh $args{username}\@$args{address} \"$args{command}\"";
+    script_retry($command, timeout => $args{timeout}, delay => 15, retry => 3, die => $args{assert});
+}
+
+=head2 reboot_virtual_machine
+
+  reboot_virtual_machine(username => $user, address => $address, domain => $domain)
+
+Reboot virtual machine by issuing 'reboot' over ssh and then 'virsh command' if
+'reboot' does not succeed and virtual machine domain name is given as arguement
+domain which is default to argument address if it is also a domain name. Address
+can also takes the form of FQDN and IP as long as it is reachable over ssh. And
+another argument username has the default value of 'root' if no passed in value. 
+
+=cut
+
+sub reboot_virtual_machine {
+    my %args = @_;
+    $args{username} //= 'root';
+    $args{address} //= '';
+    $args{domain} //= $args{address};
+    croak('Argument address must be given to reboot virtual machine') if (!$args{address});
+
+    my $test_ssh_open = "nmap $args{address} -PN -p ssh | grep -i open";
+    my $test_ssh_not_open = "nmap $args{address} -PN -p ssh | grep -i -v open";
+    if (script_retry($test_ssh_open, delay => 1, retry => 30, die => 0) == 0) {
+        script_run("ssh $args{username}\@$args{address} \"reboot\"");
+        script_run("virsh destroy $args{domain}") if (script_retry($test_ssh_not_open, delay => 1, retry => 60, die => 0) != 0);
+    }
+    croak("Virtual machine $args{domain} $args{address} failed to stop") if (script_retry($test_ssh_not_open, delay => 1, retry => 30, die => 0) != 0);
+    if (script_retry($test_ssh_open, delay => 1, retry => 30, die => 0) != 0) {
+        script_run("virsh destroy $args{domain}");
+        script_run("virsh start $args{domain}");
+        script_retry($test_ssh_open, delay => 1, retry => 30, die => 1);
+    }
+}
+
+# Test console connection bi-directionally and reconnect if not good.
+# This is useful for long time no use consoles.
+sub reconnect_console_if_not_good {
+    my $_console = shift;
+    $_console //= 'root-ssh';
+
+    # Test console connection and reconnect if not good
+    enter_cmd "echo GOOD > /dev/$serialdev";
+    unless (defined(wait_serial 'GOOD', timeout => 30)) {
+        reset_consoles;
+        select_console($_console, await_console => 0);
+    }
+    record_info("Console is good");
+}
+
+=head2 get_guest_settings
+
+  get_guest_settings(settings => 'list of settings', separator => 'string separator')
+
+Settings for guests can be provided just only once and then it should be replicated
+to all guests specified by GUEST_PATTERN, GUEST_LIST or GUEST. This subroutine has
+two arguments, including list of names of settings and separator. Multiple settings
+are seperated by separator comma by default. Values of settings are retrieved from
+testapi get_var. Generated settings and their values are put in a hash object and
+returns its reference.
+
+=cut
+
+sub get_guest_settings {
+    my (%args) = @_;
+    $args{settings} //= "";
+    $args{separator} //= ",";
+
+    my $guest = (get_var("GUEST_PATTERN") ? get_var("GUEST_PATTERN") : (get_var("GUEST_LIST") ? get_var("GUEST_LIST") : get_var("GUEST", "")));
+    croak("Settings and guests (GUEST_PATTERN, GUEST_LIST or GUEST exclusively) to be involved must be given") if (!$args{settings} or !$guest);
+
+    my %settings_matrix = ();
+    my $guest_count = ($args{separator} eq '|' ? scalar(split("\\$args{separator}", $guest)) : scalar(split("$args{separator}", $guest)));
+    foreach (split(/,/, $args{settings})) {
+        my $value = get_var($_, 'NA');
+        my $setting_count = ($args{separator} eq '|' ? scalar(split("\\$args{separator}", $value)) : scalar(split("$args{separator}", $value)));
+        $value = join("$args{separator}", ($value) x $guest_count) if ($guest_count != $setting_count);
+        my $setting_pointer = \%settings_matrix;
+        $setting_pointer->{$_} = $value;
+    }
+
+    return \%settings_matrix;
+}
+
+=head2 reselect_openqa_console
+
+Reselect named console in openQA test if concerned console is lost after detecting
+ssh port or needle. Arguments include address to be detected, console to be selected
+, needle to be checked on console, counter to be used for lost console detection,
+countdown value to be decreased at the end of each loopthe number of retries when
+detecting ssh port of address and delay before next ssh port detection.
+=cut
+
+sub reselect_openqa_console {
+    my (%args) = @_;
+    $args{address} //= '';
+    $args{console} //= 'root-ssh';
+    $args{needle} //= 'text-logged-in-root';
+    $args{counter} //= 180;
+    $args{countdown} //= 3;
+    $args{retries} //= 6;
+    $args{delay} //= 10;
+    die("Address must be given for ssh port detecting") unless $args{address};
+
+    my $reselect_console_counter = $args{counter};
+    while ($reselect_console_counter >= 0) {
+        my $countdown = $args{countdown};
+        if (!(check_port_state($args{address}, 22)) or !(check_screen($args{needle}))) {
+            $countdown = $args{retries} * $args{delay};
+            if (check_port_state($args{address}, 22, $args{retries}, $args{delay})) {
+                reset_consoles;
+                select_console($args{console});
+                record_info("Console $args{console} reconnected after being lost");
+                last;
+            }
+            else {
+                die("System $args{address} ssh port not open for reconnection on waiting after console $args{console} lost");
+            }
+        }
+        enter_cmd("reset") for (0 .. 2);
+        $reselect_console_counter -= $countdown;
+    }
+}
+
+=head2 select_backend_console
+
+Select corresponding ipmi or qemu backend console 'root-ssh' or 'root-console'.
+If argument init is set, select ipmi backend 'sol' console. User can also set
+arguments console or wait to select cusotmized console in desired behavior.
+=cut
+
+sub select_backend_console {
+    my (%args) = @_;
+    $args{init} //= 1;
+    $args{wait} //= 0;
+
+    if (is_ipmi) {
+        $args{console} //= ($args{init} ? 'sol' : 'root-ssh');
+    }
+    elsif (is_qemu) {
+        $args{console} //= 'root-console';
+    }
+
+    reset_consoles;
+    if (is_ipmi) {
+        select_console($args{console}, await_console => $args{wait});
+        use_ssh_serial_console if (!$args{init});
+    }
+    elsif (is_qemu) {
+        migration::reset_consoles_tty();
+        select_console($args{console}, await_console => $args{wait});
+        ensure_serialdev_permissions;
+        serial_terminal::prepare_serial_console();
+    }
+}
+
+=head2 double_check_xen_role
+
+Just only match bootmenu-xen-kernel needle was not enough for xen host if got Xen
+domain0 kernel panic(bsc#1192258). Need to double-check xen role after matched 
+bootmenu-xen-kernel needle successfully.
+=cut
+
+sub double_check_xen_role {
+    record_info 'INFO', 'Double-check xen kernel';
+    if (script_run('lsmod | grep xen') == 0) {
+        diag("Boot up xen kernel successfully");
+    }
+    else {
+        record_info 'INFO', 'Check Xen hypervisor as Grub2 menuentry';
+        die 'Check Xen hypervisor as Grub2 menuentry failed' if (script_run('grub2-once --list | grep Xen') != 0);
+        save_screenshot;
+        die 'Double-check xen kernel failed';
+    }
+
+    # for modular libvirt, virtxend is expected in "loaded: active or inactive" status.
+    # virtxend.socket seems to be always in "loaded: active" status
+    unless (is_monolithic_libvirtd) {
+        die 'virtxend.socket is not running!' unless script_run("systemctl is-active virtxend.socket") eq 0;
+    }
+
+    record_info 'INFO', 'Check if start bootloader from a read-only snapshot';
+    assert_script_run('touch /root/read-only.fs && rm -rf /root/read-only.fs');
+    save_screenshot;
+}
+
+=head2 check_kvm_modules
+
+Check whether kvm moduldes are successfully loaded on running system.
+=cut
+
+sub check_kvm_modules {
+    unless (script_run('lsmod | grep "^kvm\b"') == 0 or script_run('lsmod | grep -e "^kvm_intel\b" -e "^kvm_amd\b"') == 0) {
+        save_screenshot;
+        die "KVM modules are not loaded!";
+    }
+
+    # for modular libvirt, virtqemud is expected in "loaded: active or inactive" status.
+    # virtqemud.socket seems to be always in "loaded: active" status
+    unless (is_monolithic_libvirtd) {
+        unless (get_var('TEST_SUITE_NAME') =~ /kubevirt-tests/ or script_run("systemctl is-active virtqemud.socket") eq 0) {
+            die 'virtqemud.socket is not running!';
+        }
+    }
+    record_info("KVM", "kvm modules are loaded!");
 }
 
 1;

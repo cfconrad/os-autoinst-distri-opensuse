@@ -18,12 +18,14 @@ use constant {
     VERSION => [
         qw(
           is_sle
+          is_sled
           is_pre_15
           is_microos
           is_leap_micro
           is_sle_micro
           is_micro
           is_alp
+          is_agama
           is_selfinstall
           is_gnome_next
           is_jeos
@@ -50,6 +52,9 @@ use constant {
           is_tunneled
           is_bootloader_grub2
           is_bootloader_sdboot
+          is_bootloader_grub2_bls
+          get_bootloader
+          get_default_bootloader
           is_plasma6
           requires_role_selection
           check_version
@@ -59,6 +64,9 @@ use constant {
           package_version_cmp
           get_version_id
           php_version
+          has_selinux_by_default
+          has_selinux
+          is_wsl
         )
     ],
     BACKEND => [
@@ -111,7 +119,7 @@ Returns true if called on jeos
 =cut
 
 sub is_jeos {
-    return get_var('FLAVOR', '') =~ /JeOS/;
+    return get_var('FLAVOR', '') =~ /(JeOS|Minimal-VM)/;
 }
 
 =head2 is_vmware
@@ -318,7 +326,7 @@ Check if SLEM is in flavor of self installable iso
 =cut
 
 sub is_selfinstall {
-    return get_var('FLAVOR') =~ /selfinstall/i;
+    return get_var('FLAVOR') =~ /selfinstall/i || check_var('SELFINSTALL', '1');
 }
 
 =head2 is_tumbleweed
@@ -370,7 +378,7 @@ sub is_leap {
     $version =~ s/:(Core|S)[:\w]*//i;
     $version =~ s/^Jump://i;
 
-    return check_version($query, $version, qr/\d{2,}\.\d/);
+    return check_version($query, $version, qr/\d{2,}(?:\.\d)?/);
 }
 
 =head2 is_opensuse
@@ -399,7 +407,16 @@ sub is_sle {
     return 1 unless $query;
 
     # Version check
-    return check_version($query, $version, qr/\d{2}(?:-sp\d)?/);
+    return check_version($query, $version, qr/\d{2}((?:-sp\d)?|(?:\.\d)?)/);
+}
+
+=head2 is_sled
+
+Check if distribution is SLED
+=cut
+
+sub is_sled {
+    return check_var('SLE_PRODUCT', 'sled');
 }
 
 =head2 is_transactional
@@ -428,7 +445,7 @@ Returns true if called in a SAP test
 =cut
 
 sub is_sles4sap {
-    return get_var('FLAVOR', '') =~ /SAP/ || check_var('SLE_PRODUCT', 'sles4sap');
+    return get_var('FLAVOR', '') =~ /SAP/i || check_var('SLE_PRODUCT', 'sles4sap');
 }
 
 =head2 is_sles4sap_standard
@@ -457,6 +474,13 @@ Returns true if called in an HPC test
 sub is_hpc {
     return check_var('SLE_PRODUCT', 'hpc');
 }
+
+=head2 is_wsl
+
+Returns true if called on a wsl build
+=cut
+
+sub is_wsl { get_var('WSL_VERSION', '') }
 
 =head2 is_released
 
@@ -550,6 +574,7 @@ sub is_server {
     return 1 if is_sles4sap();
     return 1 if is_sles4migration();
     return 1 if get_var('FLAVOR', '') =~ /^Server/;
+    return 1 if get_var('FLAVOR', '') =~ /^DMS-QEMU/;
     return 1 if is_public_cloud();
     # If unified installer, we need to check SLE_PRODUCT
     return 0 if get_var('FLAVOR', '') !~ /^Installer-|^Online|^Full/;
@@ -762,7 +787,8 @@ sub check_os_release {
 
 Returns 1 (true) if os release version matches the one passed as arguement.
 If no arguements are given, the function will compare the os release version
-in /etc/os-release file with "VERSION" var.
+in /etc/os-release file with "VERSION" or "VARIANT" var.
+VARIANT contains the version on SL Micro/Microos from 6.2.
 
 =cut
 
@@ -770,7 +796,7 @@ sub verify_os_version {
     my ($version, $os_release_file) = @_;
     $version //= get_var("VERSION");
     $os_release_file //= '/etc/os-release';
-    return script_output("grep VERSION= $os_release_file | grep $version");
+    return script_output("grep 'VERSION=\\|VARIANT=' $os_release_file | grep $version");
 }
 
 =head2 is_public_cloud
@@ -817,7 +843,7 @@ Returns true if the SUT uses GRUB2 as bootloader
 =cut
 
 sub is_bootloader_grub2 {
-    return get_var('BOOTLOADER', 'grub2') eq 'grub2';
+    return get_bootloader() eq 'grub2';
 }
 
 =head2 is_bootloader_sdboot
@@ -826,7 +852,46 @@ Returns true if the SUT uses systemd-boot as bootloader
 =cut
 
 sub is_bootloader_sdboot {
-    return get_var('BOOTLOADER', 'grub2') eq 'systemd-boot';
+    return get_bootloader() eq 'systemd-boot';
+}
+
+=head2 is_bootloader_grub2_bls
+
+Returns true if the SUT uses GRUB2-BLS as bootloader
+=cut
+
+sub is_bootloader_grub2_bls {
+    return get_bootloader() eq 'grub2-bls';
+}
+
+=head2 get_bootloader
+
+Returns the expected bootloader based on test variables
+can be grub2, grub2-bls or systemd-boot
+=cut
+
+sub get_bootloader {
+    my $bootloader = get_var('BOOTLOADER');
+    return $bootloader if $bootloader;
+
+    return 'grub2' if !check_var('UEFI', 1);
+    return 'grub2' if is_upgrade;
+    return 'systemd-boot' if is_microos && !(get_var('FLAVOR', '') =~ /(MicroOS-SelfInstall|MicroOS-Image|Image-ContainerHost|JeOS-for-kvm-and-xen|JeOS-for-OpenStack-Cloud)$/);
+    return 'grub2-bls' if check_var('VERSION', 'Staging:F');
+    return 'grub2';
+}
+
+=head2 get_default_bootloader
+
+Returns the default bootloader, can be grub2, grub2-bls or sdboot
+This is a helper function for unit tests.
+=cut
+
+sub get_default_bootloader {
+    return 'grub2' if is_bootloader_grub2;
+    return 'grub2-bls' if is_bootloader_grub2_bls;
+    return 'systemd-boot' if is_bootloader_sdboot;
+    die "Could not figure out bootloader";
 }
 
 =head2 is_plasma6
@@ -970,6 +1035,27 @@ Returns true for tests using the images built by the "JeOS" package on OBS
 =cut
 
 sub is_community_jeos {
-    return (get_var('FLAVOR', '') =~ /JeOS-for-(AArch64|RISCV|RPi)/);
+    return (get_var('FLAVOR', '') =~ /JeOS-for-(AArch64|armv9|RISCV|RPi)/);
 }
 
+=head2 has_selinux_by_default
+
+Returns true if the distro has SELinux as default MAC
+=cut
+
+sub has_selinux_by_default {
+    return is_tumbleweed || is_sle_micro('5.4+') || is_leap_micro('5.4+') || is_microos || is_sle('16+') || is_leap('16.0+');
+}
+
+sub has_selinux {
+    return get_var('SELINUX', has_selinux_by_default);
+}
+
+=head2 is_agama
+
+Check if agama installation is being used
+=cut
+
+sub is_agama {
+    return (get_var('AGAMA') || get_var('INST_AUTO'));
+}

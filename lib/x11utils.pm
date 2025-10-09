@@ -37,6 +37,7 @@ our @EXPORT = qw(
   untick_welcome_on_next_startup
   start_root_shell_in_xterm
   x11_start_program_xterm
+  default_gui_terminal
   handle_gnome_activities
 );
 
@@ -469,7 +470,7 @@ Disable screensaver in gnome. To be called from a command prompt, for example an
 =cut
 
 sub turn_off_gnome_screensaver {
-    script_run 'gsettings set org.gnome.desktop.session idle-delay 0', die_on_timeout => 0, timeout => 90;
+    script_run 'timeout 80 gsettings set org.gnome.desktop.session idle-delay 0', timeout => 90;
 }
 
 =head2 turn_off_gnome_screensaver_for_gdm
@@ -521,7 +522,7 @@ Turns off the screensaver depending on desktop environment
 sub turn_off_screensaver {
     return turn_off_kde_screensaver if check_var('DESKTOP', 'kde');
     die "Unsupported desktop '" . get_var('DESKTOP', '') . "'" unless check_var('DESKTOP', 'gnome');
-    x11_start_program('xterm');
+    x11_start_program(default_gui_terminal());
     turn_off_gnome_screensaver;
     script_run 'exit', 0;
 }
@@ -553,11 +554,8 @@ sub untick_welcome_on_next_startup {
         last if match_has_tag("opensuse-welcome-show-on-boot-unselected");
         die "Unable to untick 'Show on next startup'" if $retry == 5;
     }
-    for my $retry (1 .. 5) {
-        send_key 'alt-f4';
-        last if check_screen("generic-desktop", timeout => 5);
-        die "Unable to close openSUSE Welcome screen" if $retry == 5;
-    }
+    assert_and_click_until_screen_change('opensuse-welcome-close', 5, 5);
+    assert_screen("generic-desktop");
 }
 
 =head2 handle_welcome_screen
@@ -565,7 +563,7 @@ sub untick_welcome_on_next_startup {
  handle_welcome_screen([timeout => $timeout]);
 
 openSUSE Welcome window should be auto-launched.
-Disable auto-launch on next boot and close application.
+Disable auto-launch on next boot and close application (If the checkbox is present)
 Also handle workarounds when needed.
 
 =cut
@@ -574,7 +572,15 @@ sub handle_welcome_screen {
     my (%args) = @_;
     assert_screen([qw(opensuse-welcome opensuse-welcome-gnome40-activities)], $args{timeout});
     send_key 'esc' if match_has_tag('opensuse-welcome-gnome40-activities');
-    untick_welcome_on_next_startup;
+    # The checkbox to start on boot is now dropped, but we need to care for it
+    # in the case of older installs where the autostart is still there.
+    check_screen('opensuse-welcome-show-on-boot');
+    if (match_has_tag('opensuse-welcome-show-on-boot')) {
+        untick_welcome_on_next_startup;
+    } else {
+        assert_and_click_until_screen_change('opensuse-welcome-close', 5, 5);
+        assert_screen("generic-desktop");
+    }
 }
 
 =head2 start_root_shell_in_xterm
@@ -610,6 +616,24 @@ sub x11_start_program_xterm {
         click_lastmatch;
         assert_screen 'xterm';
     }
+}
+
+=head2 default_gui_terminal {
+
+    default_gui_terminal()
+
+Returns the default console to be used by test modules, defaults to xterm
+
+=cut
+
+sub default_gui_terminal {
+    return "gnome-terminal" if check_var('DESKTOP', 'gnome') && (is_leap("<16")) || check_var('SLE_PRODUCT', 'sled');
+    # Let SLE decide if they want to change to new behavior
+    return "xterm" if check_var('DESKTOP', 'gnome') && (is_sle("<16"));
+    return "kgx" if check_var('DESKTOP', 'gnome');
+    return "konsole" if check_var('DESKTOP', 'kde');
+    return "xfce4-terminal" if check_var('DESKTOP', 'xfce');
+    return "xterm";
 }
 
 =head2 handle_gnome_activities

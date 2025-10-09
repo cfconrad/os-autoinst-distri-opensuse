@@ -7,8 +7,6 @@
 # Maintainer: alice <xlai@suse.com>
 
 use base "virt_autotest_base";
-use strict;
-use warnings;
 use testapi;
 use Utils::Architectures;
 use Utils::Backends 'use_ssh_serial_console';
@@ -37,7 +35,8 @@ sub get_script_run {
     my $guest_pattern = get_var('GUEST_PATTERN', 'sles-12-sp2-64-[p|f]v-def-net');
     my $parallel_num = get_var("PARALLEL_NUM", "2");
     my ($regcode, $regcode_ltss) = get_guest_regcode(separator => '|');
-    $pre_test_cmd .= " -f \"" . $guest_pattern . "\" -n " . $parallel_num . " -r " . " -e \"" . $regcode . "\" -E \"" . $regcode_ltss . "\"";
+    my $kernel_params = get_guest_settings(settings => 'GUEST_EXT_KERNEL_PARAMS', separator => '|');
+    $pre_test_cmd .= " -f \"" . $guest_pattern . "\" -n " . $parallel_num . " -r " . " -e \"" . $regcode . "\" -E \"" . $regcode_ltss . "\" -k \"" . $kernel_params->{'GUEST_EXT_KERNEL_PARAMS'} . "\"";
     $pre_test_cmd .= " 2>&1 | tee /tmp/s390x_guest_install_test.log" if (is_s390x);
 
     return $pre_test_cmd;

@@ -1,17 +1,17 @@
 # SUSE's openQA tests
 #
-# Copyright 2024 SUSE LLC
+# Copyright 2024-2025 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Run simple toolbox tests
 # Maintainer: QE-C team <qa-c@suse.de>
 
 use base "consoletest";
-use strict;
-use warnings;
 use testapi;
 use containers::common;
-use version_utils qw(is_sle_micro is_leap_micro);
+use version_utils qw(is_sle_micro is_leap_micro is_microos);
+use transactional;
+use Utils::Architectures qw(is_ppc64le);
 
 our $user = $testapi::username;
 our $password = $testapi::password;
@@ -69,13 +69,21 @@ sub run {
         # $image = suse/sle-15-sp3/update/products/microos51/update/cr/images/suse/sle-micro/5.1/toolbox:latest
         (my $registry = $toolbox_image_to_test) =~ s/\/.*//;
         (my $image = $toolbox_image_to_test) =~ s/^[^\/]*\///;
+        # CONTAINER_IMAGE_TO_TEST may have a totest tumbleweed image
+        ($image) =~ s/\/tumbleweed(?:latest)?$/\/toolbox/ if is_microos;
         assert_script_run "echo REGISTRY=$registry > /etc/toolboxrc";
         assert_script_run "echo IMAGE=$image >> /etc/toolboxrc";
         record_info 'toolboxrc', script_output('cat /etc/toolboxrc');
     }
 
     # Display help
-    assert_script_run 'toolbox -h';
+    my $rc = script_run 'toolbox -h';
+    if ($rc && is_sle_micro('=5.5') && is_ppc64le) {
+        record_soft_failure 'bsc#1240332 - missing toolbox package';
+        trup_call 'pkg in toolbox';
+        process_reboot(trigger => 1);
+        select_console 'root-console';
+    }
 
     record_info 'Test', "Run toolbox without flags";
     assert_script_run 'toolbox -r id', timeout => 300;
@@ -157,7 +165,7 @@ sub run {
             assert_script_run 'toolbox run -c devel -- zypper -n ref -s', timeout => 300;
         }
         assert_script_run 'toolbox run -c devel -- zypper lr -u', timeout => 180;
-        assert_script_run 'toolbox run -c devel -- zypper -n in python3', timeout => 180;
+        assert_script_run 'toolbox run -c devel -- zypper -n in sysstat', timeout => 180;
     }
     assert_script_run 'podman rm devel';
 
@@ -172,4 +180,9 @@ sub clean_container_host {
     assert_script_run("$runtime system prune -a -f", 300);
 }
 
+sub test_flags {
+    # Explicitly set this for because of bsc#1227509 and because snapshotting is disabled on ppc64le.
+    # Without snapshotting fatal => 1 is assumed
+    return {fatal => 0};
+}
 1;

@@ -11,8 +11,6 @@
 # Tags: pr#11456, fate#319639
 
 use base 'y2_installbase';
-use strict;
-use warnings;
 use testapi;
 use version_utils;
 
@@ -35,7 +33,7 @@ sub run {
     # Before SLE15-SP2, yast didn't take during installation the hostname by DHCP
     # See fate#319639
     if (is_sle('<15-SP2') && (script_run(qq{test "\$(hostname)" == "linux"}) == 0)) {
-        record_soft_failure('bsc#1166778 - Default hostname in SLE15-SP1 is not "install"');
+        record_info('bsc#1166778', 'bsc#1166778 - Default hostname in SLE15-SP1 is not "install"');
     } else {
         assert_script_run(qq{test "\$(hostname)" == "$expected_install_hostname"});
     }

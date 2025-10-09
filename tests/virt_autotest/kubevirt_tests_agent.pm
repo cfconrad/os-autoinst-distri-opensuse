@@ -8,8 +8,6 @@
 # Maintainer: Nan Zhang <nan.zhang@suse.com> qe-virt@suse.de
 
 use base multi_machine_job_base;
-use strict;
-use warnings;
 use testapi;
 use lockapi;
 use transactional;
@@ -25,6 +23,7 @@ sub run {
 
     if (check_var('RUN_TEST_ONLY', 0)) {
         use_ssh_serial_console;
+        set_grub_timeout;
 
         # Synchronize the server & agent node before setup
         barrier_wait('kubevirt_test_setup');
@@ -47,8 +46,8 @@ sub rke2_agent_setup {
 
     record_info('RKE2 Agent Setup', '');
     unless (is_transactional) {
-        disable_and_stop_service('apparmor.service');
-        disable_and_stop_service('firewalld.service');
+        disable_and_stop_service('apparmor.service') if (script_run('systemctl is-active apparmor') == 0);
+        disable_and_stop_service('firewalld.service') if (script_run('systemctl is-active firewalld') == 0);
     }
     # Enable NTP service
     systemctl('enable --now chronyd', timeout => 180);
@@ -63,7 +62,7 @@ sub rke2_agent_setup {
     transactional::process_reboot(trigger => 1) if (is_transactional);
     record_info('Installed certificates packages', script_output('rpm -qa | grep certificates'));
     # Set kernel hostname to avoid x509 server connection issue
-    assert_script_run('hostnamectl set-hostname $(uname -n)');
+    assert_script_run('hostnamectl set-hostname $(hostname -f)');
 
     # Install kubevirt packages complete
     barrier_wait('kubevirt_packages_install_complete');

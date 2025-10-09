@@ -10,8 +10,6 @@ package virt_utils;
 
 use base Exporter;
 use Exporter;
-use strict;
-use warnings;
 use Sys::Hostname;
 use File::Basename;
 use testapi;
@@ -24,8 +22,35 @@ use LWP::Simple 'head';
 use virt_autotest::utils;
 use version_utils qw(is_sle is_alp get_os_release);
 
-our @EXPORT
-  = qw(enable_debug_logging update_guest_configurations_with_daily_build locate_sourcefile get_repo_0_prefix repl_repo_in_sourcefile repl_addon_with_daily_build_module_in_files repl_module_in_sourcefile handle_sp_in_settings handle_sp_in_settings_with_fcs handle_sp_in_settings_with_sp0 clean_up_red_disks lpar_cmd generate_guest_asset_name get_guest_disk_name_from_guest_xml compress_single_qcow2_disk get_guest_list download_guest_assets is_installed_equal_upgrade_major_release generateXML_from_data check_guest_disk_type perform_guest_restart collect_host_and_guest_logs cleanup_host_and_guest_logs monitor_guest_console start_monitor_guest_console stop_monitor_guest_console is_developing_sles is_registered_sles);
+our @EXPORT = qw(
+  enable_debug_logging
+  update_guest_configurations_with_daily_build
+  locate_sourcefile
+  get_repo_0_prefix
+  repl_repo_in_sourcefile
+  repl_addon_with_daily_build_module_in_files
+  repl_module_in_sourcefile
+  handle_sp_in_settings
+  handle_sp_in_settings_with_fcs
+  handle_sp_in_settings_with_sp0
+  clean_up_red_disks
+  lpar_cmd
+  generate_guest_asset_name
+  get_guest_disk_name_from_guest_xml
+  compress_single_qcow2_disk
+  get_guest_list
+  download_guest_assets
+  is_installed_equal_upgrade_major_release
+  generateXML_from_data
+  check_guest_disk_type
+  perform_guest_restart
+  collect_host_and_guest_logs
+  cleanup_host_and_guest_logs
+  monitor_guest_console
+  start_monitor_guest_console
+  stop_monitor_guest_console
+  is_developing_sles
+);
 
 sub enable_debug_logging {
 
@@ -279,17 +304,12 @@ sub clean_up_red_disks {
 
 sub lpar_cmd {
     my ($cmd, $args) = @_;
+    my $timeout = $args->{timeout} // 300;
     die 'Command not provided' unless $cmd;
-
     $args->{ignore_return_code} ||= 0;
-    my $ret = console('svirt')->run_cmd($cmd);
-    if ($ret == 0) {
-        record_info('INFO', "Command $cmd run on S390X LPAR: SUCESS");
-    }
-    unless ($args->{ignore_return_code} || !$ret) {
-        record_info('INFO', "Command $cmd run on S390X LPAR: FAIL");
-        die 'Find new failure, please check manually';
-    }
+    my $ret = console('svirt')->run_cmd($cmd, timeout => $timeout);
+    record_info('INFO', "Command $cmd run on S390X LPAR: SUCESS") if ($ret == 0);
+    die 'Find new failure, please check manually' unless ($args->{ignore_return_code} || !$ret);
 }
 
 # Guest xml will be uploaded with name format [generated_name_by_this_func].xml
@@ -305,18 +325,15 @@ sub generate_guest_asset_name {
     if (get_var('CASEDIR') and get_var('BUILD') !~ /^\d+[\._]?\d*$/) {
         die "Downloading guest assets is not allowed without a particular build number. Please trigger job with BUILD=<build_number> or with SKIP_GUEST_INSTALL=1 not to download guest assets from openqa server";
     }
-    else {
-        $build_num = get_required_var('BUILD');
-    }
 
     my $composed_name
       = 'guest_'
       . $guest
       . '_on-host_'
       . get_required_var('DISTRI') . '-'
-      . get_required_var('VERSION')
+      . get_var('VERSION_TO_INSTALL', get_required_var('VERSION'))
       . '_build'
-      . $build_num . '_'
+      . (get_var('VERSION_TO_INSTALL') ? 'gm' : get_required_var('BUILD')) . '_'
       . lc(get_required_var('SYSTEM_ROLE')) . '_'
       . get_required_var('ARCH');
 
@@ -376,95 +393,62 @@ sub get_guest_list {
     return $guest_list;
 }
 
-# Download guest image and xml from a NFS location to local
-# the image and xml is coming from a guest installation testsuite
-# need set SKIP_GUEST_INSTALL=1 in the test suite settings
-# return the account of the guests downloaded
-# only available on x86_64
+# Download guest image and xml which are defined in ASSET_*
+# fg. ASSET_10=guest_%-GUEST_LIST%fv-def-net_on-host_%DISTRI%-%VERSION%_build%BUILD%_%SYSTEM_ROLE%_%ARCH%.xml
+# ASSET_11=guest_%-GUEST_LIST%fv-def-net_on-host_%DISTRI%-%VERSION%_build%BUILD%_%SYSTEM_ROLE%_%ARCH%.disk
+# Need set SKIP_GUEST_INSTALL=1 in the test suite settings
+# Return the account of the guests downloaded
+# Only available on x86_64
 sub download_guest_assets {
 
     # guest_pattern is a string, like sles-11-sp4-64, may or may not with pv or fv given.
-    my ($expected_guests, $vm_xml_dir) = @_;
-
-    # mount the remote NFS location of guest assets
-    # OPENQA_URL="localhost" in local openQA instead of the IP, so the line below need to be turned on and set to the webUI IP when you are using local openQA
-    # Tips: Using local openQA, you need "rcnfs-server start & vi /etc/exports; exportfs -r")
-    # set OPENQA_URL="your_ip" on openQA web UI
-    my $openqa_server = get_required_var('OPENQA_URL');
-
-    # check if vm xml files have been uploaded
-    my @available_guests = ();
-    foreach my $guest (split "\n", $expected_guests) {
-        my $guest_asset = generate_guest_asset_name("$guest");
-        my $vm_disk_url = $openqa_server . "/assets/other/" . $guest_asset . '.disk';
-        $vm_disk_url =~ s#^(?!http://)(.*)$#http://$1#;    #add 'http://' at beginning if needed.
-        if (head($vm_disk_url)) {
-            push @available_guests, $guest;
-        }
-        else {
-            record_info('Softfail', "$vm_disk_url not found!", result => 'softfail');
-        }
-    }
-    return 0 unless @available_guests;
+    my ($guests_list, $vm_xml_dir) = @_;
 
     # clean up vm stuff
-    my $mount_point = "/tmp/remote_guest";
-    script_run "[ -d $mount_point ] && { if findmnt $mount_point; then umount $mount_point; rm -rf $mount_point; fi }";
-    script_run "mkdir -p $mount_point";
     script_run "[ -d $vm_xml_dir ] && rm -rf $vm_xml_dir; mkdir -p $vm_xml_dir";
     my $disk_image_dir = script_output "source /usr/share/qa/virtautolib/lib/virtlib; get_vm_disk_dir";
-    script_run "umount $disk_image_dir; rm -rf $disk_image_dir/*";
     script_run "[ -d /tmp/prj3_guest_migration/ ] && rm -rf /tmp/prj3_guest_migration/" if get_var('VIRT_NEW_GUEST_MIGRATION_SOURCE');
 
-    # tip: nfs4 is not supported on sles12sp4, so use '-t nfs' instead of 'nfs4' here.
-    $openqa_server =~ s/^http:\/\///;
-    my $remote_export_dir = "/var/lib/openqa/factory/other/";
-    assert_script_run("mount -t nfs $openqa_server:$remote_export_dir $mount_point", 120);
+    # check if vm xml files have been uploaded
+    my @guests = split "\n", $guests_list;
+    my @downloaded_guests;
+    foreach my $guest (@guests) {
+        my $guest_asset_name = generate_guest_asset_name("$guest");
+        for my $i (1 .. @guests) {
+            # ASSET_n0: put the guest xml file
+            # ASSET_n1: put the guest disk file
+            if (get_var("ASSET_${i}0", "") =~ /$guest_asset_name/) {
 
-    # copy guest images and xml files to local
-    # test aborts if failing in copying all the guests
-    my $guest_count = 0;
-    foreach my $guest (@available_guests) {
-        my $guest_asset = generate_guest_asset_name("$guest");
-        my $remote_guest_xml_file = $guest_asset . '.xml';
-        my $remote_guest_disk = $guest_asset . '.disk';
+                # Download the guest xml file
+                script_run("curl " . autoinst_url("/assets/other/" . get_var("ASSET_${i}0")) . " -o $vm_xml_dir/$guest.xml");
+                script_run("ls -l $vm_xml_dir");
 
-        # download vm xml file
-        my $rc = script_run("cp $mount_point/$remote_guest_xml_file $vm_xml_dir/$guest.xml", 60);
-        if ($rc) {
-            record_info('Softfail', "Failed copying: $mount_point/$remote_guest_xml_file", result => 'softfail');
-            next;
+                # Download the guest disk file
+                my $local_guest_image = script_output "grep '<source file=' $vm_xml_dir/$guest.xml | sed \"s/^\\s*<source file='\\([^']*\\)'.*\$/\\1/\"";
+                # For prj3, put the downloded xml and disk files in the backup dir directory
+                # in case of being flushed up by the NFS workaround from dst job
+                if (get_var('VIRT_NEW_GUEST_MIGRATION_SOURCE')) {
+                    my $backupRootDir = "/tmp/prj3_guest_migration/vm_backup";
+                    my $backupCfgXmlDir = "$backupRootDir/vm-config-xmls";
+                    my $backupDiskDir = "$backupRootDir/vm-disk-files";
+                    script_run "mkdir -p $backupCfgXmlDir; mkdir -p $backupDiskDir";
+                    script_run "cp $vm_xml_dir/$guest.xml $backupCfgXmlDir";
+                    script_run "ls -l $backupCfgXmlDir";
+                    $local_guest_image = $backupDiskDir . $local_guest_image;
+                }
+                script_run "[ -d `dirname $local_guest_image` ] || mkdir -p `dirname $local_guest_image`";
+                # It took 14s to download vm disk file from worker cache to SUT
+                script_run("curl " . autoinst_url("/assets/other/" . get_var("ASSET_${i}1")) . " -o $local_guest_image");
+                script_run "ls -l $local_guest_image";
+                push @downloaded_guests, $guest;
+                record_info("$guest downloaded", "$guest_asset_name");
+            }
         }
-        script_run("ls -l $vm_xml_dir", 10);
-        save_screenshot;
-
-        # download vm disk files
-        my $local_guest_image = script_output "grep '<source file=' $vm_xml_dir/$guest.xml | sed \"s/^\\s*<source file='\\([^']*\\)'.*\$/\\1/\"";
-        # put the downloded xml and disk files in the backup dir directory
-        # in case of being flushed up by the NFS workaround from dst job
-        if (get_var('VIRT_NEW_GUEST_MIGRATION_SOURCE')) {
-            my $backupRootDir = "/tmp/prj3_guest_migration/vm_backup";
-            my $backupCfgXmlDir = "$backupRootDir/vm-config-xmls";
-            my $backupDiskDir = "$backupRootDir/vm-disk-files";
-            script_run "mkdir -p $backupCfgXmlDir; mkdir -p $backupDiskDir";
-            script_run "cp $vm_xml_dir/$guest.xml $backupCfgXmlDir";
-            script_run "ls -l $backupCfgXmlDir";
-            $local_guest_image = $backupDiskDir . $local_guest_image;
-        }
-        script_run "[ -d `dirname $local_guest_image` ] || mkdir -p `dirname $local_guest_image`";
-        $rc = script_run("cp $mount_point/$remote_guest_disk $local_guest_image", 300);    #it took 75 seconds copy from vh016 to vh001
-        script_run "ls -l $local_guest_image";
-        if ($rc) {
-            record_info('Softfail', "Failed to download: $remote_guest_disk", result => 'softfail');
-            next;
-        }
-        $guest_count++;
+        record_info('Softfail', "$guest_asset_name not found!", result => 'softfail') unless grep $guest, @downloaded_guests;
     }
 
-    # umount
-    script_run("umount $mount_point");
-
-    return $guest_count;
+    record_info("Downloaded guests", "@downloaded_guests") if @downloaded_guests;
+    return @downloaded_guests;
 }
 
 sub is_installed_equal_upgrade_major_release {
@@ -652,12 +636,14 @@ sub collect_host_and_guest_logs {
     script_output("chmod +x ~/virt_logs_collector.sh && ~/virt_logs_collector.sh -l \"$host_extra_logs\" -g \"$guest_wanted\" -e \"$guest_extra_logs\"", 3600 / get_var('TIMEOUT_SCALE', 1), type_command => 1, proceed_on_failure => 1);
     save_screenshot;
 
+    send_key("ret");
     my $logs_fetching_script_url = data_url("virt_autotest/fetch_logs_from_guest.sh");
     script_output("curl -s -o ~/fetch_logs_from_guest.sh $logs_fetching_script_url", 180, type_command => 0, proceed_on_failure => 0);
     save_screenshot;
     script_output("chmod +x ~/fetch_logs_from_guest.sh && ~/fetch_logs_from_guest.sh -g \"$guest_wanted\" -e \"$guest_extra_logs\"", 1800, type_command => 1, proceed_on_failure => 1);
     save_screenshot;
 
+    send_key("ret");
     upload_logs("/tmp/virt_logs_all.tar.gz", log_name => "virt_logs_all$log_token.tar.gz", timeout => 600);
     upload_logs("/var/log/virt_logs_collector.log", log_name => "virt_logs_collector$log_token.log");
     upload_logs("/var/log/fetch_logs_from_guest.log", log_name => "fetch_logs_from_guest$log_token.log");
@@ -673,8 +659,12 @@ sub cleanup_host_and_guest_logs {
     $extra_logs_to_cleanup //= '';
 
     #Clean dhcpd and named services up explicity
-    if (get_var('VIRT_AUTOTEST') and !is_alp) {
-        script_run("brctl addbr br123;brctl setfd br123 0;ip addr add 192.168.123.1/24 dev br123;ip link set br123 up");
+    my ($os_running_version) = get_os_release;
+    if (get_var('VIRT_AUTOTEST') and $os_running_version < 16) {
+        my $bridge_name = "br123";
+        if (script_run("ip link show $bridge_name") != 0) {
+            script_run("brctl addbr $bridge_name;brctl setfd $bridge_name 0;ip addr add 192.168.123.1/24 dev $bridge_name;ip link set $bridge_name up");
+        }
         if (!get_var('VIRT_UNIFIED_GUEST_INSTALL')) {
             my @control_operation = ('restart');
             virt_autotest::utils::manage_system_service('dhcpd', \@control_operation);
@@ -737,16 +727,6 @@ sub is_developing_sles {
     }
     else {
         return 0;
-    }
-}
-
-#Detect whether SUT host is installed with scc registration
-sub is_registered_sles {
-    if (!get_var('SCC_REGISTER') || check_var('SCC_REGISTER', 'none') || check_var('SCC_REGISTER', '')) {
-        return 0;
-    }
-    else {
-        return 1;
     }
 }
 
