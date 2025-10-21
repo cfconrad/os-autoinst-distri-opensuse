@@ -1103,6 +1103,7 @@ sub check_logs {
     $cursor = "-c '$cursor'" if (length($cursor) > 0);
     my @units = qw(wickedd-nanny wickedd-dhcp4 wickedd-dhcp6 wicked wickedd);
     my $default_exclude = 'wickedd=process \d+ has not exited yet; now doing a blocking waitpid';
+    $default_exclude .= ',wickedd=ovs-vsctl\[\d+\]: ovs|\d+|db_ctl_base|ERR|no port named';
     $default_exclude .= ',wickedd-dhcp6=Link-local IPv6 address is marked duplicate:';
     $default_exclude .= ',wickedd-nanny=: device has been deleted';
     $default_exclude .= ',wickedd-dhcp4=unable to confirm lease';
