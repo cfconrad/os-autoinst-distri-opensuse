@@ -140,8 +140,9 @@ EOT
         } elsif (my $wicked_repo = get_var('WICKED_REPO')) {
             record_info('REPO', $wicked_repo);
             if ($wicked_repo =~ /suse\.de/ && script_run('rpm -qi ca-certificates-suse') == 1) {
-                zypper_call("ar --refresh https://download.opensuse.org/repositories/SUSE:/CA/openSUSE_Tumbleweed/SUSE:CA.repo");
-                zypper_call("--gpg-auto-import-keys -n in ca-certificates-suse");
+                my $repo_url = "https://download.opensuse.org/repositories/SUSE:/CA/";
+                zypper_ar($repo_url . generate_version('_') . '/', name => 'suse_ca', no_gpg_check => 1, priority => 60);
+                zypper_call("-n in ca-certificates-suse");
             }
             zypper_ar($wicked_repo, priority => 10, params => '-n wicked_repo', no_gpg_check => 1);
             my ($resolv_options, $repo_id) = (' --allow-vendor-change  --allow-downgrade ', 'wicked_repo');
