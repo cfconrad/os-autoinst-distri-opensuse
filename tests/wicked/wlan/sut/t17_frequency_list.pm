@@ -166,41 +166,33 @@ sub run {
     $self->netns_exec('ip addr add dev ' . $self->ref_ifc2() . ' ' . $self->ref_ip(bss => 1, netmask => 1));
     $self->restart_dhcp_server(ref_ifc => $self->ref_ifc2(), bss => 1) if ($self->use_dhcp());
 
+    # start hostapd
+    $self->hostapd_start($self->hostapd_conf());
+    $self->hostapd_start($self->hostapd_conf2(), name => 'hostapd.2');
 
     for my $ifcfg_wlan (wicked::wlan::__as_config_array($self->ifcfg_wlan_24())) {
-        # Start hostapd
-        $self->hostapd_start($self->hostapd_conf());
-        $self->hostapd_start($self->hostapd_conf2(), name => 'hostapd.2');
-
         $self->write_cfg('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $ifcfg_wlan->{config});
         $self->wicked_command('ifup', $self->sut_ifc);
         $self->wicked_command('ifstatus --verbose ', $self->sut_ifc);
 
-        # Check
+        # check
         $self->assert_sta_connected(ref_ifc => $self->ref_ifc());
         $self->assert_connection(ref_ifc => $self->ref_ifc(), timeout => $WAIT_SECONDS);
-
-
-        $self->hostapd_kill();
-        $self->hostapd_kill(name => 'hostapd.2');
     }
 
     for my $ifcfg_wlan (wicked::wlan::__as_config_array($self->ifcfg_wlan_5())) {
-        # Start hostapd
-        $self->hostapd_start($self->hostapd_conf());
-        $self->hostapd_start($self->hostapd_conf2(), name => 'hostapd.2');
-
         $self->write_cfg('/etc/sysconfig/network/ifcfg-' . $self->sut_ifc, $ifcfg_wlan->{config});
         $self->wicked_command('ifup', $self->sut_ifc);
+        $self->wicked_command('ifstatus --verbose ', $self->sut_ifc);
 
-        # Check
+        # check
         $self->assert_sta_connected(ref_ifc => $self->ref_ifc2());
         $self->assert_connection(bss => 1, ref_ifc => $self->ref_ifc2(), timeout => $WAIT_SECONDS);
-
-
-        $self->hostapd_kill();
-        $self->hostapd_kill(name => 'hostapd.2');
     }
+
+    # stop hostapd
+    $self->hostapd_kill();
+    $self->hostapd_kill(name => 'hostapd.2');
 }
 
 1;
