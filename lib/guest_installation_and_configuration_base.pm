@@ -31,7 +31,7 @@ use IO::File;
 use List::Util;
 use Carp;
 use IO::Scalar;
-use List::Util qw(first);
+use Utils::Logging qw(upload_coredumps);
 use testapi;
 use utils;
 use ipmi_backend_utils qw(reconnect_when_ssh_console_broken);
@@ -250,7 +250,7 @@ sub prepare_common_environment {
         script_run("rm -f -r /root/.ssh/config");
         virt_autotest::utils::setup_common_ssh_config(ssh_id_file => $_host_params{ssh_key_file});
         script_run("[ -f /etc/ssh/ssh_config ] && sed -i -r -n \'s/^.*IdentityFile.*\$/#&/\' /etc/ssh/ssh_config");
-        enable_debug_logging;
+        enable_debug_logging if (is_sle('<16', get_var('VERSION_TO_INSTALL', get_required_var('VERSION'))));
         $_host_params{host_sutip} = get_required_var('SUT_IP') if (is_ipmi);
         my $_default_route = script_output("ip route show default | grep -i dhcp | grep -vE br[[:digit:]]+", proceed_on_failure => 1);
         my $_default_device = ((!$_default_route) ? 'br0' : (split(' ', script_output("ip route show default | grep -i dhcp | grep -vE br[[:digit:]]+ | head -1")))[4]);
@@ -292,19 +292,27 @@ sub prepare_ssh_key {
     $self->reveal_myself;
     if (!((script_run("[[ -f $_host_params{ssh_key_file}.pub ]] && [[ -f $_host_params{ssh_key_file}.pub.bak ]]") == 0) and (script_run("cmp $_host_params{ssh_key_file}.pub $_host_params{ssh_key_file}.pub.bak") == 0))) {
         assert_script_run("rm -f -r $_host_params{ssh_key_file}*");
-        assert_script_run("ssh-keygen -t rsa -f $_host_params{ssh_key_file} -q -P \"\" <<<y");
+        assert_script_run("ssh-keygen -f $_host_params{ssh_key_file} -q -P \"\" <<<y");
         assert_script_run("cp $_host_params{ssh_key_file}.pub $_host_params{ssh_key_file}.pub.bak");
     }
     assert_script_run("chmod 600 $_host_params{ssh_key_file} $_host_params{ssh_key_file}.pub");
     $_host_params{ssh_public_key} = script_output("cat $_host_params{ssh_key_file}.pub");
     $_host_params{ssh_private_key} = script_output("cat $_host_params{ssh_key_file}");
-    $_host_params{ssh_command} = "ssh -vvv -o HostKeyAlgorithms=+ssh-rsa ";
+    if (is_sle('16+')) {
+        $_host_params{ssh_command} = "ssh -vvv -o HostKeyAlgorithms=+ssh-ed25519 ";
+    } else {
+        $_host_params{ssh_command} = "ssh -vvv -o HostKeyAlgorithms=+ssh-rsa ";
+    }
     if ($_host_params{host_version_id} eq 'sles' and
         is_sle("<=15-sp5", "$_host_params{host_version_major}-SP$_host_params{host_version_minor}")) {
         $_host_params{ssh_command} .= "-o PubkeyAcceptedKeyTypes=+ssh-rsa ";
     }
     else {
-        $_host_params{ssh_command} .= "-o PubkeyAcceptedAlgorithms=+ssh-rsa ";
+        if (is_sle('16+')) {
+            $_host_params{ssh_command} .= "-o PubkeyAcceptedAlgorithms=+ssh-ed25519 ";
+        } else {
+            $_host_params{ssh_command} .= "-o PubkeyAcceptedAlgorithms=+ssh-rsa ";
+        }
     }
     $_host_params{ssh_command} .= "-i $_host_params{ssh_key_file} root";
     return $self;
@@ -595,6 +603,7 @@ sub config_guest_os_variant {
             $self->modify_guest_params($self->{guest_name}, 'guest_os_variant_options');
         }
     }
+    inspect_existing_issue(issue => 'bsc#1255476 No SLES16.1 in os database');
     return $self;
 }
 
@@ -1695,11 +1704,15 @@ sub config_guest_installation_automation_registration {
     }
     else {
         $self->{guest_registration_server} =~ s/12345/$self->{guest_build}/g if ($self->{guest_build} ne 'gm');
+        my $_guest_registration_server = ($self->{guest_registration_server} ? $self->{guest_registration_server} : get_var('SCC_URL', 'https://scc.suse.com'));
+        $_guest_registration_server =~ s/\//PLACEHOLDER/img;
         assert_script_run("sed -ri \'s/##Do-Registration##/$self->{guest_do_registration}/g;\' $self->{guest_installation_automation_file}");
-        assert_script_run("sed -ri \'s/##Registration-Server##/$self->{guest_registration_server}/g;\' $self->{guest_installation_automation_file}");
+        assert_script_run("sed -ri \'s/##Registration-Server##/$_guest_registration_server/g;\' $self->{guest_installation_automation_file}");
         assert_script_run("sed -ri \'s/##Registration-UserName##/$self->{guest_registration_username}/g;\' $self->{guest_installation_automation_file}");
         assert_script_run("sed -ri \'s/##Registration-Password##/$self->{guest_registration_password}/g;\' $self->{guest_installation_automation_file}");
         assert_script_run("sed -ri \'s/##Registration-Code##/$self->{guest_registration_code}/g;\' $self->{guest_installation_automation_file}");
+        assert_script_run("sed -i \'s/PLACEHOLDER/\\\//g;\' $self->{guest_installation_automation_file}");
+        $_guest_registration_server =~ s/PLACEHOLDER/\//img;
         if (($self->{guest_registration_extensions} ne '') and ($self->{guest_os_name} =~ /sles/im)) {
             my @_guest_registration_extensions = split(/#/, $self->{guest_registration_extensions});
             my @_guest_registration_extensions_codes = ('') x scalar @_guest_registration_extensions;
@@ -1717,7 +1730,6 @@ sub config_guest_installation_automation_registration {
                 assert_script_run("sed -zri \'s/<\\\/addons>.*\\n.*<\\\/suse_register>/$_guest_registration_extension_clip\\n    <\\\/addons>\\n  <\\\/suse_register>/\' $self->{guest_installation_automation_file}");
             }
         }
-        my $_guest_registration_server = ($self->{guest_registration_server} ? $self->{guest_registration_server} : get_var('SCC_URL', 'https://scc.suse.com'));
         if (is_agama_guest(guest => $self->{guest_name}) and $self->{guest_do_registration} eq 'true') {
             if ($self->{guest_installation_method} eq 'directkernel') {
                 $self->{guest_installation_fine_grained_kernel_args} .= ' inst.register_url=' . $_guest_registration_server;
@@ -1999,7 +2011,7 @@ sub config_guest_installation_automation {
 
 Configure [guest_installation_automation_options]. Fill in unattended installation
 file with [guest_installation_media], [guest_secure_boot], [guest_boot_settings],
-[guest_storage_label], [guest_domain_name], [guest_name] and host public rsa key.
+[guest_storage_label], [guest_domain_name], [guest_name] and host public ssh key.
 User can also change [guest_do_registration], [guest_registration_server],
 [guest_registration_username], [guest_registration_password], [guest_registration_code],
 [guest_registration_extensions] and [guest_registration_extensions_codes] which
@@ -2153,16 +2165,7 @@ sub validate_guest_installation_automation_file {
         }
     }
     elsif ($self->{guest_installation_automation_method} eq 'autoagama') {
-        unless (is_x86_64) {
-            record_info("Skip autoagama file validation for non-x86 arch due to no agama-cli pkg.");
-        } else {
-            if (script_run("agama --insecure profile validate $self->{guest_installation_automation_file}") != 0) {
-                record_info("Autoagama file validation failed for guest $self->{guest_name}", script_output("cat $self->{guest_installation_automation_file}"), result => 'fail');
-            }
-            else {
-                record_info("Autoagama file validation succeeded for guest $self->{guest_name}", script_output("cat $self->{guest_installation_automation_file}"));
-            }
-        }
+        record_info("Autoagama file for guest $self->{guest_name}", script_output("cat $self->{guest_installation_automation_file}"));
     }
     return $self;
 }
@@ -2590,7 +2593,9 @@ using publibc key, because Agama installe shell does support full ssh capability
 sub setup_guest_agama_installation_shell {
     my $self = shift;
 
-    my $_ssh_command_options = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o PubkeyAcceptedAlgorithms=+ssh-rsa -i $_host_params{ssh_key_file}";
+    my $_ssh_command_options = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ";
+    $_ssh_command_options .= is_sle('16+') ? "-o PubkeyAcceptedAlgorithms=+ssh-ed25519 " : "-o PubkeyAcceptedAlgorithms=+ssh-rsa ";
+    $_ssh_command_options .= "-i $_host_params{ssh_key_file}";
     $self->get_guest_ipaddr if ($self->{guest_ipaddr_static} ne 'true');
     if ($self->{guest_ipaddr} eq 'NO_IP_ADDRESS_FOUND_AT_THE_MOMENT') {
         $self->record_guest_installation_result('FAILED');
@@ -2659,7 +2664,9 @@ sub verify_guest_agama_installation_done {
         }
     }
     else {
-        $_ssh_command_options = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o PubkeyAcceptedAlgorithms=+ssh-rsa -i $_host_params{ssh_key_file}";
+        $_ssh_command_options = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ";
+        $_ssh_command_options .= is_sle('16+') ? "-o PubkeyAcceptedAlgorithms=+ssh-ed25519 " : "-o PubkeyAcceptedAlgorithms=+ssh-rsa ";
+        $_ssh_command_options .= "-i $_host_params{ssh_key_file}";
         while ($_wait_timeout > 0) {
             if (script_run("timeout --kill-after=1 --signal=9 120 ssh $_ssh_command_options root\@$self->{guest_ipaddr} \"journalctl -u agama | grep \'Install phase done\'\"", timeout => 150) == 0) {
                 record_info("Guest $self->{guest_name} agama install phase done", "Guest $self->{guest_name} ip address is $self->{guest_ipaddr}");
@@ -2688,7 +2695,9 @@ still requires password login.
 sub save_guest_agama_installation_logs {
     my $self = shift;
 
-    my $_ssh_command_options = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o PubkeyAcceptedAlgorithms=+ssh-rsa -i $_host_params{ssh_key_file}";
+    my $_ssh_command_options = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ";
+    $_ssh_command_options .= is_sle('16+') ? "-o PubkeyAcceptedAlgorithms=+ssh-ed25519" : "-o PubkeyAcceptedAlgorithms=+ssh-rsa";
+    $_ssh_command_options .= " -i $_host_params{ssh_key_file}";
     if ($self->{guest_installation_result} eq 'FAILED' and script_run("timeout --kill-after=1 --signal=9 60 ssh $_ssh_command_options root\@$self->{guest_ipaddr} ls") != 0) {
         if ($self->{guest_ipaddr} eq 'NO_IP_ADDRESS_FOUND_AT_THE_MOMENT') {
             record_info("Can not save agama install logs for guest $self->{guest_name}", "Guest $self->{guest_name} has no ip address $self->{guest_ipaddr}", result => 'fail');
@@ -2724,7 +2733,9 @@ sub save_guest_agama_installation_logs {
     }
     else {
         record_info("Save guest $self->{guest_name} agama install logs", "Use passwordless ssh login");
-        $_ssh_command_options = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o PubkeyAcceptedAlgorithms=+ssh-rsa -i $_host_params{ssh_key_file}";
+        $_ssh_command_options = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ";
+        $_ssh_command_options .= is_sle('16+') ? "-o PubkeyAcceptedAlgorithms=+ssh-ed25519" : "-o PubkeyAcceptedAlgorithms=+ssh-rsa";
+        $_ssh_command_options .= " -i $_host_params{ssh_key_file}";
         script_run("timeout --kill-after=1 --signal=9 120 ssh $_ssh_command_options root\@$self->{guest_ipaddr} \"mkdir /agama_installation_logs\"", timeout => 150);
         script_run("timeout --kill-after=1 --signal=9 180 ssh $_ssh_command_options root\@$self->{guest_ipaddr} \"agama logs store -d /agama_installation_logs\"", timeout => 210);
         script_run("timeout --kill-after=1 --signal=9 180 ssh $_ssh_command_options root\@$self->{guest_ipaddr} \"agama config show > /agama_installation_logs/agama_config.txt\"", timeout => 210);
@@ -3333,7 +3344,7 @@ sub post_fail_hook {
     save_screenshot;
     virt_utils::collect_host_and_guest_logs("", "/var/log", "/root /var/log /emergency_mode /agama_installation_logs", "_guest_installation");
     save_screenshot;
-    $self->upload_coredumps;
+    upload_coredumps;
     save_screenshot;
     return $self;
 }

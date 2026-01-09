@@ -10,7 +10,6 @@
 # Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'publiccloud::basetest';
-use Feature::Compat::Try;
 use version_utils;
 use registration;
 use testapi;
@@ -27,14 +26,15 @@ sub run {
     wait_quit_zypper_pc($args->{my_instance});
 
     registercloudguest($args->{my_instance}) if (is_byos() || get_var('PUBLIC_CLOUD_FORCE_REGISTRATION'));
-    try {
-        register_addons_in_pc($args->{my_instance});
-    } catch ($e) {
-        force_soft_failure 'bsc#1245651' if $e =~ /bsc#1245651/;
-    }
+    register_addons_in_pc($args->{my_instance});
+    # Double confirm system is correctly registered, and quit earlier if anything wrong
+    # see bsc#1253777, we may need have to rerun the failed job in this case
+    record_info('Check registration status');
+    my $reg_status = $args->{my_instance}->ssh_script_output("sudo SUSEConnect -s");
+    die "System is not correctly registered" if ($reg_status =~ /Not Registered/m);
     # Since SLE 15 SP6 CHOST images don't have curl and we need it for testing
     if (is_sle('>15-SP5') && is_container_host()) {
-        $args->{my_instance}->ssh_assert_script_run('sudo zypper -n in --force-resolution -y curl');
+        $args->{my_instance}->zypper_call_remote("in --force-resolution -y curl");
     }
 }
 

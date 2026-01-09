@@ -1,8 +1,7 @@
 package susedistribution;
+use Mojo::Base -strict, -signatures;
 use base 'distribution';
 use serial_terminal ();
-use strict;
-use warnings;
 use Sys::Hostname qw(hostname);
 use Utils::Architectures;
 use utils qw(
@@ -16,8 +15,8 @@ use utils qw(
   type_string_very_slow
   zypper_call
 );
-use version_utils qw(is_hyperv_in_gui is_sle is_leap is_svirt_except_s390x is_tumbleweed is_opensuse is_hyperv is_plasma6 is_public_cloud is_agama);
-use x11utils qw(desktop_runner_hotkey ensure_unlocked_desktop x11_start_program_xterm default_gui_terminal);
+use version_utils qw(is_hyperv_in_gui is_sle is_leap is_svirt_except_s390x is_tumbleweed is_hyperv is_plasma6 is_public_cloud is_agama);
+use x11utils qw(desktop_runner_hotkey ensure_unlocked_desktop x11_start_program_xterm default_gui_terminal close_gui_terminal);
 use Utils::Backends;
 
 use backend::svirt qw(SERIAL_TERMINAL_DEFAULT_DEVICE SERIAL_TERMINAL_DEFAULT_PORT SERIAL_USER_TERMINAL_DEFAULT_DEVICE SERIAL_USER_TERMINAL_DEFAULT_PORT);
@@ -198,8 +197,8 @@ sub init_desktop_runner {
     $timeout //= 30;
     my $hotkey = desktop_runner_hotkey;
 
-    # Force krunner to run single words as shell command (see also kde#477794)
-    $program .= ' ;' if (is_plasma6 && $program !~ /\s/);
+    # Force krunner to run the input as shell command (see also kde#477794)
+    $program .= ' ;' if is_plasma6;
 
     send_key($hotkey);
 
@@ -345,15 +344,7 @@ sub ensure_installed {
     quit_packagekit;
     zypper_call "in $pkglist";
     wait_still_screen 1;
-    send_key("alt-f4");    # close terminal
-
-    if (check_screen 'terminal-close-window', timeout => 30) {
-        wait_screen_change {
-            testapi::assert_and_click('terminal-close-window');
-        };
-    }
-
-    assert_screen 'generic-desktop' if is_opensuse;
+    close_gui_terminal;
 }
 
 =head2 script_sudo
@@ -371,6 +362,7 @@ sub script_sudo {
             $prog .= " > /dev/$testapi::serialdev" unless is_serial_terminal();
         }
     }
+    wait_still_screen(2, 4) if is_aarch64;
     enter_cmd "clear";    # poo#13710
     enter_cmd "su -c \'$prog\'", max_interval => 125;
     handle_password_prompt unless ($testapi::username eq 'root');
@@ -820,16 +812,38 @@ sub get_console_info {
     return ($name, $user, $type);
 }
 
+=head2 disable_key_repeat_if_applicable
+
+  disable_key_repeat_if_applicable()
+
+Calls disable_key_repeat from the base class implementation if applicable with
+backward-compatible workaround.
+
+s390x excluded due to "kbdrate: Failed waiting for kbd controller!" error.
+
+Applies backward compatibility for os-autoinst below interface version 48.
+=cut
+
+sub disable_key_repeat_if_applicable ($self) {
+    return undef if is_s390x;
+    return $self->disable_key_repeat() if exists &distribution::disable_key_repeat;
+
+    # backward compatible workaround for os-autoinst below interface version
+    # 48. Can be eventually removed if relying on an infrastructure recent
+    # enough.
+    return enter_cmd('kbdrate -s -d99999');
+}
+
 =head2 activate_console
 
-  activate_console($console [, [ensure_tty_selected => 0|1] [, skip_set_standard_prompt => 0|1] [, skip_setterm => 0|1] [, timeout => $timeout]])
+  activate_console($console [, [ensure_tty_selected => 0|1] [, skip_set_standard_prompt => 0|1] [, skip_setterm => 0|1] [, skip_disable_key_repeat => 0|1] [, timeout => $timeout]])
 
 Callback whenever a console is selected for the first time. Accepts arguments
 provided to select_console().
 
-C<skip_set_standard_prompt> and C<skip_setterm> arguments skip respective routines,
-e.g. if you want select_console() without addition console setup. Then, at some
-point, you should set it on your own.
+C<skip_set_standard_prompt>, C<skip_setterm> and C<skip_disable_key_repeat>
+arguments skip respective routines, e.g. if you want select_console() without
+addition console setup. Then, at some point, you should set it on your own.
 
 Option C<ensure_tty_selected> ensures TTY is selected.
 
@@ -903,6 +917,7 @@ sub activate_console {
             $self->set_standard_prompt($user, skip_set_standard_prompt => $args{skip_set_standard_prompt});
             assert_screen $console;
         }
+        $self->disable_key_repeat_if_applicable() unless $args{skip_disable_key_repeat};
     }
     elsif ($type =~ /^(virtio-terminal|sut-serial)$/) {
         serial_terminal::login($user, $self->prompt_for_user($user));

@@ -106,11 +106,6 @@ sub load_secret_tests {
     loadtest('containers/secret', run_args => $run_args, name => 'secret_' . $run_args->{runtime});
 }
 
-sub load_buildah_tests {
-    my ($run_args) = @_;
-    loadtest('containers/buildah', run_args => $run_args, name => 'buildah_' . $run_args->{runtime});
-}
-
 sub load_image_tests_docker {
     my ($run_args) = @_;
     load_image_test($run_args);
@@ -159,6 +154,8 @@ sub load_host_tests_podman {
     unless (is_staging || is_transactional || is_sle("<15-sp4")) {
         loadtest('containers/registry', run_args => $run_args, name => $run_args->{runtime} . "_registry");
     }
+    # container_suseconnect requires access to IBS and thus cannot run in PublicCloud (poo#193090)
+    loadtest('containers/container_suseconnect', run_args => $run_args, name => $run_args->{runtime} . "_suseconnect") if (is_sle("15-sp6+") && !is_public_cloud && !get_var("BETA"));
     loadtest 'containers/podman_bci_systemd';
     loadtest 'containers/podman_pods';
     # CNI is the default network backend on SLEM<6 and SLES<15-SP6. It is still available on later products as a dependency for docker.
@@ -169,10 +166,9 @@ sub load_host_tests_podman {
     # IPv6 is not available on Azure
     loadtest 'containers/podman_ipv6' if (is_public_cloud && is_sle('>=15-SP5') && !is_azure);
     loadtest 'containers/podman_netavark' unless (is_staging || is_ppc64le);
-    loadtest('containers/skopeo', run_args => $run_args, name => $run_args->{runtime} . "_skopeo") unless (is_sle('<15') || is_sle_micro('<5.5'));
+    loadtest 'containers/skopeo' unless (is_sle('<15') || is_sle_micro('<5.5'));
     loadtest 'containers/podman_quadlet' unless (is_staging || is_leap("<16") || is_sle("<16") || is_sle_micro("<6.1"));
     load_secret_tests($run_args);
-    load_volume_tests($run_args);
     # https://github.com/containers/podman/issues/5732#issuecomment-610222293
     # exclude rootless podman on public cloud because of cgroups2 special settings
     unless (is_openstack || is_public_cloud) {
@@ -180,7 +176,8 @@ sub load_host_tests_podman {
         loadtest 'containers/podman_remote' if (is_sle('>=15-SP3') || is_sle_micro('5.5+') || is_tumbleweed);
     }
     # Buildah is not available in SLE Micro, MicroOS and staging projects
-    load_buildah_tests($run_args) unless (is_sle('<15') || is_sle_micro || is_microos || is_leap_micro || is_staging);
+    loadtest('containers/buildah', run_args => $run_args, name => $run_args->{runtime} . "_buildah") unless (is_sle('<15') || is_sle_micro || is_microos || is_leap_micro || is_staging);
+    load_volume_tests($run_args);
     load_compose_tests($run_args);
     loadtest('containers/seccomp', run_args => $run_args, name => $run_args->{runtime} . "_seccomp") unless is_sle('<15');
     loadtest('containers/isolation', run_args => $run_args, name => $run_args->{runtime} . "_isolation") unless (is_public_cloud || is_transactional);
@@ -190,6 +187,8 @@ sub load_host_tests_podman {
 sub load_host_tests_docker {
     my ($run_args) = @_;
     load_container_engine_test($run_args);
+    # container_suseconnect requires access to IBS and thus cannot run in PublicCloud (poo#193090)
+    loadtest('containers/container_suseconnect', run_args => $run_args, name => $run_args->{runtime} . "_suseconnect") if (is_sle("15-sp6+") && !is_public_cloud);
     # In Public Cloud we don't have internal resources
     load_image_test($run_args) unless is_public_cloud;
     load_third_party_image_test($run_args);
@@ -205,9 +204,6 @@ sub load_host_tests_docker {
     unless (is_transactional || is_public_cloud || is_sle('<15-SP4') || check_var("CONTAINERS_DOCKER_FLAVOUR", "stable")) {
         loadtest('containers/isolation', run_args => $run_args, name => $run_args->{runtime} . "_isolation");
     }
-    loadtest('containers/skopeo', run_args => $run_args, name => $run_args->{runtime} . "_skopeo") unless (is_sle('<15') || is_sle_micro('<5.5'));
-    load_buildah_tests($run_args) unless (is_sle('<15') || is_sle_micro || is_microos || is_leap_micro || is_staging);
-    load_volume_tests($run_args);
     load_compose_tests($run_args);
     loadtest('containers/seccomp', run_args => $run_args, name => $run_args->{runtime} . "_seccomp") unless is_sle('<15');
     # The docker-rootless-extras package is only available on SLES 15-SP4+
@@ -216,6 +212,7 @@ sub load_host_tests_docker {
         # select_user_serial_terminal is broken on public cloud
         loadtest 'containers/rootless_docker' unless (is_public_cloud);
     }
+    load_volume_tests($run_args);
     # Expected to work anywhere except of real HW backends, PC and Micro
     unless (is_generalhw || is_ipmi || is_public_cloud || is_openstack || is_sle_micro || is_microos || is_leap_micro || (is_sle('=12-SP5') && is_aarch64)) {
         loadtest 'containers/validate_btrfs';
@@ -286,6 +283,7 @@ sub update_host_and_publish_hdd {
         loadtest 'boot/boot_to_desktop';
         loadtest 'containers/update_host';
         loadtest 'containers/bci_prepare';
+        loadtest 'containers/k3s_helm_install' if get_var('VERSION', '') =~ /Leap16/;
     }
     loadtest 'shutdown/cleanup_before_shutdown' if is_s390x;
     loadtest 'shutdown/shutdown';
@@ -321,9 +319,6 @@ sub load_helm_chart_tests {
 sub load_container_tests {
     my $runtime = get_required_var('CONTAINER_RUNTIMES');
 
-    # Workaround while we use 15.99 for SLE 16 maintenance
-    set_var('VERSION', '16.0') if (check_var('VERSION', '15.99'));
-
     if (get_var('CONTAINER_UPDATE_HOST')) {
         update_host_and_publish_hdd();
         return;
@@ -334,6 +329,10 @@ sub load_container_tests {
         loadtest 'installation/bootloader_zkvm' if is_s390x;
         # On Public Cloud we're already booted in the SUT
         loadtest 'boot/boot_to_desktop' unless is_public_cloud;
+    }
+
+    if (is_sle('16.0+') && get_var('FLAVOR', '') =~ /increments|staging/i) {
+        loadtest 'qa_automation/patch_and_reboot';
     }
 
     if (my $container_tests = get_var('CONTAINER_TESTS', '')) {

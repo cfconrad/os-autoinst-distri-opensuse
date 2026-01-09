@@ -39,13 +39,13 @@ schedule:
   - installation/first_boot
   - console/system_prepare
   - ha/check_hae_active.py
+  - '{{maintenance}}'
   - ha/wait_barriers
   - console/consoletest_setup
   - console/check_os_release
   - console/hostname
   - ha/ha_sle15_workarounds
   - ha/firewall_disable
-  - ha/iscsi_client
   - ha/iscsi_client_setup
   - ha/setup_hosts_and_luns
   - ha/watchdog
@@ -99,3 +99,7 @@ conditional_schedule:
     HA_GRACEFUL_SHUTDOWN:
       1:
         - ha/graceful_shutdown
+  maintenance:
+    QAM_INCI:
+      1:
+        - qa_automation/patch_and_reboot

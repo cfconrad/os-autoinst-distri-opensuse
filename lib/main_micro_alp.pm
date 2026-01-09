@@ -46,6 +46,7 @@ sub load_config_tests {
     loadtest 'transactional/install_updates' if (is_sle_micro && is_released);
     loadtest 'containers/k3s_helm_install' if (get_var('CONTAINER_UPDATE_HOST') && is_sle_micro('6.0+') && (is_x86_64 || is_aarch64));
     loadtest 'containers/bci_prepare' if (get_var('CONTAINER_UPDATE_HOST') && get_var('BCI_PREPARE'));
+    loadtest 'microos/services_enabled' if (is_transactional && !(check_var("FLAVOR", "Container-Image-Updates")));
 }
 
 sub load_boot_from_disk_tests {
@@ -77,7 +78,6 @@ sub load_boot_from_disk_tests {
         }
     }
 
-    loadtest 'installation/system_workarounds' if (is_aarch64 && is_microos);
     loadtest 'transactional/host_config';
     replace_opensuse_repos_tests if is_repo_replacement_required;
 }
@@ -205,7 +205,6 @@ sub load_common_tests {
     loadtest 'microos/libzypp_config';
     loadtest 'microos/image_checks' if (is_image || is_selfinstall);
     loadtest 'microos/one_line_checks';
-    loadtest 'microos/services_enabled';
     # MicroOS -old images use wicked, but cockpit-wicked is no longer supported in TW
     loadtest 'microos/cockpit_service' unless (is_microos('Tumbleweed') && is_staging) || (is_microos('Tumbleweed') && get_var('HDD_1', '') =~ /-old/) || !get_var('SCC_REGISTER');
     loadtest 'console/perl_bootloader' unless (is_bootloader_sdboot || is_bootloader_grub2_bls);
@@ -223,7 +222,6 @@ sub load_common_tests {
 
 
 sub load_transactional_tests {
-    loadtest 'transactional/disable_timers';
     loadtest 'transactional/filesystem_ro';
     loadtest 'transactional/trup_smoke';
     loadtest 'microos/patterns' if is_sle_micro;
@@ -314,7 +312,7 @@ sub load_slem_on_pc_tests {
         # SLEM basic test
         loadtest("boot/boot_to_desktop");
         loadtest("publiccloud/prepare_instance", run_args => $args);
-        loadtest("publiccloud/registration", run_args => $args);
+        loadtest("publiccloud/registration", run_args => $args) unless (get_var('PUBLIC_CLOUD_IGNORE_UNREGISTERED'));
         # 2 next modules of pubcloud needed for sle-micro incidents/repos verification
         if (get_var('PUBLIC_CLOUD_QAM', 0)) {
             loadtest("publiccloud/transfer_repos", run_args => $args) unless (check_var('PUBLIC_CLOUD_SKIP_MU', 1));
@@ -342,6 +340,7 @@ sub load_slem_on_pc_tests {
             loadtest("publiccloud/ssh_interactive_end", run_args => $args);
         } else {
             loadtest "publiccloud/check_services", run_args => $args;
+            loadtest("publiccloud/slem_upgrade_next", run_args => $args) if (get_var('PUBLIC_CLOUD_MIGRATE_SLEM'));
             loadtest("publiccloud/slem_basic", run_args => $args);
         }
     }
@@ -362,6 +361,11 @@ sub load_xfstests_tests {
         loadtest 'xfstests/partition';
         loadtest 'xfstests/run';
     }
+}
+
+sub load_workaround_tests {
+    loadtest 'installation/system_workarounds' if (is_aarch64 && is_microos);
+    loadtest 'transactional/disable_timers' if is_transactional;
 }
 
 sub load_tests {
@@ -427,6 +431,7 @@ sub load_tests {
     }
 
     load_config_tests;
+    load_workaround_tests;
 
     if (is_container_test || check_var('SYSTEM_ROLE', 'container-host')) {
         if (is_microos) {

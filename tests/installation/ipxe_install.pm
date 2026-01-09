@@ -13,7 +13,7 @@ use utils;
 use testapi;
 use bmwqemu;
 use ipmi_backend_utils;
-use version_utils qw(is_upgrade is_tumbleweed is_sle is_leap is_sle_micro is_agama);
+use version_utils qw(is_upgrade is_tumbleweed is_sle is_leap is_sle_micro is_agama is_transactional);
 use bootloader_setup 'prepare_disks';
 use Utils::Architectures;
 use Utils::Backends qw(is_ipmi is_qemu);
@@ -83,8 +83,16 @@ sub set_bootscript {
     if (is_disk_image) {
         $install = "rd.kiwi.install.image=" . get_required_var('MIRROR_HTTP') . "/";
         $install .= get_var('HDD_1') ? get_var('HDD_1') : get_required_var('INSTALL_HDD_IMAGE');
-        $kernel .= "/pxeboot.$distri.$arch-$version.kernel";
-        $initrd .= "/pxeboot.$distri.$arch-$version.initrd";
+        if (is_sle('>=16.1')) {
+            if (is_transactional) {
+                $kernel .= "/pxeboot." . uc($distri) . "S-$version-Transactional.$arch-$version.0.kernel";
+                $initrd .= "/pxeboot." . uc($distri) . "S-$version-Transactional.$arch-$version.0.initrd";
+            }
+        }
+        else {
+            $kernel .= "/pxeboot.$distri.$arch-$version.kernel";
+            $initrd .= "/pxeboot.$distri.$arch-$version.initrd";
+        }
     } elsif ($arch eq 'aarch64') {
         $kernel .= '/boot/aarch64/linux';
         $initrd .= '/boot/aarch64/initrd';
@@ -136,10 +144,7 @@ sub set_bootscript_agama {
     my $host = get_required_var('SUT_IP');
     my $arch = get_required_var('ARCH');
     my $mirror_http = get_required_var('MIRROR_HTTP');
-    my $openqa_hostname = get_var('OPENQA_HOSTNAME', 'openqa.suse.de');
-    my $agama_iso = get_required_var('ISO');
-    my $agama_live_iso = get_var("AGAMA_LIVE_ISO_URL", "http://$openqa_hostname/assets/iso/$agama_iso");
-    my $install = "root=live:$agama_live_iso live.password=$testapi::password";
+    my $install = "root=live:$mirror_http/LiveOS/squashfs.img live.password=$testapi::password";
     my $kernel = "$mirror_http/boot/$arch/loader/linux";
     my $initrd = "$mirror_http/boot/$arch/loader/initrd";
 
@@ -197,7 +202,7 @@ sub set_bootscript_agama_cmdline_extra {
     #   1. Any install repos are used
     #   2. Register the system via scc, see https://bugzilla.suse.com/show_bug.cgi?id=1246600
     unless (get_var('INST_INSTALL_URL')) {
-        if (my $register_url = get_var('SCC_URL')) {
+        if (my $register_url = get_var('HOST_SCC_URL', get_var('SCC_URL'))) {
             $cmdline_extra .= "inst.register_url=$register_url " unless $register_url =~ /https:\/\/scc.suse.com/;
         }
     }
@@ -213,6 +218,7 @@ sub set_bootscript_agama_cmdline_extra {
     $cmdline_extra .= ' ' . get_var('AGAMA_NETWORK_PARAMS', '');
     # Pass specific CPU parameters for a particular type of tests
     $cmdline_extra .= ' ' . get_var('CPU_BOOTPARAMS', '') if get_var('ALLOW_CPU_BOOTPARAMS', '');
+    $cmdline_extra .= ' arm64.nompam' if (is_aarch64 and get_var('NO_MPAM'));
 
     return $cmdline_extra;
 }
@@ -354,7 +360,7 @@ sub run {
     select_console 'sol', await_console => 0;
 
     if (is_disk_image) {
-        check_screen([qw(load-linux-kernel load-initrd)], 120 / get_var('TIMEOUT_SCALE', 1));
+        check_screen([qw(load-linux-kernel load-initrd)]);
         return;
     }
 

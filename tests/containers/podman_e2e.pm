@@ -3,8 +3,8 @@
 # Copyright SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
-# Packages: python3-docker & python3-podman
-# Summary: Test podman & docker python packages
+# Packages: podman
+# Summary: Test podman e2e
 # Maintainer: QE-C team <qa-c@suse.de>
 
 use Mojo::Base 'containers::basetest', -signatures;
@@ -42,6 +42,11 @@ sub setup {
     # Make /run/secrets directory available on containers
     run_command "echo /var/lib/empty:/run/secrets >> /etc/containers/mounts.conf";
 
+    if (get_var("ROOTLESS")) {
+        switch_to_user;
+        run_command "podman system service --timeout=0 &";
+    }
+
     $version = script_output q(podman --version | awk '{ print $3 }');
     $version = "v$version";
     record_info("version", $version);
@@ -58,9 +63,7 @@ sub setup {
 sub run {
     my ($self, $args) = @_;
     select_serial_terminal;
-
     $self->setup;
-    select_serial_terminal;
 
     assert_script_run "cd /var/tmp/podman";
 
@@ -76,21 +79,26 @@ sub run {
     my $env = join " ", map { "$_=$env{$_}" } sort keys %env;
 
     # mapping of known expected failures
-    my @xfails = ();
-    unless (is_tumbleweed) {
+    my @xfails = (
+        # Fails with "registry.access.redhat.com/*openshift*"
+        'Libpod Suite::[It] Podman search podman search with wildcards',
+        'Libpod Suite::[It] Podman run memory podman run memory test on oomkilled container',
+    );
+    push @xfails, (
         # Fixed in podman 5.6.1:
         # https://bugzilla.suse.com/show_bug.cgi?id=1249050 - podman passes volume options as bind mount options to runtime
-        push @xfails, (
-            'Libpod Suite::[It] Podman run with volumes podman run with --mount and named volume with driver-opts',
-            'Libpod Suite::[It] Podman run with volumes podman named volume copyup',
-        );
-    }
+        'Libpod Suite::[It] Podman run with volumes podman run with --mount and named volume with driver-opts',
+        'Libpod Suite::[It] Podman run with volumes podman named volume copyup',
+    ) unless (is_tumbleweed);
+    push @xfails, (
+        'Libpod Suite::[It] Verify podman containers.conf usage set .engine.remote=true',
+    ) if (get_var("ROOTLESS"));
 
     # Skip remoteintegration on SLES as it panics with:
     # Too many RemoteSocket collisions [PANICKED] Test Panicked
     my $default_targets = "localintegration";
-    $default_targets .= " remoteintegration" unless is_sle;
-    my @targets = split('\s+', get_var('PODMAN_TARGETS', $default_targets));
+    $default_targets .= " remoteintegration" unless (is_sle || get_var("ROOTLESS"));
+    my @targets = split('\s+', get_var('RUN_TESTS', $default_targets));
     foreach my $target (@targets) {
         run_command "env $env make $target &> $target.txt || true", timeout => 1800;
         script_run "mv report.xml $target.xml";
@@ -101,10 +109,14 @@ sub run {
 }
 
 sub post_fail_hook {
+    cleanup_podman;
+    run_command 'kill %1; kill -9 %1 || true';
     bats_post_hook;
 }
 
 sub post_run_hook {
+    cleanup_podman;
+    run_command 'kill %1; kill -9 %1 || true';
     bats_post_hook;
 }
 

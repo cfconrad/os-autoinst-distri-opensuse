@@ -22,6 +22,7 @@ use registration;
 use utils 'shorten_url';
 use version_utils qw(is_agama is_sle is_tumbleweed is_opensuse);
 use autoyast qw(parse_dud_parameter);
+use Yam::Agama::LiveIso qw(read_live_iso);
 
 use backend::console_proxy;
 
@@ -36,7 +37,7 @@ sub prepare_parmfile {
     my ($repo) = @_;
     my $params = '';
     $params .= " " . get_var('S390_NETWORK_PARAMS');
-    $params .= " " . get_var('EXTRABOOTPARAMS');
+    $params .= " " . get_var('EXTRABOOTPARAMS') if get_var('EXTRABOOTPARAMS');
 
     $params .= remote_install_bootmenu_params unless (get_var('AGAMA'));
 
@@ -56,7 +57,7 @@ sub prepare_parmfile {
             $params .= $root_line;
 
             # add mandatory boot params
-            $params .= ' cio_ignore=all,!condev,!0.0.0150';
+            $params .= ' cio_ignore=all,!condev,!0.0.0150,!0.0.0160';
             $params .= ' hvc_iucv=8';
             $params .= " live.password=$testapi::password";
 
@@ -301,6 +302,8 @@ sub run {
 
     select_console 'x3270';
     my $s3270 = console('x3270');
+
+    read_live_iso() if (is_agama);
 
     # Define memory to behave the same way as other archs
     # and to have the same configuration through all s390 guests

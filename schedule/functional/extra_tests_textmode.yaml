@@ -101,7 +101,6 @@ conditional_schedule:
         VERSION:
             'Tumbleweed':
                 - console/systemd_resolved
-                - console/parsec
                 - console/systemd_rpm_macros
                 - console/vsftpd
                 - console/year_2038_detection
@@ -177,6 +176,7 @@ schedule:
     - console/rust
     - console/shells
     - console/sudo
+    - console/run0
     - console/dstat
     - x11/evolution/evolution_prepare_servers
     - console/mutt

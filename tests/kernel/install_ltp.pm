@@ -12,14 +12,13 @@ use File::Basename 'basename';
 use LWP::Simple 'head';
 
 use testapi;
-use serial_terminal 'select_serial_terminal';
 use registration;
 use utils;
 use bootloader_setup qw(add_custom_grub_entries add_grub_cmdline_settings);
 use power_action_utils 'power_action';
 use repo_tools 'add_qa_head_repo';
 use upload_system_log;
-use version_utils qw(is_jeos is_opensuse is_released is_sle is_leap is_tumbleweed is_rt is_transactional is_sle_micro);
+use version_utils qw(is_jeos is_opensuse is_released is_sle is_leap is_tumbleweed is_rt is_transactional is_sle_micro is_bootloader_grub2_bls);
 use Utils::Architectures;
 use Utils::Systemd qw(systemctl disable_and_stop_service);
 use LTP::utils;
@@ -28,7 +27,6 @@ use rpi 'enable_tpm_slb9670';
 use bootloader_setup 'add_grub_xen_replace_cmdline_settings';
 use virt_autotest::utils 'is_xen_host';
 use Utils::Backends 'get_serial_console';
-use kdump_utils;
 use transactional;
 
 sub add_we_repo_if_available {
@@ -74,7 +72,6 @@ sub install_runtime_dependencies {
       audit
       bc
       binutils
-      bcachefs-tools
       btrfsprogs
       dosfstools
       e2fsprogs
@@ -82,11 +79,13 @@ sub install_runtime_dependencies {
       exfat-utils
       fuse-exfat
       ibmtss
+      keyutils
       lvm2
       net-tools
       net-tools-deprecated
       ntfsprogs
       numactl
+      openssl
       psmisc
       quota
       squashfs
@@ -183,11 +182,17 @@ sub install_selected_from_git {
 sub install_from_git {
     my $timeout = (is_aarch64 || is_s390x) ? 7200 : 1440;
     my $prefix = get_ltproot();
+    my $dir = get_var('LTP_GIT_DIR', '');
+
+    if ($dir) {
+        record_info("dir", $dir);
+        $dir = "-C $dir";
+    }
 
     prepare_ltp_git;
-    assert_script_run 'make -j$(getconf _NPROCESSORS_ONLN)', timeout => $timeout;
+    assert_script_run "make $dir -j\$(getconf _NPROCESSORS_ONLN)", timeout => $timeout;
     script_run 'export CREATE_ENTRIES=1';
-    assert_script_run 'make install', timeout => 360;
+    assert_script_run "make $dir install", timeout => 360;
     assert_script_run "find $prefix -name '*.run-test' > "
       . get_ltp_openposix_test_list_file();
 
@@ -252,8 +257,8 @@ sub run {
     my $self = shift;
     my $inst_ltp = get_var 'INSTALL_LTP';
     my $cmd_file = get_var('LTP_COMMAND_FILE');
-    my $grub_param = 'ignore_loglevel';
     my $is_ima = $cmd_file =~ m/^ima$/i;
+    my $grub_param;
 
     if ($inst_ltp !~ /(repo|git)/i) {
         die 'INSTALL_LTP must contain "git" or "repo"';
@@ -265,26 +270,13 @@ sub run {
 
     enable_tpm_slb9670 if ($is_ima && get_var('MACHINE') =~ /RPi/);
 
-    if (get_var('LTP_COMMAND_FILE') && check_var_array('LTP_DEBUG', 'crashdump')) {
-        select_serial_terminal;
-        configure_service(yast_interface => 'cli');
-    }
+    init_debug;    # calls select_serial_terminal
 
-    # Initialize VNC console now to avoid login attempts on frozen system
-    select_console('root-console') if get_var('LTP_DEBUG');
-    select_serial_terminal;
+    $grub_param = setup_kernel_logging;
     export_ltp_env;
 
     # cockpit login message sporadically breaks login in boot_ltp
     script_run '[ -f /etc/issue.d/cockpit.issue ] && rm /etc/issue.d/cockpit.issue';
-
-    if (script_output('cat /sys/module/printk/parameters/time') eq 'N') {
-        script_run('echo 1 > /sys/module/printk/parameters/time');
-        $grub_param .= ' printk.time=1';
-    }
-
-    # this will print /all/ kernel messages to the console. So in case kernel panic we will have some data to analyse
-    assert_script_run('echo 1 | tee /sys/module/printk/parameters/ignore_loglevel');
 
     # check kGraft if KGRAFT=1
     if (check_var("KGRAFT", '1') && !check_var('REMOVE_KGRAFT', '1')) {
@@ -329,16 +321,21 @@ sub run {
 
     $grub_param .= ' console=hvc0' if (get_var('ARCH') eq 'ppc64le');
     $grub_param .= ' console=ttysclp0' if (get_var('ARCH') eq 's390x');
-    if (!is_sle('<12') && defined $grub_param) {
+    if (!is_sle('<12') && defined $grub_param && !is_bootloader_grub2_bls) {
         add_grub_cmdline_settings($grub_param, update_grub => 1);
     }
 
-    add_custom_grub_entries if (is_sle('12+') || is_opensuse || is_transactional) && !is_jeos;
+    add_custom_grub_entries if (is_sle('12+') || is_opensuse || is_transactional) && !is_jeos && !is_bootloader_grub2_bls;
 
     if (is_xen_host) {
         my $version = get_var('VERSION');
         assert_script_run("grub2-set-default 'SLES ${version}, with Xen hypervisor'");
         my $serial_console = get_serial_console;
+        # If the default grub configuration does not include a XEN replace option, add an empty placeholder
+        my $grub_cfg = script_output('cat /etc/default/grub');
+        unless ($grub_cfg =~ /GRUB_CMDLINE_LINUX_XEN_REPLACE_DEFAULT/) {
+            assert_script_run('echo GRUB_CMDLINE_LINUX_XEN_REPLACE_DEFAULT=\"\" >> /etc/default/grub');
+        }
         add_grub_xen_replace_cmdline_settings("console=${serial_console},115200n", update_grub => 1);
     }
 
@@ -476,6 +473,11 @@ name or whatever else Git will accept. Usually this is set to a release, such as
 20160920, which will cause that release to be used. If not set, then the default
 clone action will be performed, which probably means the latest master branch
 will be used.
+
+=head2 LTP_GIT_DIR
+
+Compile from git only selected directory (speedup for debugging). Requires
+INSTALL_LTP=git.
 
 =head2 LTP_GIT_URL
 

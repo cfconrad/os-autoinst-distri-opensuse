@@ -16,12 +16,18 @@ use containers::common qw(install_packages);
 use Utils::Logging 'save_and_upload_log';
 
 my $port = 8000;
+my $test_image = "registry.opensuse.org/opensuse/nginx";
+my $test_url = "https://registry.opensuse.org/v2/";
 
 sub run_tests {
     my $ip_version = shift;
 
-    my $test_image = "registry.opensuse.org/opensuse/nginx";
-    my $test_url = "https://registry.opensuse.org/v2/";
+    # Get our IP address
+    my $try_addr = ($ip_version == 6) ? "2001:4860:4860::8888" : "8.8.8.8";
+    my $ip_addr = script_output "ip -$ip_version --json route get $try_addr | jq -Mr '.[0].prefsrc'", proceed_on_failure => 1;
+    return unless ($ip_addr =~ /^[0-9]/);
+    $ip_addr = "[$ip_addr]" if ($ip_version == 6);
+
     my $volumes = '-v $HOME/nginx/nginx.conf:/etc/nginx/nginx.conf:ro,z -v $HOME/nginx:/usr/share/nginx/html:ro,z';
     my $curl_opts = "-$ip_version -L";
     my @containers;
@@ -55,10 +61,6 @@ sub run_tests {
         assert_script_run "curl $curl_opts http://localhost:$container->{port}",
           fail_message => "failed IPv$ip_version localhost test for $container->{name}";
     }
-
-    my $iface = script_output "ip -$ip_version --json route list match default | jq -r '.[0].dev'";
-    my $ip_addr = script_output "ip -$ip_version --json addr show $iface | jq -r '.[0].addr_info[0].local'";
-    $ip_addr = "[$ip_addr]" if ($ip_version == 6);
 
     # Test connectivity to all containers on IP address
     for my $container (@containers) {
@@ -95,6 +97,10 @@ sub run {
     systemctl "enable --now docker";
 
     record_info("docker root", script_output("docker info"));
+    my $warnings = script_output("docker info -f '{{ range .Warnings }}{{ println . }}{{ end }}'");
+    record_info("WARNINGS daemon", $warnings) if $warnings;
+    $warnings = script_output("docker info -f '{{ range .ClientInfo.Warnings }}{{ println . }}{{ end }}'");
+    record_info("WARNINGS client", $warnings) if $warnings;
     record_info("docker version", script_output("docker version"));
     record_info("podman root", script_output("podman info"));
 
@@ -106,14 +112,17 @@ sub run {
 
     assert_script_run "echo '$testapi::username ALL=(ALL:ALL) NOPASSWD: ALL' | tee -a /etc/sudoers.d/nopasswd";
 
-    # Running podman as root with docker installed may be problematic as netavark uses nftables
-    # while docker still uses iptables.
-    # Use workaround suggested in:
-    # - https://fedoraproject.org/wiki/Changes/NetavarkNftablesDefault#Known_Issue_with_docker
-    # - https://docs.docker.com/engine/network/packet-filtering-firewalls/#docker-on-a-router
-    if (script_run("iptables -L -v | grep -q DOCKER") == 0) {
-        script_run "iptables -I DOCKER-USER -j ACCEPT";
-        script_run "ip6tables -I DOCKER-USER -j ACCEPT";
+    # Check for bsc#1255069
+    if (script_run "podman run --rm $test_image curl -sLf -m 10 $test_url") {
+        record_soft_failure "bsc#1255069 - docker denies podman access to network";
+
+        # Running podman as root with docker installed may be problematic as netavark uses nftables
+        # while docker still uses iptables.
+        # Use workaround suggested in:
+        # - https://fedoraproject.org/wiki/Changes/NetavarkNftablesDefault#Known_Issue_with_docker
+        # - https://docs.docker.com/engine/network/packet-filtering-firewalls/#docker-on-a-router
+        assert_script_run "iptables -I DOCKER-USER -j ACCEPT";
+        assert_script_run "ip6tables -I DOCKER-USER -j ACCEPT";
     }
 
     select_user_serial_terminal;

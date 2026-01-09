@@ -17,11 +17,13 @@ use Kselftests::parser;
 use LTP::WhiteList;
 use version_utils qw(is_sle);
 use base 'opensusebasetest';
-use File::Basename 'basename';
+use File::Basename qw(basename);
+use repo_tools qw(add_qa_head_repo);
+use registration qw(add_suseconnect_product get_addon_fullname);
+use utils qw(write_sut_file systemctl);
 
 our @EXPORT = qw(
-  install_from_git
-  install_from_repo
+  install_kselftests
   post_process_single
   post_process
   validate_kconfig
@@ -49,10 +51,67 @@ sub install_from_git
 
 sub install_from_repo
 {
-    my $repo = get_var('KSELFTEST_REPO', '');
-    zypper_call("ar -p 1 -f $repo kselftests");
-    zypper_call("--gpg-auto-import-keys ref");
-    zypper_call("install -y kselftests kernel-devel");
+    zypper_ar(get_required_var('KSELFTEST_REPO'), name => 'kselftests', priority => 1, no_gpg_check => 1);
+    zypper_call('in kselftests kernel-devel');
+
+    # When using the `kselftests` package from a repository, make sure the KMP subpackage containing the test kernel modules
+    # were built against the same kernel version the SUT is currently running.
+    my ($kver) = script_output('uname -r') =~ /(.*)-\w*/;
+    my ($kmpver) = script_output("rpm -q --qf '%{VERSION}\n' kselftests-kmp-default") =~ /\d*_k(.*)/;
+    die 'Could not extract kernel or KMP suffix' unless defined $kver && defined $kmpver;
+    $kver =~ s/_/-/g;
+    $kmpver =~ s/_/-/g;
+    die "Kernel and KMP versions mismatch: $kver != $kmpver" if $kver ne $kmpver;
+}
+
+sub install_dependencies
+{
+    my ($collection) = @_;
+
+    # cgroup tests do not require phub nor qa repo
+    if (is_sle() && $collection ne 'cgroup') {
+        add_qa_head_repo;
+        add_suseconnect_product(get_addon_fullname('phub'));
+    }
+
+    if ($collection eq 'net') {
+        my $netutils_repo = 'https://download.opensuse.org/repositories/network:/utilities/openSUSE_Factory/network:utilities.repo';
+        if (is_sle('<16')) {
+            $netutils_repo = 'https://download.opensuse.org/repositories/network:/utilities/15.6/network:utilities.repo';
+        } elsif (is_sle('=16.0')) {
+            $netutils_repo = 'https://download.opensuse.org/repositories/network:/utilities/16.0/network:utilities.repo';
+        }
+        zypper_ar($netutils_repo);
+        zypper_call('in qa_test_netperf', exitcode => [0, 4]) if is_sle;
+        zypper_call('in net-tools-deprecated ipv6toolkit netsniff-ng ndisc6 smcroute', exitcode => [0, 4]);
+        zypper_call('in dropwatch', exitcode => [0, 4]) unless is_sle('<16');
+        if (is_sle('>=16.0')) {
+            # NetworkManager interferes with tests such as busy_poll_test.sh and rtnetlink.sh, due to automatically reacting to device creation
+            my $netdevsim_mask = <<"EOF";
+[main]
+plugins=keyfile
+[keyfile]
+unmanaged-devices=driver:netdevsim
+EOF
+            write_sut_file('/etc/NetworkManager/conf.d/99-disable-netdevsim.conf', $netdevsim_mask);
+            systemctl('reload NetworkManager');
+        }
+    }
+}
+
+sub install_kselftests
+{
+    my ($collection) = @_;
+
+    install_dependencies($collection);
+
+    if (get_var('KSELFTEST_FROM_GIT', 0)) {
+        install_from_git($collection);
+        assert_script_run("cd ./tools/testing/selftests/kselftest_install");
+    } else {
+        install_from_repo();
+        assert_script_run("cd /usr/share/kselftests");
+    }
 }
 
 sub get_sanitized_test_name {
@@ -96,22 +155,30 @@ sub post_process_single {
     my $env = {
         product => get_var('DISTRI', '') . ':' . get_var('VERSION', ''),
         arch => get_var('ARCH', ''),
+        kernel => script_output('uname -r'),
     };
     my $whitelist = get_whitelist();
 
     # Avoid timeouts if the log is too big by reading it locally
     my @log;
     upload_asset($args{logfile});
-    open(my $logfile, '<', "assets_private/" . basename($args{logfile})) or die("Can't open $args{logfile}");
+    my $logfile_path = "assets_private/" . basename($args{logfile});
+    open(my $logfile, '<', $logfile_path) or die("Can't open $args{logfile}");
     while (my $ln = <$logfile>) {
         push(@log, $ln);
     }
     close($logfile);
+    unlink $logfile_path;
 
     my ($test_name, $sanitized_test_name) = get_sanitized_test_name($args{test});
     my $parser = Kselftests::parser::factory($args{collection}, $sanitized_test_name);
 
-    my @ktap = @{$args{ktap} //= ["TAP version 13", "1..1", "# selftests: $args{collection}: $sanitized_test_name"]};
+    my @ktap = ();
+    if (defined $args{ktap}) {
+        @ktap = @{$args{ktap}};
+    } elsif ($log[0] !~ /^TAP version/) {
+        @ktap = ("TAP version 13", "1..1", "# selftests: $args{collection}: $sanitized_test_name");
+    }
     my $hardfails = 0;
     my $softfails = 0;
     for my $test_ln (@log) {
@@ -166,6 +233,7 @@ sub post_process {
     my $env = {
         product => get_var('DISTRI', '') . ':' . get_var('VERSION', ''),
         arch => get_var('ARCH', ''),
+        kernel => script_output('uname -r'),
     };
     my $whitelist = get_whitelist();
 

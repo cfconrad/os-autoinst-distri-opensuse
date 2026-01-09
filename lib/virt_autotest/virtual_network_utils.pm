@@ -103,7 +103,7 @@ sub create_host_bridge_nm {
     my $host_bridge = "br0";
     my $config_path = "/etc/NetworkManager/system-connections/$host_bridge.nmconnection";
 
-    if (is_sle('=16') && !is_s390x && script_run("[[ -f $config_path ]]") != 0) {
+    if (is_sle('16+') && !is_s390x && script_run("[[ -f $config_path ]]") != 0) {
         # Install required packages python313-psutil and python313-dbus-python
         zypper_call '-t in python313-psutil python313-dbus-python', exitcode => [0, 4, 102, 103, 106];
         my $wait_script = "180";
@@ -112,6 +112,7 @@ sub create_host_bridge_nm {
         my $download_script = "curl -s -o ~/$script_name $script_url";
         script_output($download_script, $wait_script, type_command => 0, proceed_on_failure => 0);
         my $execute_script = "chmod +x ~/$script_name && python3 ~/$script_name";
+        $execute_script .= ' ' . (get_var('EXCLUDED_BR_NICS', '') ? get_var('EXCLUDED_BR_NICS') : '""');
         script_output($execute_script, $wait_script, type_command => 0, proceed_on_failure => 0);
         save_screenshot;
         # Re-establish the SSH connection, poo#187197
@@ -224,14 +225,25 @@ sub test_network_interface {
     my $nic = "";
     $is_sriov_test = "true" if caller 0 eq 'sriov_network_card_pci_passthrough';
     script_retry("nmap $guest -PN -p ssh | grep open", delay => 30, retry => 6, timeout => 180);
-    if ($guest =~ /sles-16/i) {
+    # Check if guest is SLES 16+ (e.g., sles16efi_online, sles16efi_full, sles-16)
+    if ($guest =~ /sles-?16/i) {
         $nic = script_output(qq(ssh root\@$guest ip -o link | grep -i $mac | awk '{gsub(/:/, "", \$2); print \$2}'), proceed_on_failure => 1, timeout => 60);
     } else {
         $nic = script_output "ssh root\@$guest \"grep '$mac' /sys/class/net/*/address | cut -d'/' -f5 | head -n1\"";
     }
     die "$mac not found in guest $guest" unless $nic;
-    unless (is_sle('16+')) {
+    # Configure network interface for non-SLES 16+ guests
+    # Note: SLES 16 guest names include: sles16efi_online, sles16efi_full, sles-16
+    if ($guest !~ /sles-?16|sle-?16/i) {
+        # Create network configuration file with BOOTPROTO='dhcp'.
+        # STARTMODE='manual' is the default.
+        # Don't set it 'auto' to avoid the interface becomes the default route after rebooting
         assert_script_run("ssh root\@$guest \"echo BOOTPROTO=\\'dhcp\\' > /etc/sysconfig/network/ifcfg-$nic\"");
+        # Bring up the network interface first
+        assert_script_run("ssh root\@$guest ip link set $nic up");
+        # Wait for the interface to be in UP state
+        script_retry("ssh root\@$guest ip link show $nic | grep 'state UP'", delay => 1, retry => 5, timeout => 10);
+        # Then configure it with ifup
         script_retry("ssh root\@$guest ifup $nic", delay => 10, retry => 20, timeout => 120);
     }
 
@@ -494,7 +506,7 @@ sub validate_guest_status {
         #Ensure the ICMP PING responses for the given guest
         die "Error: Ping $guest failed, please check manually!" if (script_retry("ping -c5 $guest", delay => 30, retry => 6, timeout => $timeout) ne 0);
         #Ensure the SSH connection for the given guest
-        die "Error: SSH $guest failed, please check manually!" if (script_retry("nc -zv $guest 22", delay => 30, retry => 6, timeout => $timeout) ne 0);
+        die "Error: SSH $guest failed, please check manually!" if (script_retry("nc -4zv $guest 22", delay => 30, retry => 6, timeout => $timeout) ne 0);
     }
 }
 

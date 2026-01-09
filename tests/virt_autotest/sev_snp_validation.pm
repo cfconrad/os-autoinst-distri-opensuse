@@ -417,8 +417,8 @@ sub configure_sev_snp_kernel_parameters {
     record_info('Reboot required', 'Rebooting to apply new parameters');
     power_action('reboot', textmode => 1);
 
-    # Wait for boot completion - robust parameters for systems with/without GRUB menu
-    $self->wait_boot(textmode => 1, bootloader_time => 60, ready_time => 300);
+    # Wait for boot completion - increased timeout for IPMI/SOL console where GRUB can take >180s
+    $self->wait_boot(textmode => 1, bootloader_time => 100, ready_time => 200);
     select_serial_terminal;
 
     # Verify parameters after reboot
@@ -465,6 +465,13 @@ sub check_sev_snp_on_guest {
 
     my $guest_name = $args{guest_name};
     my $guest_type = 'unknown';    # Will be set to 'sev-snp' if verification passes
+
+    # SEV-SNP requires UEFI. Match 'efi' (MU tests) or 'sev-snp' (new products)
+    if ($guest_name !~ /efi|sev-snp/) {
+        record_info("SEV-SNP Skip", "Skipping guest $guest_name: SEV-SNP requires UEFI boot.\n" .
+              "Guest name must contain 'efi' (for MU tests) or 'sev-snp' (for new product tests).", result => 'ok');
+        return 1;    # Return success but skip the test
+    }
 
     record_info("Check SEV-SNP on guest", "Verifying SEV-SNP support status on guest $guest_name");
 

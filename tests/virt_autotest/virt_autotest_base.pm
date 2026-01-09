@@ -15,6 +15,7 @@ use XML::Writer;
 use IO::File;
 use virt_utils;
 use Utils::Architectures;
+use Utils::Logging qw(upload_coredumps);
 use virt_autotest::utils;
 use upload_system_log;
 use virt_autotest::utils qw(upload_virt_logs);
@@ -266,8 +267,10 @@ sub post_fail_hook {
     #FOR S390X LPAR
     if (is_s390x) {
         #collect and upload supportconfig log from S390X LPAR
-        upload_system_log::upload_supportconfig_log();
-        script_run "rm -rf scc_*";
+        virt_utils::lpar_cmd("supportconfig -B supportconfig", {timeout => 600});
+        upload_logs("/var/log/scc_supportconfig.txz");
+        upload_logs("/tmp/s390x_guest_install_test.tar.bz2");
+        virt_utils::lpar_cmd("rm -f /var/log/scc_supportconfig.*;rm -rf /tmp/s390x_guest_install_test.*");
         return;
     }
 
@@ -284,7 +287,7 @@ sub post_fail_hook {
     }
     save_screenshot;
 
-    $self->upload_coredumps;
+    upload_coredumps;
     save_screenshot;
 }
 1;

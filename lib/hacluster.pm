@@ -25,6 +25,7 @@ use Carp qw(croak);
 use Data::Dumper;
 use XML::Simple;
 use serial_terminal qw(select_serial_terminal set_serial_prompt serial_term_prompt);
+use Utils::Backends 'is_pvm';
 
 our @EXPORT = qw(
   $crm_mon_cmd
@@ -731,7 +732,7 @@ sub ha_export_logs {
 
     # HANA hdbnsutil logs
     if (check_var('CLUSTER_NAME', 'hana')) {
-        script_run 'tar -zcf /tmp/trace.tgz $(find /hana/shared -name nameserver_*.trc)';
+        script_run 'tar -zcf /tmp/trace.tgz $(find /hana/shared -name nameserver_*.trc)', timeout => 300;
         upload_logs('/tmp/trace.tgz', failok => 1);
     }
 }
@@ -769,7 +770,7 @@ sub check_cluster_state {
     # We may want to check cluster state without stopping the test
     my $cmd_sub = (defined $args{proceed_on_failure} && $args{proceed_on_failure} == 1) ? \&script_run : \&assert_script_run;
 
-    $cmd_sub->("$crm_mon_cmd");
+    $cmd_sub->("$crm_mon_cmd", 180);
     if (is_sle '12-sp3+') {
         # Add sleep as command 'crm_mon' outputs 'Inactive resources:' instead of 'no inactive resources' on 12-sp5
         sleep 5;
@@ -1033,6 +1034,7 @@ sub check_device_available {
     my ($dev, $tout) = @_;
     my $ret;
     my $tries = bmwqemu::scale_timeout($tout ? int($tout / 2) : 10);
+    my $tries_drbd0 = $tries;
 
     die "Must provide a device for check_device_available" unless (defined $dev);
 
@@ -1041,6 +1043,15 @@ sub check_device_available {
         sleep 2;
     }
 
+    # According to https://bugzilla.suse.com/show_bug.cgi?id=1247534#c23
+    # /dev/drbd_passive will not be generated for sle16, so we also need to check /dev/drbd0
+    if (is_sle('>=16') && $ret != 0) {
+        while ($tries_drbd0 and $ret = script_run "ls -la /dev/drbd0") {
+            --$tries_drbd0;
+            sleep 2;
+        }
+        die "Device $dev not found" unless ($tries_drbd0 > 0 or $ret == 0);
+    }
     _test_var_defined $ret;
     die "Device $dev not found" unless ($tries > 0 or $ret == 0);
     return $ret;
@@ -1537,6 +1548,7 @@ sub generate_lun_list {
     my $target_ip_port = script_output("ls /sys/kernel/config/target/iscsi/${target_iqn}/tpgt_1/np 2>/dev/null");
     my $dev_by_path = '/dev/disk/by-path';
     my $index = get_var('ISCSI_LUN_INDEX', 0);
+    $index = 0 if (check_var('ISCSI_LUN_INDEX', 'ondemand'));
 
     my $cluster_infos = get_cluster_info();
     my $cluster_name = $cluster_infos->{cluster_name};
@@ -1613,12 +1625,19 @@ to C<select_console 'root-console'> will not work as the console could be "dirty
 messages obscuring the root prompt. This function will pre-select the console without
 asserting anything on the screen, clear it, and then select it normally.
 
+On PVM setup, serial connection may lose if jobs running too long from ssh termial, so
+re-connect it after switching back to root-console
 =cut
 
 sub prepare_console_for_fencing {
-    select_console 'root-console', await_console => 0;
-    send_key 'ctrl-l';
-    send_key 'ret';
+    if (is_pvm) {
+        reset_consoles;
+    }
+    else {
+        select_console 'root-console', await_console => 0;
+        send_key 'ctrl-l';
+        send_key 'ret';
+    }
     select_console 'root-console';
 }
 

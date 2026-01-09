@@ -12,6 +12,7 @@ use base "x11test";
 use testapi;
 use Utils::Architectures;
 use utils;
+use x11utils qw(default_gui_terminal close_gui_terminal);
 
 sub install_google_repo_key {
     become_root;
@@ -43,26 +44,41 @@ sub click_ad_privacy_feature {
     assert_and_click 'google-chrome-ad-privacy-feature-ok';
 }
 
+sub handle_make_faster_popup {
+    check_screen 'make-chrome-faster', 10;
+    if (match_has_tag 'make-chrome-faster') {
+        click_lastmatch;
+        return 1;
+    }
+    return 0;
+}
+
 sub run {
     my $arch = is_i586 ? 'i386' : 'x86_64';
     my $chrome_url = "https://dl.google.com/linux/direct/google-chrome-stable_current_$arch.rpm";
     select_console('x11');
     mouse_hide;
-    x11_start_program('xterm');
+    x11_start_program(default_gui_terminal);
     install_google_repo_key;
     zypper_call "in $chrome_url";
     save_screenshot;
-    # closing xterm
-    send_key "alt-f4";
+    close_gui_terminal;
     avoid_async_keyring_popups;
     preserve_privacy_of_non_human_openqa_workers;
     assert_and_click 'chrome-default-browser-query';
     assert_screen [qw(google-chrome-main-window google-chrome-dont-sign-in)];
     click_lastmatch if match_has_tag('google-chrome-dont-sign-in');
     click_ad_privacy_feature;
+    my $make_faster_popup_seen = handle_make_faster_popup();
     wait_screen_change { send_key 'ctrl-l' };
     enter_cmd 'about:';
-    assert_screen 'google-chrome-about';
+    my @tags = qw(google-chrome-about);
+    push @tags, 'make-chrome-faster' unless $make_faster_popup_seen;
+    assert_screen @tags, 60;
+    if (match_has_tag 'make-chrome-faster') {
+        click_lastmatch;
+        assert_screen 'google-chrome-about';
+    }
     send_key 'alt-f4';
 }
 

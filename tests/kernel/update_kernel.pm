@@ -72,21 +72,11 @@ sub prepare_kernel {
 
 sub update_kernel {
     my ($self, $repo, $incident_id) = @_;
+    my $devel_pack = get_kernel_devel_flavor;
 
     fully_patch_system;
-
-    if (check_var('SLE_PRODUCT', 'slert')) {
-        install_package('kernel-devel-rt', skip_trup => 'There is no kernel-devel-rt available on transactional system.');
-    }
-    elsif (get_var('COCO')) {
-        zypper_call('in kernel-devel-coco');
-    }
-    elsif (get_var('KERNEL_64KB')) {
-        zypper_call('in kernel-64kb-devel');
-    }
-    elsif (is_sle('12+')) {
-        zypper_call('in kernel-devel');
-    }
+    install_package("--recommends $devel_pack") if (!is_sle('<12') &&
+        !(check_var('SLE_PRODUCT', 'slert') && is_sle_micro('<6.2')));
 
     $self->add_update_repos($repo);
     zypper_call("ref");
@@ -95,7 +85,12 @@ sub update_kernel {
     my $patches = '';
     $patches = get_patches($incident_id, $repo);
 
-    if ($incident_id && !($patches)) {
+    if (!$patches) {
+        if (get_var('FLAVOR') =~ /-Increments|-Updates$/) {
+            $self->record_soft_failure_result('There are no relevant updates.');
+            return;
+        }
+
         die "Patch isn't needed";
     }
     else {
@@ -214,12 +209,7 @@ sub install_lock_kernel {
         'kernel-source-rt' => $src_version
     );
 
-    if (check_var('SLE_PRODUCT', 'slert')) {
-        push @packages, "kernel-devel-rt";
-    }
-    else {
-        push @packages, "kernel-devel";
-    }
+    push @packages, get_kernel_devel_flavor;
 
     # add explicit version to each package
     foreach my $package (@packages) {
@@ -232,7 +222,7 @@ sub install_lock_kernel {
 
     # install and lock needed kernel
     enter_trup_shell(global_options => '-c') if is_transactional;
-    zypper_call("in " . join(' ', @packages), exitcode => [0, 102, 103, 104], timeout => 1400);
+    zypper_call("in --recommends " . join(' ', @packages), exitcode => [0, 102, 103, 104], timeout => 1400);
     zypper_call("al " . join(' ', @lpackages));
     exit_trup_shell if is_transactional;
 }
@@ -310,10 +300,7 @@ sub prepare_kgraft {
     fully_patch_system;
 
     my $kernel_name = 'kernel-' . $$incident_klp_pkg{kflavor};
-    my $src_name = 'kernel-source';
-
-    $src_name .= '-' . $$incident_klp_pkg{kflavor}
-      unless $$incident_klp_pkg{kflavor} eq 'default';
+    my $src_name = get_kernel_source_flavor;
 
     $self->enable_update_repos(1) if get_var('FLAVOR') =~ /-Updates-Staging/ && !get_var('NO_DISABLE_REPOS');
     my $kernel_version = find_version($kernel_name, $$incident_klp_pkg{kver});
@@ -337,15 +324,10 @@ sub prepare_kgraft {
 
 sub downgrade_kernel {
     my $kver = shift;
-    my $kernel_package = 'kernel-default';
-    my $src_package = 'kernel-source';
+    my $kernel_package = get_kernel_flavor;
+    my $src_package = get_kernel_source_flavor;
 
     fully_patch_system;
-
-    if (check_var('SLE_PRODUCT', 'slert')) {
-        $kernel_package = 'kernel-rt';
-        $src_package = 'kernel-source-rt';
-    }
 
     my $kernel_version = find_version($kernel_package, $kver);
     my $src_version = find_version($src_package, $kver);
@@ -438,11 +420,12 @@ sub update_kgraft {
 sub install_kotd {
     my $repo = shift;
     my $kernel_flavor = get_kernel_flavor;
+    my $devel_flavor = get_kernel_devel_flavor;
     fully_patch_system;
     remove_kernel_packages;
     zypper_ar($repo, name => 'KOTD', priority => 90, no_gpg_check => 1);
     install_package("-r KOTD $kernel_flavor", trup_continue => 1);
-    install_package('kernel-devel', trup_continue => 1);
+    install_package("--recommends $devel_flavor", trup_continue => 1);
 }
 
 sub update_kgraft_under_load {
@@ -469,8 +452,46 @@ sub boot_to_console {
     select_console('sol', await_console => 0) if is_ipmi;
     $self->wait_boot;
     select_serial_terminal;
-    assert_script_run('echo 1 >/sys/module/printk/parameters/ignore_loglevel')
-      unless is_sle('<12');
+    setup_kernel_logging;
+}
+
+sub install_requirements {
+    my @requirements;
+    my $flavor = get_var('FLAVOR');
+
+    if ($flavor =~ /Utils/) {
+        @requirements = qw(
+          rasdaemon
+          libnvme1
+          nvme-cli
+          rdma-core
+          rdma-ndd
+          librdmacm1
+          blktrace
+          bpftrace
+          bcc-tools
+          libbcc0
+          tcpdump
+          kdump
+          crash
+          makedumpfile
+          nfs-client
+          nfs-kernel-server
+          open-iscsi
+          multipath-tools
+          liburing2
+          net-tools
+        );
+    } elsif ($flavor =~ /Nvidia/) {
+        @requirements = qw(nvidia-open-driver-G06-signed-cuda-kmp-default);
+    } elsif ($flavor =~ /Base/) {
+        @requirements = qw(kdump);
+    } else {
+        record_info("Requirements", "There are no special requirements for $flavor");
+        return;
+    }
+    record_info("Requirements", "Installing requirements for $flavor");
+    install_package(join(' ', @requirements));
 }
 
 sub run {
@@ -491,15 +512,11 @@ sub run {
         boot_to_console($self);
     }
 
-    # SLE Micro RT 5.1 image contains both kernel flavors, we need to remove kernel-default
-    if (is_sle_micro('=5.1') && check_var('SLE_PRODUCT', 'slert')) {
-        trup_call('pkg rm kernel-default');
-        # kernel-rt will be removed with kernel-default, we can't lock it before, we need to install it after
-        trup_call('-c pkg in kernel-rt');
-        reboot_on_changes;
-    }
+    # Install requirements for SLE 16 staging tests
+    install_requirements if get_var('FLAVOR') =~ /Updates-Staging/;
 
-    my $repo = is_sle_micro('>=6.0') ? get_var('OS_TEST_REPOS') : get_var('KOTD_REPO');
+    my $repo = get_var('KOTD_REPO');
+    $repo = get_var('OS_TEST_REPOS') if (!defined($repo) && (is_sle_micro('>=6.0') || (is_sle('16+'))));
     my $incident_id = undef;
     my $grub_param = get_var('APPEND_GRUB_PARAMS');
 
@@ -589,7 +606,7 @@ sub run {
         reboot_on_changes;
     } elsif (!get_var('KGRAFT')) {
         power_action('reboot', textmode => 1);
-        reconnect_mgmt_console if is_pvm;
+        reconnect_mgmt_console if is_pvm || is_ipmi;
         $self->wait_boot if get_var('LTP_BAREMETAL');
     }
 }

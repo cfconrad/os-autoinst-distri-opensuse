@@ -12,16 +12,17 @@ use strict;
 use warnings;
 use version;
 use testapi;
+use Mojo::Base -signatures;
 use Exporter qw(import);
 use Carp qw(croak);
 use Utils::Git qw(git_clone);
 use File::Basename;
 use Regexp::Common qw(net);
-use utils qw(write_sut_file file_content_replace);
+use utils qw(write_sut_file file_content_replace define_secret_variable);
 use Scalar::Util 'looks_like_number';
 use Mojo::JSON qw(decode_json);
 use publiccloud::utils qw(get_credentials);
-use sles4sap::azure_cli qw(az_keyvault_secret_list az_keyvault_secret_show);
+use sles4sap::azure_cli;
 use sles4sap::sap_deployment_automation_framework::naming_conventions qw(
   homedir
   deployment_dir
@@ -37,6 +38,7 @@ use sles4sap::sap_deployment_automation_framework::naming_conventions qw(
 our @EXPORT = qw(
   $output_log_file
   az_login
+  check_credentials
   sdaf_ssh_key_from_keyvault
   serial_console_diag_banner
   set_common_sdaf_os_env
@@ -55,6 +57,7 @@ our @EXPORT = qw(
   validate_components
   get_fencing_mechanism
   sdaf_upload_logs
+  get_workload_resource_group
 );
 
 our $output_log_file = '';
@@ -175,6 +178,67 @@ sub export_credentials {
     # Source file and load variables
     assert_script_run("source $temp_file");
     return ($data);
+}
+
+=head2 check_credentials
+
+    check_credentials();
+
+Check credentials: fetch keyvault secrets and compare them with openQA settings
+  _SECRET_AZURE_SDAF_APP_ID (ARM_CLIENT_ID)
+  _SECRET_AZURE_SDAF_APP_PASSWORD (ARM_CLIENT_SECRET)
+  _SECRET_AZURE_SDAF_TENANT_ID (ARM_TENANT_ID)
+  PUBLIC_CLOUD_AZURE_SUBSCRIPTION_ID (ARM_SUBSCRIPTION_ID)
+
+NOTE:
+    In order to keep secrets hidden in autoinst-log.txt as well, this function
+    needs to call export_credentials() to get the needed secrets/data directly,
+    please do NOT set secrets related input parameters for check_credentials()
+=cut
+
+sub check_credentials {
+    my $result = 0;
+    my $tmpfile = '/tmp/output';
+
+    my $data = export_credentials();
+    my %credentials = (
+        ARM_CLIENT_ID => $data->{client_id},
+        ARM_CLIENT_SECRET => $data->{client_secret},
+        ARM_TENANT_ID => $data->{tenant_id},
+        ARM_SUBSCRIPTION_ID => $data->{subscription_id}
+    );
+    my $env = get_required_var('SDAF_ENV_CODE');
+    my %query = (
+        ARM_CLIENT_ID => "${env}-client-id",
+        ARM_CLIENT_SECRET => "${env}-client-secret",
+        ARM_TENANT_ID => "${env}-tenant-id",
+        ARM_SUBSCRIPTION_ID => "${env}-subscription-id"
+    );
+
+    for my $key (keys %credentials) {
+        my @secret_ids = @{az_keyvault_secret_list(
+                vault_name => get_required_var('SDAF_DEPLOYER_KEY_VAULT'), query => "\"[?ends_with(name, \'$query{$key}\')].id\"")};
+        croak "Multiple or no secrets found: \n" . join("\n", @secret_ids) unless @secret_ids == 1;
+
+        az_keyvault_secret_show(
+            id => $secret_ids[0],
+            query => 'value',
+            output => 'tsv',
+            save_to_file => "$tmpfile");
+
+        # Keep secrets hidden in serial output
+        define_secret_variable('SECRET_VARIABLE', $credentials{$key});
+        if (script_run("grep \$SECRET_VARIABLE $tmpfile > /dev/null 2>&1")) {
+            record_info("Check $key", "check_credentials failed on $key\n", result => 'softfail');
+            $result = 1;
+        }
+        else {
+            record_info("Check $key", "check_credentials passed on $key\n");
+        }
+    }
+
+    die "check_credentials failed\n" if $result;
+    return $result;
 }
 
 =head2 az_login
@@ -341,7 +405,7 @@ For detailed variable description check : L<https://learn.microsoft.com/en-us/az
 =item * B<sdaf_tfstate_storage_account>: Storage account residing in library resource group.
 Location for stored tfstate files. Default 'SDAF_TFSTATE_STORAGE_ACCOUNT'
 
-=item * B<sdaf_key_vault>: Key vault name inside Deployer resource group. Default 'SDAF_DEPLYOER_KEY_VAULT'
+=item * B<sdaf_key_vault>: Key vault name inside Deployer resource group. Default 'SDAF_DEPLOYER_KEY_VAULT'
 
 =back
 =cut
@@ -355,7 +419,7 @@ sub set_common_sdaf_os_env {
     $args{sdaf_region_code} //= convert_region_to_short(get_required_var('PUBLIC_CLOUD_REGION'));
     $args{sap_sid} //= get_required_var('SAP_SID');
     $args{sdaf_tfstate_storage_account} //= get_required_var('SDAF_TFSTATE_STORAGE_ACCOUNT');
-    $args{sdaf_key_vault} //= get_required_var('SDAF_DEPLYOER_KEY_VAULT');
+    $args{sdaf_key_vault} //= get_required_var('SDAF_DEPLOYER_KEY_VAULT');
     my $workload_vnet_code = get_workload_vnet_code();
 
     # This is used later filling up tfvars files.
@@ -773,12 +837,18 @@ sub sdaf_execute_remover {
 
 Performs full cleanup routine for B<sap systems> and B<workload zone> by executing SDAF remover.sh file.
 Deletes all files related to test run on deployer VM, even in case remover script fails.
-Resource groups need to be deleted manually in case of failure.
+Resource groups are force-deleted upon script failure using B<az cli>.
+Reports errors using B<record_info> message for easier tracking.
+Returns report of cleanup results in a form of a B<HASHREF>.
+
+Example:
+{remover_failed=>'workload zone', file_cleanup=>'pass'}
 
 =cut
 
 sub sdaf_cleanup {
-    my $remover_rc = 1;
+    my $remover_rc;
+    my %result;
     # Sap system needs to be destroyed before workload zone so order matters here.
     for my $deployment_type ('sap_system', 'workload_zone') {
         my $resource_group = resource_group_exists(generate_resource_group_name(deployment_type => $deployment_type));
@@ -787,17 +857,50 @@ sub sdaf_cleanup {
             next;
         }
 
-        $remover_rc = sdaf_execute_remover(deployment_type => $deployment_type);
+        # Do not run remover for workload zone if sap systems failed.
+        $remover_rc = sdaf_execute_remover(deployment_type => $deployment_type) unless $result{remover_failed};
         if ($remover_rc) {
-            # Cleanup files from deployer VM before killing test
-            assert_script_run('rm -Rf ' . deployment_dir);
-            die('SDAF remover script failed. Please check logs and delete resource groups manually');
+            # Destroy resource groups using az cli if remover fails.
+            sdaf_destroy_resources(deployment_type => $deployment_type);
+            # Show fail message only after remover script failure - fail flag is not yet set
+            record_info('REMOVER FAIL',
+                'SDAF remover script failed. Please check logs and file a bug report if needed:
+                                https://github.com/sdaf-suse/sap-automation',
+                result => 'fail') unless $result{remover_failed};
+            # Set cleanup failed result flag
+            $result{remover_failed} = $deployment_type;
         }
     }
-    assert_script_run('cd');    # navigate out the directory you are about to delete
-    assert_script_run('rm -Rf ' . deployment_dir());
-    record_info('Cleanup files', join(' ', 'Deployment directory', deployment_dir, 'was deleted.'));
-    record_info('SDAF remover', 'SDAF remover scripts finished');
+    # Navigate out the directory you are about to delete, but continue with cleanup even upon failure
+    $result{file_cleanup} = script_run('cd; rm -Rf ' . deployment_dir()) ? 'fail' : 'pass';
+    record_info('Project cleanup', 'Cleanup of SDAF project failed. Files were destroyed with deployer VM')
+      if $result{file_cleanup} eq 'fail';
+    return \%result;
+}
+
+=head2 sdaf_destroy_resources
+
+    sdaf_destroy_resources(deployment_type=>'workload_zone');
+
+Function destroys SDAF resources (sap_system or workload_zone) left even after B<remover> script fails.
+
+=over
+
+=item * B<deployment_type>: Deployment type that should be destroyed. Supported values: 'sap_system', 'workload_zone'.
+
+=back
+=cut
+
+sub sdaf_destroy_resources(%args) {
+    croak("Missing mandatory argument 'deployment_type'") unless defined($args{deployment_type});
+    croak("Unsupported 'deployment_type' value: '$args{deployment_type}'") unless
+      grep(/^$args{deployment_type}$/, qw(sap_system workload_zone));
+
+    my $resource_name = generate_resource_group_name(deployment_type => $args{deployment_type});
+    my $resource_present = az_group_exists(name => $resource_name);
+    # No need to delete resource if there is none.
+    return unless $resource_present eq 'true';
+    az_group_delete(name => $resource_name, timeout => 1800);
 }
 
 =head2 sdaf_execute_playbook
@@ -1141,6 +1244,31 @@ sub get_fencing_mechanism {
     return ($supported_fencing_values{$fencing_type});
 }
 
+=head2 get_workload_resource_group
+
+    get_workload_resource_group(deployment_id=>'1234');
+
+Finds and returns resource group belonging to the tests workload zone.
+
+B<Value conversion:>
+
+=over
+
+=item * B<deployment_id> =>  Test/deployment ID
+
+=back
+
+=cut
+
+sub get_workload_resource_group {
+    my (%args) = @_;
+    croak 'Missing mandatory argument "$args{deployment_id}"' unless $args{deployment_id};
+    my $query = "[?contains(name, 'workload') && contains(name, '$args{deployment_id}')].name";
+    my $groups = az_group_name_get(query => $query);
+    die "Zero or more than one resource groups found:\n" . join("\n", @$groups) unless (@$groups == 1);
+    return $groups->[0];
+}
+
 =head3 sdaf_upload_logs
 
     sdaf_upload_logs(hostname => $hostname, sap_sid => $sap_sid)
@@ -1167,11 +1295,11 @@ sub sdaf_upload_logs {
 
     record_info('Uploading crm report log');
     script_run("sudo crm report -E /var/log/ha-cluster-bootstrap.log $crm_report_log", timeout => 300);
-    upload_logs("${crm_report_log}.tar.gz");
+    upload_logs("${crm_report_log}.tar.gz", failok => 1);
 
     record_info('Uploading crm configure log');
     record_info('crm configure show', 'Failed to run "crm configure show"', result => 'fail') if (script_run("sudo crm configure show > $crm_cfg_log", timeout => 120));
-    upload_logs("$crm_cfg_log");
+    upload_logs("$crm_cfg_log", failok => 1);
 
     # Upload zypper log
     upload_logs('/var/log/zypper.log', log_name => "$autotest::current_test->{name}-${hostname}_zypper.log", failok => 1);
@@ -1189,17 +1317,17 @@ sub sdaf_upload_logs {
     my $nw_log = script_run("ls /var/tmp/$sap_sid | grep $sap_sid");
     if (!script_run("ls /var/tmp/$sap_sid | grep $sap_sid")) {
         my $nw_log = script_output("ls /var/tmp/$sap_sid | grep $sap_sid | grep 'zip'");
-        upload_logs("/var/tmp/$sap_sid/$nw_log");
+        upload_logs("/var/tmp/$sap_sid/$nw_log", failok => 1);
     }
 
     # Uploading supportconfig log (it is time consuming so it is conditional)
-    if (get_var('SUPPORTCONGFIG')) {
+    if (get_var('SUPPORTCONFIG')) {
         record_info('Uploading supportconfig log');
         script_run("sudo supportconfig -B $hostname", timeout => 1800);
         # Sometimes the tar ball is scc_${hostname}_xxx-xxx-xxx-*.txz
         if (!script_run("ls /var/log/scc_${hostname}*.txz")) {
             my $supportconfig_log = script_output("ls /var/log/scc_${hostname}*.txz");
-            upload_logs("$supportconfig_log");
+            upload_logs("$supportconfig_log", failok => 1);
         }
     } else {
         record_info('Skipped uploading supportconfig log');

@@ -37,6 +37,7 @@ ansible:
     sap_hana_install_master_password: 'DoNotUseThisPassw0rd'
     sap_hana_install_sid: 'HQ0'
     sap_hana_install_instance_number: '00'
+    sap_hana_install_update_firewall: '%HANA_FIREWALL%'
     sap_domain: 'qe-test.example.com'
     primary_site: 'goofy'
     secondary_site: 'miky'
@@ -47,7 +48,7 @@ ansible:
       - ibsm.yaml -e ibsm_ip='%IBSM_IP%' -e download_hostname='%DOWNLOAD_HOSTNAME%' -e repos='%REPOS%'
       - fully-patch-system.yaml
       - pre-cluster.yaml
-      - sap-hana-preconfigure.yaml
+      - sap-hana-preconfigure.yaml -e firewall_cfg=%FIREWALL%
       - sap-hana-storage.yaml
       - sap-hana-download-media.yaml
       - sap-hana-install.yaml
@@ -56,3 +57,5 @@ ansible:
       - sap-hana-cluster.yaml
     destroy:
       - deregister.yaml
+    test:
+    - hana_prevalidate.yaml -e node_name=hana

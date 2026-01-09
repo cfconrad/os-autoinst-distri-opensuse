@@ -45,6 +45,7 @@ schedule:
 - console/sshd
 - console/ssh_cleanup
 - console/ncurses
+- console/vim
 - console/yast2_bootloader
 - console/yast2_i
 - console/yast2_lan
@@ -60,6 +61,7 @@ schedule:
 - console/apache_ssl
 - console/apache_nss
 - console/postgresql_server
+- console/systemd_resolved
 - console/orphaned_packages_check
 - console/coredump_collect
 ...

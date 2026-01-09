@@ -91,7 +91,7 @@ sub get_test_summary {
 
 sub restorecon_rootfs {
     # restorecon does not behave too well with btrfs, so exclude /.snapshots in btrfs rootfs
-    my $restorecon_cmd = 'restorecon -R /';
+    my $restorecon_cmd = 'restorecon -i -R /';
     $restorecon_cmd .= ' -e /.snapshots' unless (script_run('test -d /.snapshots'));
     assert_script_run "$restorecon_cmd";
 }
@@ -138,9 +138,13 @@ sub run {
 
     # On SLES for SAP 16.0 and newer, we need to do further SELinux setup for HANA
     if (has_selinux) {
-        assert_script_run 'semanage boolean -m --on selinuxuser_execmod';
-        assert_script_run 'semanage boolean -m --on unconfined_service_transition_to_unconfined_user';
-        assert_script_run 'semanage permissive -a snapper_grub_plugin_t';
+        # Per https://bugzilla.suse.com/show_bug.cgi?id=1254395#c1, no need to run these
+        # commands if selinux-policy-sapenablement is installed
+        if (script_run 'rpm -q selinux-policy-sapenablement') {
+            assert_script_run 'semanage boolean -m --on selinuxuser_execmod';
+            assert_script_run 'semanage boolean -m --on unconfined_service_transition_to_unconfined_user';
+            assert_script_run 'semanage permissive -a snapper_grub_plugin_t';
+        }
         restorecon_rootfs();
     }
 

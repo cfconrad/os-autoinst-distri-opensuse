@@ -19,6 +19,7 @@ use utils qw(OPENQA_FTP_URL type_line_svirt save_svirt_pty);
 use ntlm_auth;
 use version_utils qw(is_agama);
 use autoyast qw(expand_agama_profile parse_dud_parameter);
+use Yam::Agama::LiveIso qw(read_live_iso);
 
 sub set_svirt_domain_elements {
     my ($svirt) = shift;
@@ -31,11 +32,8 @@ sub set_svirt_domain_elements {
         my $ntlm_p = get_var('NTLM_AUTH_INSTALL') ? $ntlm_auth::ntlm_proxy : '';
         my $cmdline = get_var('VIRSH_CMDLINE') . $ntlm_p . " ";
         if (is_agama) {
-            $cmdline .= " root=live:http://" . get_var('OPENQA_HOSTNAME') .
-              ((get_var('FLAVOR') eq "Full") ?
-                  "/assets/repo/" . get_required_var('REPO_0') . "/LiveOS/squashfs.img" :
-                  "/assets/iso/" . get_required_var('ISO'));
-            $cmdline .= " live.password=$testapi::password";
+            my $mirror_http = get_required_var('MIRROR_HTTP');
+            $cmdline .= " root=live:$mirror_http/LiveOS/squashfs.img live.password=$testapi::password";
             # add extra boot params for agama network, e.g. ip=2c-ea-7f-ea-ad-0c:dhcp
             $cmdline .= ' ' . get_var('AGAMA_NETWORK_PARAMS') if get_var('AGAMA_NETWORK_PARAMS');
 
@@ -81,6 +79,8 @@ sub set_svirt_domain_elements {
 
 sub run {
     my $svirt = select_console('svirt', await_console => 0);
+
+    read_live_iso() if (is_agama);
 
     record_info('free -h', $svirt->get_cmd_output('free -h'));
     record_info('virsh freecell --all', $svirt->get_cmd_output('virsh freecell --all'));

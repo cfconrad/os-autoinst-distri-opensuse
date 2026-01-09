@@ -22,9 +22,11 @@ use publiccloud::utils qw(is_byos is_ondemand is_gce registercloudguest register
 use publiccloud::ssh_interactive 'select_host_console';
 use Data::Dumper;
 use version_utils;
+use Utils::Architectures qw(is_aarch64);
 
 my $kirk_virtualenv = 'kirk-virtualenv';
 our $root_dir = '/root';
+our $ltp_timeout = get_var('LTP_TIMEOUT', 12600);
 
 sub should_fully_build_ltp_from_git {
     return get_var('PUBLIC_CLOUD_LTP_GIT_FULL_BUILD', 0);    # 1 if env var is set, otherwise 0
@@ -230,8 +232,6 @@ sub run {
 
     $self->prepare_kirk($instance);
 
-    $self->upload_runtest($instance, $provider);
-
     $self->printk_loglevel($instance);
 
     my $reset_cmd = $root_dir . '/restart_instance.sh ' . instance_log_args($provider, $instance);
@@ -244,8 +244,10 @@ sub run {
 
     $self->dump_kernel_config($instance);
     record_info('LTP START', 'Command launch');
-    script_run($cmd_run_ltp, timeout => get_var('LTP_TIMEOUT', 30 * 60));
-    record_info('LTP END', 'tests done');
+    # $ltp_timeout is also used for --suite-timeout so we need give kirk some time to try to kill itself before trying to kill it
+    my $kirk_exit_code = script_run($cmd_run_ltp, timeout => $ltp_timeout + 60);
+    record_info('LTP END', 'krik finished with ' . $kirk_exit_code);
+    die('kirk failed') if ($kirk_exit_code);
 }
 
 sub prepare_instance {
@@ -317,7 +319,15 @@ sub prepare_kirk {
     if (get_var('PUBLIC_CLOUD_INSTANCE_TYPE') =~ /-metal$/) {
         record_info('VM type', $instance->run_ssh_command(cmd => '! systemd-detect-virt')) unless is_gce;
     } else {
-        record_info('VM type', $instance->run_ssh_command(cmd => 'systemd-detect-virt'));
+        my $output = $instance->ssh_script_output(cmd => 'systemd-detect-virt', proceed_on_failure => 1);
+        record_info('VM type', $output);
+
+        if (($output eq "none") && is_gce && is_aarch64 && (is_sle_micro("=6.0") || is_sle_micro("=6.1"))) {
+            record_soft_failure("bsc#1256376 - systemd-detect-virt none on GCE SLE Micro 6.0 aarch64") if is_sle_micro('=6.0');
+            record_soft_failure("bsc#1256377 - systemd-detect-virt none on GCE SLE Micro 6.1 aarch64") if is_sle_micro('=6.1');
+        } else {
+            $instance->ssh_assert_script_run('systemd-detect-virt');
+        }
     }
     assert_script_run("cd kirk");
     my $ghash = script_output("git rev-parse HEAD", proceed_on_failure => 1);
@@ -325,13 +335,6 @@ sub prepare_kirk {
     record_info("KIRK_GIT_HASH", "$ghash");
     my $venv = install_in_venv($kirk_virtualenv, pip_packages => "asyncssh msgpack");
     venv_activate($venv);
-}
-
-sub upload_runtest {
-    my ($self, $instance, $provider) = @_;
-    assert_script_run('curl ' . data_url('publiccloud/ltp_runtest') . ' -o publiccloud');
-    $instance->scp("publiccloud", 'remote:/tmp/publiccloud', 9999);
-    $instance->ssh_assert_script_run(cmd => "sudo mv /tmp/publiccloud /opt/ltp/runtest/publiccloud");
 }
 
 sub printk_loglevel {
@@ -347,6 +350,7 @@ sub prepare_logging {
 
 sub prepare_ltp_cmd {
     my ($self, $instance, $provider, $reset_cmd, $ltp_command, $skip_tests, $env) = @_;
+    my $exec_timeout = get_var('LTP_EXEC_TIMEOUT', 1200);
 
     my $sut = ':user=' . $instance->username;
     $sut .= ':sudo=1';
@@ -357,11 +361,12 @@ sub prepare_ltp_cmd {
     my $python_exec = get_python_exec();
     my $cmd = "$python_exec kirk ";
     $cmd .= '--verbose ';
-    $cmd .= '--exec-timeout=1200 ';
-    $cmd .= '--suite-timeout=5400 ';
+    $cmd .= '--exec-timeout=' . $exec_timeout . ' ';
+    $cmd .= '--suite-timeout=' . $ltp_timeout . ' ';
     $cmd .= '--run-suite ' . $ltp_command . ' ';
     $cmd .= '--skip-tests \'' . $skip_tests . '\' ' if $skip_tests;
-    $cmd .= '--sut=ssh' . $sut . ' ';
+    $cmd .= '--sut default:com=ssh ';
+    $cmd .= '--com=ssh' . $sut . ' ';
     $cmd .= '--env ' . $env . ' ' if ($env);
     return $cmd;
 }

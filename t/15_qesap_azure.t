@@ -95,7 +95,7 @@ subtest '[qesap_az_get_resource_group] die when job_id is undef' => sub {
     # Ensure QESAP_DEPLOYMENT_IMPORT is not set
     set_var('QESAP_DEPLOYMENT_IMPORT', undef);
 
-    dies_ok { qesap_az_get_resource_group() } 'croaks when job_id is not defined';
+    dies_ok { qesap_az_get_resource_group() } 'Die when job_id is not defined';
 };
 
 subtest '[qesap_az_setup_native_fencing_permissions] missing argument' => sub {
@@ -118,6 +118,7 @@ subtest '[qesap_az_setup_native_fencing_permissions]' => sub {
     my $vm_id = 'c0ffeeee-c0ff-eeee-1234-123456abcdef';
     $qesap->redefine(script_output => sub { push @calls, $_[0]; return $vm_id; });
     $qesap->redefine(assert_script_run => sub { push @calls, $_[0]; return 1; });
+    $qesap->redefine(az_role_definition_list => sub { return 'ROLEID-Squall-888'; });
 
     my %mandatory_args = (
         vm_name => 'CaptainUsop',

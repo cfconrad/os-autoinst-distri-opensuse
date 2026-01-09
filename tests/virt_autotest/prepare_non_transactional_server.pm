@@ -22,6 +22,7 @@ use Utils::Systemd;
 use Utils::Backends qw(get_serial_console);
 use virt_autotest::virtual_network_utils;
 use virt_autotest::utils;
+use ipmi_backend_utils qw(set_grub_terminal_and_timeout);
 
 sub run {
     my $self = shift;
@@ -76,14 +77,7 @@ sub prepare_packages {
     }
 
     # install additional packages from product repositories
-    zypper_call("--gpg-auto-import-keys refresh");
-    if (get_var('INSTALL_PRODUCT_PACKAGES', '')) {
-        my $cmd = "install --no-allow-downgrade --no-allow-name-change --no-allow-vendor-change";
-        $cmd = $cmd . " $_" foreach (split(/,/, get_var('INSTALL_PRODUCT_PACKAGES', '')));
-        $cmd = $cmd . " systemd-coredump" if get_var('COLLECT_COREDUMPS');
-        zypper_call($cmd);
-        save_screenshot;
-    }
+    install_product_software;
     # install auxiliary packages from additional repositories to facilitate automation, for example screen and etc.
     install_extra_packages;
 }
@@ -93,6 +87,7 @@ sub prepare_bootloader {
 
     my $serialconsole = get_serial_console();
     if (script_run("grep -E \"\\s+linux\\s+/boot/.*console=$serialconsole,115200\" /boot/grub2/grub.cfg") != 0) {
+        set_grub_terminal_and_timeout;
         ipmi_backend_utils::add_kernel_options(kernel_opts => "console=tty console=$serialconsole,115200");
         set_var('_NEEDS_REBOOTING', 1);
     }

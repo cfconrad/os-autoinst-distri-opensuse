@@ -33,6 +33,7 @@ ansible:
     sap_hana_install_master_password: 'DoNotUseThisPassw0rd'
     sap_hana_install_sid: 'HQ0'
     sap_hana_install_instance_number: '00'
+    sap_hana_install_update_firewall: '%HANA_FIREWALL%'
     sap_domain: 'qe-test.example.com'
     primary_site: 'goofy'
     secondary_site: 'miky'
@@ -43,7 +44,7 @@ ansible:
       - registration_role.yaml -e reg_code='%SCC_REGCODE_SLES4SAP%' -e email_address='testing@suse.com'
       - fully-patch-system.yaml
       - pre-cluster.yaml
-      - sap-hana-preconfigure.yaml -e use_reboottimeout=900
+      - sap-hana-preconfigure.yaml -e use_reboottimeout=900 -e firewall_cfg=%FIREWALL%
       - cluster_sbd_prep.yaml
       - sap-hana-storage.yaml
       - sap-hana-download-media.yaml
@@ -53,3 +54,5 @@ ansible:
       - sap-hana-cluster.yaml
     destroy:
       - deregister.yaml
+    test:
+    - hana_prevalidate.yaml -e node_name=hana

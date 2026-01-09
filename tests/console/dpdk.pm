@@ -15,7 +15,7 @@
 #    - run dpdk-testpmd  (we get error like 'EAL FATAL; unsupported cpu type' on qemu, this is different than on physical machine and requires a different setup)
 #    - systemctl 'restart ovs-vswitchd' (failed at moment, assume that is related to unsuccessful binding of kernel module to network device)
 #
-# Maintainer: Zaoliang Luo <zluo@suse.de>, qe-core team SUSE
+# Maintainer: QE Core <qe-core@suse.de>
 
 use base 'consoletest';
 use testapi;
@@ -23,7 +23,7 @@ use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils qw(is_sle is_leap is_tumbleweed is_leap is_opensuse);
 use Utils::Architectures qw(is_x86_64 is_aarch64);
-use bootloader_setup qw(change_grub_config);
+use bootloader_setup qw(add_grub_cmdline_settings);
 use power_action_utils 'power_action';
 use network_utils 'iface';
 
@@ -60,7 +60,7 @@ EOF
 
     record_info('dpdk-hugepages.py -s', script_output('dpdk-hugepages.py -s', proceed_on_failure => 1));
     record_info('dpdk-devbind.py -s', script_output('dpdk-devbind.py -s', proceed_on_failure => 1));
-    my $pci_bus = script_output(q(dpdk-devbind.py  --status-dev net | grep "unused=vfio-pci" | awk '{ print $1 }' | head -n1));
+    my $pci_bus = script_output(q(dpdk-devbind.py  --status-dev net | grep "unused=.*vfio-pci" | awk '{ print $1 }' | head -n1));
     assert_script_run("dpdk-devbind.py -b vfio-pci $pci_bus");
 }
 
@@ -92,7 +92,7 @@ sub run {
     select_serial_terminal;
     # Enable IOMMU
     if (is_x86_64) {
-        change_grub_config('=\"[^\"]*', '& iommu=pt intel_iommu=on)', 'GRUB_CMDLINE_LINUX_DEFAULT', '', 1);
+        add_grub_cmdline_settings('iommu=pt intel_iommu=on', update_grub => 1);
         power_action('reboot', textmode => 1);
         $self->wait_boot;
         select_serial_terminal;

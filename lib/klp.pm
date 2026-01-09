@@ -26,6 +26,7 @@ sub install_klp_product {
     my $arch = get_required_var('ARCH');
     my $version = get_required_var('VERSION');
     my $livepatch_repo = get_var('REPO_SLE_MODULE_LIVE_PATCHING');
+    my $mirror_host = get_var('REPO_MIRROR_HOST', 'download.suse.de');
     my $release_override;
     my $lp_product;
     my $lp_module;
@@ -49,8 +50,8 @@ sub install_klp_product {
         zypper_ar("$utils::OPENQA_HTTP_URL/$livepatch_repo", name => "repo-live-patching");
     }
     elsif (is_sle('<16')) {
-        zypper_ar("http://download.suse.de/ibs/SUSE/Products/$lp_module/$version/$arch/product/", name => "kgraft-pool");
-        zypper_ar("$release_override http://download.suse.de/ibs/SUSE/Updates/$lp_module/$version/$arch/update/", name => "kgraft-update");
+        zypper_ar("http://$mirror_host/ibs/SUSE/Products/$lp_module/$version/$arch/product/", name => "kgraft-pool");
+        zypper_ar("$release_override http://$mirror_host/ibs/SUSE/Updates/$lp_module/$version/$arch/update/", name => "kgraft-update");
     }
 
     my $livepatch_pack = 'kernel-default-livepatch';
@@ -69,6 +70,7 @@ sub install_klp_product {
           unless (is_sle_micro('=6.0') || is_sle_micro('=6.1')) && $livepatch_pack eq 'kernel-rt-livepatch-6.4.0-10.1';
     }
     elsif (is_sle('16+')) {
+        $livepatch_pack .= "-$kver" if defined($kver);
         install_package($livepatch_pack);
     } else {
         zypper_call("in -l -t product $lp_product", exitcode => [0, 102, 103]);
@@ -402,8 +404,9 @@ sub verify_klp_pkg_patch_is_active {
     # Verify that the livepatch module has been properly signed by
     # checking the kernel for TAINT_UNSIGNED_MODULE tainting.
     # TAINT_UNSIGNED_MODULE is represented by bit 13 within the
-    # kernel's tainted bitmask.
-    if (is_kernel_tainted(0x2000)) {
+    # kernel's tainted bitmask. Staging livepatches are not signed,
+    # skip the check.
+    if (get_var('FLAVOR', '') !~ m/-Staging$/ && is_kernel_tainted(0x2000)) {
         die "The kernel has been tainted with TAINT_UNSIGNED_MODULE";
     }
 }

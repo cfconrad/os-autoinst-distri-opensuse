@@ -20,6 +20,9 @@ use Utils::Architectures;
 use repo_tools 'add_qa_head_repo';
 use utils;
 use kernel 'get_kernel_flavor';
+use serial_terminal 'select_serial_terminal';
+use kdump_utils 'configure_service';
+use package_utils;
 
 our @EXPORT = qw(
   check_kernel_taint
@@ -38,6 +41,9 @@ our @EXPORT = qw(
   get_default_pkg
   install_from_repo
   prepare_whitelist_environment
+  setup_kernel_logging
+  init_debug
+  run_supportconfig
 );
 
 sub loadtest_kernel {
@@ -532,6 +538,55 @@ sub prepare_whitelist_environment {
     };
 
     return $environment;
+}
+
+# NOTE: root is expected
+sub setup_kernel_logging {
+    my $grub_param = 'ignore_loglevel';
+
+    # /sys/module/printk/parameters/ignore_loglevel was added to mainline in v3.2-rc1 in
+    # 0eca6b7c78fd ("printk: add module parameter ignore_loglevel to control ignore_loglevel").
+    # Therefore SLE11-SP4 doesn't support it (but it supports ignore_loglevel
+    # as an early kernel command-line parameter => ok to add it to grub).
+    script_run('echo 1 >/sys/module/printk/parameters/ignore_loglevel')
+      unless is_sle('<12');
+
+    if (script_output('cat /sys/module/printk/parameters/time') eq 'N') {
+        script_run('echo 1 > /sys/module/printk/parameters/time');
+        $grub_param .= ' printk.time=1';
+    }
+
+    return $grub_param;
+}
+
+sub init_debug {
+    select_serial_terminal;
+    return unless (get_var('LTP_COMMAND_FILE') && get_var('LTP_DEBUG'));
+    record_info('LTP_DEBUG', get_var('LTP_DEBUG'));
+
+    if (check_var_array('LTP_DEBUG', 'crashdump')) {
+        configure_service(yast_interface => 'cli');
+    }
+
+    if (check_var_array('LTP_DEBUG', 'oprofile')) {
+        install_package('oprofile', trup_reboot => 1);
+    }
+
+    if (check_var_array('LTP_DEBUG', 'supportconfig')) {
+        install_package('supportutils', trup_reboot => 1);
+    }
+
+    # Initialize VNC console now to avoid login attempts on frozen system
+    select_console('root-console');
+
+    # required to be last to avoid resetting the preinitialized root-console on transactional systems.
+    select_serial_terminal;
+}
+
+sub run_supportconfig {
+    return unless check_var_array('LTP_DEBUG', 'supportconfig');
+    script_run("supportconfig -B ltp", timeout => 1800);
+    upload_logs("/var/log/scc_ltp.txz", failok => 1);
 }
 
 1;

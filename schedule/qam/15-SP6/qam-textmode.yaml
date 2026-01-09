@@ -29,6 +29,7 @@ schedule:
 - console/system_state
 - console/prepare_test_data
 - console/chrony
+- console/vim
 - console/consoletest_setup
 - console/force_scheduled_tasks
 - console/textinfo
@@ -60,6 +61,7 @@ schedule:
 - console/apache_ssl
 - console/apache_nss
 - console/postgresql_server
+- console/systemd_resolved
 - console/orphaned_packages_check
 - console/coredump_collect
 ...

@@ -14,6 +14,7 @@ use utils;
 sub run {
     my $nodes = get_required_var("MULTIMACHINE_NODES");
     record_info("#barriers", $nodes);
+    barrier_create("NFS_BEFORE_TEST_DONE", $nodes);
     barrier_create("NFS_SERVER_ENABLED", $nodes);
     barrier_create("NFS_CLIENT_ENABLED", $nodes);
     barrier_create("NFS_SERVER_CHECK", $nodes);
@@ -25,7 +26,7 @@ sub run {
         barrier_create("KDUMP_WICKED_TEMP", $nodes);
         barrier_create("KDUMP_MULTIMACHINE", $nodes);
     }
-    record_info("barriers initializoped");
+    record_info("barriers initialized");
 }
 
 sub test_flags {

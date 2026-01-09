@@ -10,7 +10,7 @@ use strict;
 use warnings;
 use testapi;
 use version_utils qw(is_sle is_leap is_plasma6);
-use utils 'assert_and_click_until_screen_change';
+use utils qw(assert_and_click_until_screen_change type_string_slow);
 use Utils::Architectures;
 use Utils::Backends qw(is_pvm is_qemu);
 
@@ -38,7 +38,9 @@ our @EXPORT = qw(
   start_root_shell_in_xterm
   x11_start_program_xterm
   default_gui_terminal
+  close_gui_terminal
   handle_gnome_activities
+  save_print_file
 );
 
 =head1 X11_UTILS
@@ -253,7 +255,7 @@ sub handle_additional_polkit_windows {
 
 =head2 handle_login
 
- handle_login($myuser, $user_selected);
+ handle_login(myuser => $myuser, user_selected => 1);
 
 Log the user in using the displaymanager.
 When C<$myuser> is set, this user will be used for login.
@@ -264,15 +266,15 @@ user has already been selected before this function was called.
 
 Example:
 
-  handle_login('user1', 1);
+  handle_login(myuser => 'user1', user_selected => 1);
 
 =cut
 
 sub handle_login {
-    my ($myuser, $user_selected, $mypwd) = @_;
-    $myuser //= $username;
-    $mypwd //= $testapi::password;
-    $user_selected //= 0;
+    my (%args) = @_;
+    my $myuser = $args{myuser} // $username;
+    my $mypwd = $args{mypwd} // $testapi::password;
+    my $user_selected = $args{user_selected} // 0;
 
     wait_still_screen 3;
     save_screenshot();
@@ -317,7 +319,12 @@ sub handle_login {
     handle_additional_polkit_windows($mypwd) if check_screen([qw(authentication-required-user-settings authentication-required-modify-system)], 15);
     assert_screen([qw(generic-desktop gnome-activities opensuse-welcome)], 180);
     if (match_has_tag('gnome-activities')) {
-        send_key_until_needlematch [qw(generic-desktop opensuse-welcome)], 'esc', 5, 10;
+        if ($args{custom_generic_desktop}) {
+            send_key_until_needlematch $args{custom_generic_desktop}, 'esc', 5, 10;
+        }
+        else {
+            send_key_until_needlematch [qw(generic-desktop opensuse-welcome)], 'esc', 5, 10;
+        }
     }
 }
 
@@ -354,8 +361,9 @@ First logs out and the log in via C<handle_logout()> and C<handle_login()>
 =cut
 
 sub handle_relogin {
+    my (%args) = @_;
     handle_logout;
-    handle_login;
+    handle_login(%args);
 }
 
 =head2 select_user_gnome
@@ -461,6 +469,23 @@ sub turn_off_kde_screensaver {
     turn_off_plasma_screen_energysaver;
 }
 
+=head2 turn_off_xfce_screensaver
+
+  turn_off_xfce_screensaver()
+
+Prevents screen from being locked or turning black while using the xfce
+desktop. Call before tests that are not providing input for a long time, to
+prevent needles from failing.
+
+=cut
+
+sub turn_off_xfce_screensaver {
+    x11_start_program(default_gui_terminal());
+    assert_script_run 'xfconf-query -c xfce4-screensaver -p /saver/enabled -s false -t bool --create';
+    assert_script_run 'xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/dpms-enabled -s false --create';
+    script_run 'exit', 0;
+}
+
 =head2 turn_off_gnome_screensaver
 
   turn_off_gnome_screensaver()
@@ -521,6 +546,7 @@ Turns off the screensaver depending on desktop environment
 
 sub turn_off_screensaver {
     return turn_off_kde_screensaver if check_var('DESKTOP', 'kde');
+    return turn_off_xfce_screensaver if check_var('DESKTOP', 'xfce');
     die "Unsupported desktop '" . get_var('DESKTOP', '') . "'" unless check_var('DESKTOP', 'gnome');
     x11_start_program(default_gui_terminal());
     turn_off_gnome_screensaver;
@@ -636,6 +662,32 @@ sub default_gui_terminal {
     return "xterm";
 }
 
+=head2 close_gui_terminal
+
+    close_gui_terminal()
+
+Closes the currently focused window, if its a terminal like kgx, it would handle the close window prompt
+
+=cut
+
+sub close_gui_terminal {
+    my $counter = 5;
+    my @tags = ("terminal-unfocused", "terminal-close-window", "generic-desktop");
+    while ($counter--) {
+        send_key_until_needlematch(\@tags, 'alt-f4', 5, 10);
+        if (match_has_tag('terminal-close-window')) {
+            click_lastmatch;
+            assert_screen 'generic-desktop';
+            last;
+        }
+        if (match_has_tag("terminal-unfocused")) {
+            click_lastmatch;
+            next;
+        }
+        last if match_has_tag('generic-desktop');
+    }
+}
+
 =head2 handle_gnome_activities
 
     handle_gnome_activities()
@@ -658,6 +710,29 @@ sub handle_gnome_activities {
         @tags = grep { !/gnome-activities/ } @tags;
         assert_screen \@tags, $timeout;
     }
+}
+
+=head2 save_print_file
+
+ save_print_file($filename)
+
+Run save_print_file in x11: Smoke test of GTK interfacing with CUPS
+
+=cut
+
+sub save_print_file {
+    my ($filename) = @_;
+    send_key "ctrl-p";
+    assert_screen 'gtk-print-dialog';
+
+    # Select 'Print to File' and set PDF format
+    send_key "ret";    # Confirm print
+
+    assert_screen 'pdf_name';
+    send_key 'ctrl-a';
+    send_key 'delete';
+    type_string_slow($filename);
+    send_key "ret";
 }
 
 1;

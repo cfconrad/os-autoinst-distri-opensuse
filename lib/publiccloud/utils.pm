@@ -10,10 +10,14 @@ package publiccloud::utils;
 
 use base Exporter;
 use Exporter;
+use File::Basename;
 use Mojo::UserAgent;
 use Mojo::URL;
 use Mojo::JSON 'encode_json';
 use Carp qw(croak);
+use Socket qw(AF_INET AF_INET6 inet_pton);
+use Time::Piece;
+use Time::Seconds;
 
 use strict;
 use warnings;
@@ -62,6 +66,10 @@ our @EXPORT = qw(
   zypper_install_remote
   zypper_install_available_remote
   wait_quit_zypper_pc
+  detect_worker_ip
+  upload_asset_on_remote
+  zypper_call_remote
+  calculate_custodian_ttl
 );
 
 # Check if we are a BYOS test run
@@ -211,7 +219,7 @@ sub registercloudguest {
     # Check what version of registercloudguest binary we use, chost images have none pre-installed
     my $version = $instance->ssh_script_output(cmd => 'rpm -q --queryformat "%{VERSION}\n" cloud-regionsrv-client', proceed_on_failure => 1);
     if ($version =~ /cloud-regionsrv-client is not installed/) {
-        die 'cloud-regionsrv-client should not be installed' if !is_container_host;
+        die 'cloud-regionsrv-client should be installed' if !is_container_host;
     }
 
     my $cmd_time = time();
@@ -228,12 +236,10 @@ sub register_addons_in_pc {
     my ($instance) = @_;
     my @addons = split(/,/, get_var('SCC_ADDONS', ''));
     my $remote = $instance->username . '@' . $instance->public_ip;
-    # Workaround for bsc#1245220
-    my $env = is_sle("=15-SP3") ? "ZYPP_CURL2=1" : "";
-    my $cmd = "sudo $env zypper -n --gpg-auto-import-keys ref";
-    my $ret = $instance->ssh_script_run(cmd => $cmd, timeout => 300);
+    my $zcmd = "--gpg-auto-import-keys ref";
+    my $ret = $instance->zypper_call_remote(cmd => $zcmd, exitcode => [0, 6], timeout => 300);
     die 'No enabled repos defined: bsc#1245651' if $ret == 6;    # from zypper man page: ZYPPER_EXIT_NO_REPOS
-    $instance->ssh_script_retry(cmd => $cmd, timeout => 300, retry => 3, delay => 120);
+    $instance->zypper_call_remote(cmd => $zcmd, timeout => 300, retry => 6, delay => 200);
     for my $addon (@addons) {
         next if ($addon =~ /^\s+$/);
         register_addon($remote, $addon);
@@ -471,6 +477,7 @@ sub ssh_update_transactional_system {
     record_info($cmd_name, 'The second command ' . $cmd_name . ' took ' . (time() - $cmd_time) . ' seconds.');
     die "$cmd_name failed with $ret" if ($ret != 0 && $ret != 102);
 }
+
 
 =head2 get_python_exec
 
@@ -827,4 +834,170 @@ sub wait_quit_zypper_pc {
     );
 }
 
+=head2 detect_worker_ip
+
+    detect_worker_ip($proceed_on_failure)
+
+    Detects the current openQA worker's public IPs (ipv4/6) and returns them as
+    an array of suitable CIDR strings(/32 or /128 for ipv4/6, respectively).
+    The function uses http://checkip.amazonaws.com and falls back to https://ifconfig.me
+    if the first attempt fails.
+    Optionally accepts proceed_on_failure => 1 to return undef instead of dying.
+
+    Return:
+    - worker ip, if retrieved
+    - undef otherwise (if proceed_on_failure is set)
+
+=cut
+
+sub detect_worker_ip {
+    my (%args) = @_;
+    my $ip;
+    for my $url ('http://checkip.amazonaws.com', 'https://ifconfig.me') {
+        $ip = script_output("curl -q -fsS --max-time 10 $url",
+            timeout => 15, proceed_on_failure => 1);
+        $ip =~ s/^\s+|\s+$//g;
+        next unless $ip && (inet_pton(AF_INET, $ip) || inet_pton(AF_INET6, $ip));
+        return $ip;
+    }
+    return undef if $args{proceed_on_failure};
+    die "Worker IP could not be determined - return was $ip";
+}
+
+sub upload_asset_on_remote {
+    my (%args) = @_;
+
+    my $instance = $args{instance};
+    my $source_data_url_path = $args{source_data_url_path};
+    my $destination_path = $args{destination_path};
+    my $elevated = $args{elevated} // 0;
+
+    die 'Missing instance' unless $instance;
+    die 'Missing source_data_url_path' unless $source_data_url_path;
+    die 'Missing destination_path' unless $destination_path;
+
+    my $filename = basename($source_data_url_path);
+
+    my $curl_cmd = "curl " . data_url($source_data_url_path) . " -o ./$filename";
+    assert_script_run($curl_cmd);
+
+    $instance->scp("./$filename", "remote:/tmp/$filename");
+
+    my $prefix = $elevated ? 'sudo ' : '';
+    my $mv_cmd = $prefix . "mv /tmp/$filename $destination_path";
+    $instance->ssh_assert_script_run($mv_cmd);
+}
+
+=head2 $instance->zypper_call_remote
+
+    $instance->zypper_call_remote($command [, exitcode => $exitcode] [, timeout => $timeout];
+
+Function wrapping zypper command for remote execution via ssh; not for tunnelling.
+Implements similar routine as lib/utils::zypper_call_remote, but for remote execution on publiccloud instances.
+
+Usage example:
+    $instance->zypper_call_remote("up", exitcode => [0,102,103], timeout => 300);
+
+=cut
+
+sub zypper_call_remote {
+    my $instance = shift;
+    my %args = testapi::compat_args({cmd => undef}, ['cmd'], @_);
+    $args{rc_only} = 1;
+    $args{timeout} //= 700;
+    die "Invalid value 'timeout' = 0" unless ($args{timeout});
+    die "Empty 'cmd' argument in zypper call" unless ($args{cmd});
+    die "Exit code is from PIPESTATUS[0], not grep" if $args{cmd} =~ /^((?!`).)*\| ?grep/;
+    my $log = "/var/log/zypper.log";
+    my $exit_codes = $args{exitcode} || [0];
+    my $retry = $args{retry} // 1;
+    my $delay = $args{delay} // 5;
+    my $proceed = $args{proceed_on_failure} // 0;
+    my $zcmd = $args{cmd};
+    # full command to run in ssh
+    $args{cmd} = "sudo zypper -n $zcmd";
+    #
+    delete $args{exitcode};
+    delete $args{retry};
+    delete $args{delay};
+    # retry loop
+    my $ret;
+    for (1 .. $retry) {
+        # pause on next
+        sleep($delay) if (defined($ret));
+        # remote execution
+        $ret = $instance->run_ssh_command(%args);
+        last if ($ret == 0);
+        # check exit codes
+        if ($ret == 4) {
+            if ($instance->ssh_script_run(qq[sudo grep "Error code.*502" $log]) == 0) {
+                die 'According to bsc#1070851 zypper should automatically retry internally. Bugfix missing for current product?';
+            }
+            elsif ($instance->ssh_script_run(qq[sudo grep "Solverrun finished with an ERROR" $log]) == 0) {
+                my $search_conflicts = q[sudo awk '
+                    /Solverrun finished with an ERROR/,/statistics/{ 
+                    print group"|", $0; if ($0 ~ /statistics/ ){ print "EOL"; group++ } }' ] . $log;
+                my $conflicts = $instance->ssh_script_output($search_conflicts);
+                record_info("Conflicts", $conflicts, result => 'fail');
+                diag "Package conflicts found, not retrying anymore" if $conflicts;
+                last;
+            }
+            next;
+        }
+        last;
+    }
+    # Result management
+    my $command = $args{cmd};
+    unless (grep { $_ == $ret } @$exit_codes) {
+        $instance->ssh_script_run(qq[sudo chmod o+r $log]);
+        $instance->upload_log($log);
+        my $msg = qq[$command failed with code: $ret];
+        if ($ret == 104) {
+            $msg .= " (ZYPPER_EXIT_INF_CAP_NOT_FOUND)\n\nRelated zypper logs:\n";
+            $instance->ssh_script_run(qq[sudo tac $log | grep -F -m1 -B100000 "Hi, me zypper" | tac | grep -E '(SolverRequester.cc|THROW|CAUGHT)' > /tmp/z104.txt]);
+            $msg .= $instance->ssh_script_output('cat /tmp/z104.txt');
+        }
+        elsif ($ret == 107) {
+            $msg .= " (ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED)\n\nRelated zypper logs:\n";
+            $instance->ssh_script_run(qq[sudo tac $log | grep -F -m1 -B100000 "Hi, me zypper" | tac | grep -E 'RpmPostTransCollector.cc(executeScripts):.* scriptlet failed, exit status' > /tmp/z107.txt]);
+            $msg .= $instance->ssh_script_output('cat /tmp/z107.txt') . "\n\n";
+        }
+        else {
+            $instance->ssh_script_run(qq[sudo tac $log | grep -F -m1 -B100000 "Hi, me zypper" | tac | grep 'Exception.cc' > /tmp/zlog.txt]);
+            $msg .= "\n\nRelated zypper logs:\n";
+            $msg .= $instance->ssh_script_output('cat /tmp/zlog.txt');
+        }
+        die $msg unless ($proceed);
+        record_info("zypper error", $msg, result => 'fail');
+    }
+    record_info("zypper remote call", "Command: $command \nResult: $ret");
+    return $ret;
+}
+
+
+=head2 calculate_custodian_ttl {
+
+
+calculate_custodian_ttl($ttl_in_seconds)
+
+This function adds the following tags to public cloud objects: custodian_ttl
+custodian_ttl is calculated by adding the $ttl_in_seconds to the current time and formatting it in ISO 8601
+This tag is needed to compare TTL vs Creation time in Cloud Custodian.
+
+=cut
+
+sub calculate_custodian_ttl {
+    my $ttl_in_seconds = @_;
+
+    # UTC time
+    my $now = gmtime;
+    my $expiration_time = $now + $ttl_in_seconds;
+
+    # convert to proper format
+    my $custodian_expiration_date = $expiration_time->strftime("%Y-%m-%dT%H:%M:%SZ");
+
+    return $custodian_expiration_date;
+}
+
 1;
+

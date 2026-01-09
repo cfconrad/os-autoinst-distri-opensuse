@@ -32,6 +32,8 @@ sub run {
         export_to_json($tinfo->test_result_export);
     }
 
+    run_supportconfig;
+
     script_run('cat /proc/stat');
     script_run('df -h');
     check_kernel_taint($self, has_published_assets() ? 1 : 0);
@@ -43,6 +45,9 @@ sub run {
     }
 
     upload_system_logs();
+
+    # Also cleanup machine-id to avoid duplicate ipv6 link local address in mutli-machine setup.
+    script_run('echo -n >/etc/machine-id');
 
     power_action('poweroff');
 }

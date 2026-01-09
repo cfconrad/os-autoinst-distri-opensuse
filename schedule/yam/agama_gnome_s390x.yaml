@@ -4,7 +4,6 @@ description: >
   Perform desktop installation with interactive and unattended for s390x.
 schedule:
   - yam/agama/boot_agama
-  - yam/agama/agama_arrange
   - yam/agama/import_agama_profile
   - yam/agama/patch_agama_tests
   - yam/agama/agama
@@ -12,3 +11,5 @@ schedule:
   - installation/first_boot
   - yam/validate/validate_installed_patterns
   - yam/validate/validate_packages
+  - yam/validate/validate_btrfs_without_snapshots
+  - console/validate_blockdevices
