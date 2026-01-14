@@ -16,6 +16,7 @@ use utils qw(zypper_call);
 use testapi;
 use version_utils 'check_version';
 use serial_terminal 'select_serial_terminal';
+use registration;
 
 has wicked_version => undef;
 has wpa_supplicant_version => undef;
@@ -178,7 +179,9 @@ sub prepare_sut {
 }
 
 sub prepare_packages {
-    if (is_sle()) {
+    if (is_sle('>=16.0')) {
+        add_suseconnect_product(get_addon_fullname('phub'));
+    } elsif (is_sle()) {
         set_var('QA_HEAD_REPO', 'http://download.suse.de/ibs/QA:/Head/' . generate_version('-')) unless (get_var('QA_HEAD_REPO'));
         add_qa_head_repo();
     }
