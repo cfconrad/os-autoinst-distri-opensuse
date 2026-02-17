@@ -225,7 +225,15 @@ sub switch_to_wicked {
     record_info('ip r', script_output('ip r'));
     record_info('nameserver', script_output('cat /etc/resolv.conf'));
     assert_script_run('ping -c 5 10.0.2.2');
-    add_suseconnect_product(get_addon_fullname('phub')) if is_sle('>=16.0');
+    if (is_sle('>=16.0')) {
+        add_suseconnect_product(get_addon_fullname('phub'));
+        # wicked::wlan->new()->retry(
+            # sub {
+                zypper_call("ref");
+            # }
+        # );
+    }
+
     zypper_call("in wicked", timeout => 400);
     systemctl("enable --force wicked");
     systemctl("stop NetworkManager");
