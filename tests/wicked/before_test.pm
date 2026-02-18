@@ -227,11 +227,7 @@ sub switch_to_wicked {
     assert_script_run('ping -c 5 10.0.2.2');
     if (is_sle('>=16.0')) {
         add_suseconnect_product(get_addon_fullname('phub'));
-        # wicked::wlan->new()->retry(
-            # sub {
-                zypper_call("ref");
-            # }
-        # );
+        zypper_call("ref");
     }
 
     zypper_call("in wicked", timeout => 400);
