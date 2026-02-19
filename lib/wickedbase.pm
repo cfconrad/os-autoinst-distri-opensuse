@@ -1078,7 +1078,7 @@ sub run_test_shell_script
 sub record_console_test_result {
     my ($self, $title, $content, %args) = @_;
     $args{result} //= 'failed';
-    $title =~ s/:/_/g;
+    $title =~ s/[^a-zA-Z0-9]/_/g;
     my $details = $self->record_testresult($args{result});
     my $filename = $self->next_resultname('txt', $title);
     $details->{_source} = 'parser';
