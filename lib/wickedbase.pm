@@ -26,7 +26,7 @@ use File::Basename;
 use version_utils 'check_version';
 use List::MoreUtils qw(uniq);
 use containers::common qw(install_podman_when_needed install_docker_when_needed);
-
+use bootloader_setup;
 
 use strict;
 use warnings;
@@ -213,6 +213,12 @@ sub valgrind_enable {
 
     my @services = $self->valgrind_get_services();
     return 0 if (!@services);
+
+    if ($self->is_selinux_enabled) {
+        record_info('Disable SELinux', "Disable SELinux");
+        assert_script_run "sed -i -e 's/^SELINUX=.*/SELINUX=disabled/g' /etc/selinux/config";
+        replace_grub_cmdline_settings('security=selinux selinux=1', 'security=selinux selinux=0', update_grub => 1);
+    }
 
 
     record_info("valgrind enable", "services: @services\ncommand: " . $self->valgrind_cmd);
