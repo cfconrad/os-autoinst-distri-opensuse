@@ -1145,6 +1145,10 @@ sub check_logs {
             $self->result('fail') if get_var(WICKED_CHECK_LOG_FAIL => 0) && $self->{name} ne 'before_test';
         }
     }
+    if (ref($code) ne 'CODE') {
+        # Avoid display the same log error twice
+        $self->{pre_run_log_cursor} = $self->get_log_cursor();
+    }
 }
 
 sub coredumpctl_has_debug {
