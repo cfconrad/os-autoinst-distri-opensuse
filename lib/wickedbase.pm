@@ -1126,7 +1126,7 @@ sub check_logs {
     @excludes = map { my $v = trim($_); length($v) > 0 ? $v : () } @excludes;
 
     for my $unit (@units) {
-        my $cmd = "journalctl $cursor -q -p 3 -x -u $unit";
+        my $cmd = "journalctl $cursor -q -b -p 3 -x -u $unit";
         for my $exclude (@excludes) {
             my ($unit_match, $regex) = split(/\s*=\s*/, $exclude, 2);
             if ($unit_match =~ /^all$/i || $unit_match eq $unit) {
