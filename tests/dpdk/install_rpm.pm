@@ -58,6 +58,7 @@ sub run {
     record_info('INSTALL_RPM', $install_rpm);
     record_info('FROM_REPO', $install_rpm_from_repo);
     record_info('REMOVE_RPM', $remove_rpm);
+    record_info('zypper lr', script_output('zypper lr'));
 
     for my $pkg (split(/\s+/, $remove_rpm)) {
         if (script_run("rpm -q $pkg") == 0) {
@@ -66,6 +67,10 @@ sub run {
     }
 
     install_custom_package($install_rpm_from_repo);
+
+    if (get_var('ENABLE_DEBUG_REPOS', 0)) {
+        assert_script_run(q(zypper -q lr | tail -n +4 | grep Debug | awk '{ print $1 }' | xargs zypper mr -e));
+    }
 
     for my $pkg (split(/\s+/, $install_rpm)) {
         if (script_run("rpm -q $pkg") != 0) {
