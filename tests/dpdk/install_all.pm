@@ -63,7 +63,7 @@ sub run {
         $pkg =~ s/%([^%]+)%/get_var($1,'')/ge;
 
         if (script_run("zypper -q search -x $pkg") == 0) {
-            zypper_call("zypper in $pkg");
+            zypper_call("in $pkg");
         } else {
             push(@missed, $pkg);
         }
