@@ -64,6 +64,7 @@ sub run {
 
         if (script_run("zypper -q search -x $pkg") == 0) {
             zypper_call("in $pkg");
+            record_info($pkg, script_output('rpm -qi ' . $pkg));
         } else {
             push(@missed, $pkg);
         }
