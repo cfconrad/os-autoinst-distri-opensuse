@@ -35,7 +35,7 @@ sub install_custom_package()
         if ($item =~ /^http/) {
             $repo_idx++;
             $alias = "custom_repo_$repo_idx";
-            zypper_ar($item, name => $alias, no_gpg_check => 1);
+            zypper_ar($item, name => $alias, no_gpg_check => 1, priority => 80);
         } else {
             if ($alias) {
                 zypper_call("in --from $alias $item");
@@ -53,15 +53,15 @@ sub run {
     select_serial_terminal;
 
     record_info('INSTALL_RPM', get_var('INSTALL_RPM'));
+    my $dpdk_default_rpm = get_var('DPDK_DEFAULT_RPM', 'dpdk dpdk-tools pciutils kernel-firmware-network');
 
     zypper_call("rm busybox-which") if (script_run("rpm -q busybox-which") == 0);
 
     install_custom_package();
 
     # Check for needed packages and install if missing
-    my @packages = qw(dpdk dpdk-tools pciutils kernel-firmware-network);
     my @to_install;
-    for my $pkg (@packages) {
+    for my $pkg (split(/\s+/, $dpdk_default_rpm)) {
         if (script_run("rpm -q $pkg") != 0) {
             zypper_call("in  $pkg");
         }
