@@ -15,9 +15,9 @@ use repo_tools 'generate_version';
 use registration;
 
 
-sub install_custom_package()
+sub install_custom_package
 {
-    my $custom_pkg = get_var('INSTALL_RPM');
+    my $custom_pkg = shift;
 
     return unless $custom_pkg;
 
@@ -52,19 +52,26 @@ sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    record_info('INSTALL_RPM', get_var('INSTALL_RPM'));
-    my $dpdk_default_rpm = get_var('DPDK_DEFAULT_RPM', 'dpdk dpdk-tools pciutils kernel-firmware-network');
+    my $install_rpm_from_repo = get_var('INSTALL_RPM_FROM_REPO');
+    my $install_rpm = get_var('INSTALL_RPM');
+    my $remove_rpm = get_var('REMOVE_RPM');
+    record_info('INSTALL_RPM', $install_rpm);
+    record_info('FROM_REPO', $install_rpm_from_repo);
+    record_info('REMOVE_RPM', $remove_rpm);
 
-    zypper_call("rm busybox-which") if (script_run("rpm -q busybox-which") == 0);
+    for my $pkg (split(/\s+/, $remove_rpm)) {
+        if (script_run("rpm -q $pkg") == 0) {
+            zypper_call("rm $pkg");
+        }
+    }
 
-    install_custom_package();
+    install_custom_package($install_rpm_from_repo);
 
-    # Check for needed packages and install if missing
-    my @to_install;
-    for my $pkg (split(/\s+/, $dpdk_default_rpm)) {
+    for my $pkg (split(/\s+/, $install_rpm)) {
         if (script_run("rpm -q $pkg") != 0) {
             zypper_call("in  $pkg");
         }
+        record_info($pkg, script_output('rpm -qi ' . $pkg));
     }
 }
 
