@@ -23,8 +23,10 @@ sub run {
     assert_script_run("chmod +x $script");
 
     my $threshold = "--threshold-tx 640000 --threshold-rx 640000";
-    my $cmd_tx = "$script -a 0000:00:09.0 -a 0000:00:0a.0 --mode tx_start $threshold";
-    my $cmd_fwd = "$script -a 0000:00:09.0 -a 0000:00:0a.0 --mode fwd $threshold";
+    my $cmd_tx = sprintf("%s -a %s -a %s --mode tx_start $threshold",
+        $script, $self->pci3, $self->pci4);
+    my $cmd_fwd = sprintf("%s -a %s -a %s --mode fwd $threshold",
+        $script, $self->pci3, $self->pci4);
 
     barrier_wait({name => 'wait_1', check_dead_job => 1});
     if (get_var('DPDK_HOST') eq 1) {

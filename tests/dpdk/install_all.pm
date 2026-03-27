@@ -58,6 +58,11 @@ sub run {
       python3-openvswitch
       python3-openvswitch-debuginfo);
 
+    if (is_sle('=15-sp5')) {
+        s/dpdk/dpdk22/ for (@packages);
+        s/openvswitch/openvswitch3/ for (@packages);
+    }
+
     my @missed;
     for my $pkg (@packages) {
         $pkg =~ s/%([^%]+)%/get_var($1,'')/ge;

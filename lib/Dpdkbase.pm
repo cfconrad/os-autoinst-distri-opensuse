@@ -16,8 +16,13 @@ use mmapi;
 
 use constant DPDK_DATA_DIR => '/root/data';
 
+# Interfaces connected to a switch
+has pci1 => '0000:00:07.0';
+has pci2 => '0000:00:08.0';
 
-
+# Interfaces connected to delta{123} in a cycle
+has pci3 => '0000:00:09.0';
+has pci4 => '0000:00:0a.0';
 
 =head2 download_data_dir
 
