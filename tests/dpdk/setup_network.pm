@@ -18,6 +18,15 @@ sub run {
 
     # Get the interface with the lowest ifindex but not LOOPBACK.
     my $iface = script_output(q(ip -o link show | awk -F': ' '$2 != "lo" {print $1, $2}' | sort -n | head -n1 | awk '{print $2}'));
+
+    # If NICMAC is given, use interface belonging to this
+    my $mac = get_var('NICMAC');
+    if ($mac) {
+        my $out = script_output("grep -l '$mac' /sys/class/net/*/address");
+        if ($out =~ /\/([^\/]+)\/address/) {
+            $iface = $1;
+        }
+    }
     record_info('iface', $iface);
     record_info('NetworkManager', is_nm_used() ? 'enabled' : 'disabled');
     record_info('wicked', is_wicked_used() ? 'enabled' : 'disabled');

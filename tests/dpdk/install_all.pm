@@ -11,6 +11,7 @@ use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call);
+use version_utils qw(is_sle);
 
 sub run {
     my @packages = qw(
@@ -56,7 +57,8 @@ sub run {
       ovn-vtep
       ovn-vtep-debuginfo
       python3-openvswitch
-      python3-openvswitch-debuginfo);
+      python3-openvswitch-debuginfo
+    );
 
     if (is_sle('=15-sp5')) {
         s/dpdk/dpdk22/ for (@packages);
