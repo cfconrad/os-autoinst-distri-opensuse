@@ -16,7 +16,6 @@ use mmapi;
 
 use constant DPDK_DATA_DIR => '/root/data';
 
-has pci1 => ''
 
 
 
