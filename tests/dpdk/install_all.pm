@@ -63,6 +63,7 @@ sub run {
     if (is_sle('=15-sp5')) {
         s/dpdk/dpdk22/ for (@packages);
         s/openvswitch/openvswitch3/ for (@packages);
+        s/ovn/ovn3/ for (@packages);
     }
 
     my @missed;

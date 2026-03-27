@@ -25,6 +25,10 @@ sub run {
 
     record_info('pkg', script_output(q(rpm -qa | grep -E 'dpdk|ovn|openvswitch|ovs' | xargs -IXXX bash -c 'echo -e "\n\n\n" ; rpm -qi XXX')));
     record_info('rpm -qa', script_output('rpm -qa'));
+
+    record_info('cmdline', script_output('cat /proc/cmdline'));
+    record_info('uname', script_output('uname -a'));
+    record_info('os-release', script_output('cat /etc/os-release'));
 }
 
 sub test_flags {
