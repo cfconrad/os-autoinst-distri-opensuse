@@ -109,7 +109,6 @@ for dev in $INTEL_DEVS; do
     echo "Binding $dev..."
     dpdk-devbind.py --unbind "$dev" || true
     dpdk-devbind.py --bind vfio-pci "$dev"
-    dpdk_testpmd_a="$dpdk_testpmd_a -a $dev"
 done
 
 dpdk-devbind.py -s
@@ -126,24 +125,37 @@ fi
 
 read -ra PCI_PORTS <<< "$INTEL_DEVS"
 dpdk_cmd=(dpdk-testpmd -l "$CORES" ${PCI_PORTS[@]/#/-a } -- -i)
+echo ">>> $(date  '+%Y-%m-%d %H:%M:%S')"
 echo ">>> ${dpdk_cmd[@]}"
 
 read -ra PCI_PORTS <<< "$INTEL_DEVS"
 if [ $MODE == 'fwd' ]; then
 
   (
-    sleep 10;
-    echo start;
+    sleep 15;
+    echo 'set link-up port 0'
+    sleep 1;
+    echo 'set link-up port 1'
+    sleep 1;
+    echo 'show port info all'
+    sleep 3;
+    echo 'start';
     sleep 30;
-    echo quit
+    echo 'quit'
   ) | "${dpdk_cmd[@]}" >$LOGFILE 2>&1
 
 else
 
-  ( sleep 15;
+  ( sleep 20;
+    echo 'set link-up port 0'
+    sleep 1;
+    echo 'set link-up port 1'
+    sleep 1;
+    echo 'show port info all'
+    sleep 3;
     echo 'set fwd rxonly';
     echo 'start tx_first 10000';
-    echo quit
+    echo 'quit'
   ) | "${dpdk_cmd[@]}" >$LOGFILE 2>&1
 
 fi
