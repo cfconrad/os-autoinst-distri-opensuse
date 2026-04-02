@@ -14,6 +14,7 @@ sub run {
         barrier_create("wait_1", $self->num_children() + 1);
         barrier_create("wait_2", $self->num_children() + 1);
         barrier_create("wait_3", $self->num_children() + 1);
+        barrier_create("wait_4", $self->num_children() + 1);
 
         mutex_create('dpdk_barriers_created');
     } else {
