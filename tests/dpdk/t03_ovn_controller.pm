@@ -18,7 +18,7 @@ use Data::Dumper;
 use lockapi;
 
 sub extract_var($file, $var) {
-    my $line = script_output("cat $file | grep '^$var='");
+    my $line = script_output(qq%(source $file && echo "$var=\$$var")%);
 
     if (length($line) > length($var) + 1) {
         return substr($line, length($var) + 1);
@@ -49,6 +49,8 @@ sub run {
         $env .= ' CTRL_IFC=' . $self->get_ifc_by_pci_id($self->pci1);
         $env .= ' HOST2_DATA_PCI_ID=' . $self->pci2;
         $self->run_test_shell_script('host2.sh', "$env $script_dir/host2.sh");
+        assert_script_run('ip netns exec ns2 ip a s');
+        assert_script_run('ip netns exec ns2 ip r s');
         assert_script_run('ip netns exec ns2 iperf3 -D -s');
     }
     if (get_var('DPDK_HOST') eq 3) {
@@ -56,15 +58,20 @@ sub run {
         $env .= ' CTRL_IFC=' . $self->get_ifc_by_pci_id($self->pci1);
         $env .= ' HOST3_DATA_PCI_ID=' . $self->pci2;
         $self->run_test_shell_script('host3.sh', "$env $script_dir/host3.sh");
+        assert_script_run('ip netns exec ns3 ip a s');
+        assert_script_run('ip netns exec ns3 ip r s');
         assert_script_run('ip netns exec ns3 iperf3 -D -s');
     }
 
     barrier_wait({name => 'wait_3', check_dead_job => 1});
 
     if (get_var('DPDK_HOST') eq 1) {
+        assert_script_run('ip netns exec ns1 ip a s');
+        assert_script_run('ip netns exec ns1 ip r s');
         for my $host (qw(HOST2 HOST3)) {
             my $ip = extract_var("$script_dir/setup.cfg", "${host}_TEST_IP");
 
+            assert_script_run("ip netns exec ns1 ping -c 5 $ip");
             assert_script_run("ip netns exec ns1 iperf3 -c $ip -J | tee $host.json");
 
             my $json = decode_json(script_output("cat $host.json"));
