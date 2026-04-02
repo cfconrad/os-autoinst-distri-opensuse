@@ -33,10 +33,10 @@ function setup_br_dpdk()
   ovs-vsctl add-br br-dpdk -- set bridge br-dpdk datapath_type=netdev
 
   echo "Add the DPDK port"
-  ovs-vsctl add-port br-dpdk dpdk0@br-dpdk -- \
-    set Interface dpdk0@br-dpdk type=dpdk options:dpdk-devargs=$pci_id
-  ovs-vsctl add-port br-dpdk vlan$vlan@br-dpdk tag=$vlan -- \
-    set Interface vlan$vlan@br-dpdk type=internal
+  ovs-vsctl add-port br-dpdk dpdk0 -- \
+    set Interface dpdk0 type=dpdk options:dpdk-devargs=$pci_id
+  ovs-vsctl add-port br-dpdk vlan$vlan tag=$vlan -- \
+    set Interface vlan$vlan type=internal
 
   ip addr add $ipaddr/24 dev vlan$vlan
   ip link set vlan$vlan up
