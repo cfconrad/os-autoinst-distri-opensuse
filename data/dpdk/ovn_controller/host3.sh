@@ -15,6 +15,8 @@ systemctl enable --now ovn-controller.service
 
 firewall-cmd --add-port=6081/udp
 firewall-cmd --add-port=3784/udp
+# Allow iperf3 default port
+firewall-cmd --add-port=5201/tcp
 
 setup_network "$CTRL_IFC" "$CTRL_VLAN" "$HOST3_IP"
 setup_br_dpdk "$HOST3_DATA_PCI_ID" "$DATA_VLAN" "$HOST3_DATA_IP" "$HUGEPAGES_2M"

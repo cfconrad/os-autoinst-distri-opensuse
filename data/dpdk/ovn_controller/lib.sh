@@ -1,7 +1,5 @@
 #!/bin/bash
 
-
-
 function setup_br_dpdk()
 {
   local pci_id=${1:?Missing PCI_ID parameter}
@@ -42,6 +40,7 @@ function setup_br_dpdk()
   ip link set vlan$vlan up
 }
 
+
 function setup_network()
 {
   local ifc=${1:?Missing parameter interface name}
@@ -55,8 +54,11 @@ ETHERDEVICE=$ifc
 IPADDR=$ip/24
 ZONE=public
 EOT
-    wicked ifreload all
-    cat "$cfg"
+    wicked ifreload all || {
+        echo "[ERROR] Network setup failed -- wicked ifreload all"
+        echo "Config:"
+        cat "$cfg"
+    }
   else
     conname="$ifc.$vlan"
     nmcli con del "$conname"
@@ -64,8 +66,11 @@ EOT
       dev $ifc id $vlan ipv4.addresses $ip/24 ipv4.method manual"
     nmcli con add type vlan con-name "$conname" \
       dev "$ifc" id "$vlan" ipv4.addresses "$ip/24" ipv4.method manual
-    nmcli con up "$conname"
+    nmcli con up "$conname" || {
+        echo "[ERROR] Network setup failed -- nmcli con up $conname"
+        nmcli c
+        nmcli c show "$conname"
+    }
 
-    nmcli c show
   fi
 }
