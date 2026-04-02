@@ -48,18 +48,24 @@ function setup_network()
   local vlan=${2:?Missing parameter vlan id}
   local ip=${3:?Missing parameter ip address}
   if systemctl is-active wickedd; then
-    cat > /etc/sysconfig/network/ifcfg-$ifc.$vlan << EOT
+    cfg="/etc/sysconfig/network/ifcfg-$ifc.$vlan"
+    cat > "$cfg" << EOT
 STARTMODE=auto
 ETHERDEVICE=$ifc
 IPADDR=$ip/24
 ZONE=public
 EOT
     wicked ifreload all
+    cat "$cfg"
   else
     conname="$ifc.$vlan"
     nmcli con del "$conname"
-    nmcli con add type vlan con-name $conname \
-      dev $ifc id $vlan ipv4.addresses $ip/24 ipv4.method manual
+    echo "nmcli con add type vlan con-name $conname \
+      dev $ifc id $vlan ipv4.addresses $ip/24 ipv4.method manual"
+    nmcli con add type vlan con-name "$conname" \
+      dev "$ifc" id "$vlan" ipv4.addresses "$ip/24" ipv4.method manual
     nmcli con up "$conname"
+
+    nmcli c show
   fi
 }
