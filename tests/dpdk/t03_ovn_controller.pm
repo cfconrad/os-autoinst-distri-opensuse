@@ -65,6 +65,8 @@ sub run {
 
     barrier_wait({name => 'wait_3', check_dead_job => 1});
 
+    my $threshold = 8_000_000_000;    # 8Gbit
+
     if (get_var('DPDK_HOST') eq 1) {
         assert_script_run('ip netns exec ns1 ip a s');
         assert_script_run('ip netns exec ns1 ip r s');
@@ -87,6 +89,10 @@ sub run {
             $msg .= sprintf "Receiver Throughput: %.2f Mbps\n", $receiver_mbps;
 
             record_info('RESULT', $msg);
+
+            if ($sender_bps < $threshold || $receiver_bps < $threshold) {
+                die("Threashold not reached $threshold");
+            }
         }
     }
     barrier_wait({name => 'wait_4', check_dead_job => 1});
