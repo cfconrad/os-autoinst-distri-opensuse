@@ -16,7 +16,7 @@ systemctl enable --now ovn-controller.service
 firewall-cmd --add-port=6081/udp
 firewall-cmd --add-port=3784/udp
 
-setup_network "$CTRL_ETH" "$CTRL_VLAN" "$HOST3_IP"
+setup_network "$CTRL_IFC" "$CTRL_VLAN" "$HOST3_IP"
 setup_br_dpdk "$HOST3_DATA_PCI_ID" "$DATA_VLAN" "$HOST3_DATA_IP" "$HUGEPAGES_2M"
 
 ovs-vsctl set open_vswitch . external_ids:ovn-remote=tcp:${REMOTE_IP}:6642

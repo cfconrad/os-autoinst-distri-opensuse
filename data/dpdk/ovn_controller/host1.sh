@@ -18,7 +18,7 @@ firewall-cmd --add-port=6081/udp
 firewall-cmd --add-port=3784/udp
 firewall-cmd --add-port=6642/tcp
 
-setup_network "$CTRL_ETH" "$CTRL_VLAN" "$HOST1_IP"
+setup_network "$CTRL_IFC" "$CTRL_VLAN" "$HOST1_IP"
 setup_br_dpdk "$HOST1_DATA_PCI_ID" "$DATA_VLAN" "$HOST1_DATA_IP" "$HUGEPAGES_2M"
 
 echo "Allow connection to northd from everywhere"
@@ -94,7 +94,7 @@ ip netns exec ns1 ip route add default via $ROUTER1_TEST_IP
 ip netns exec ns1 ip a s
 
 # Test traffic to Host 2 (crossing LS1 -> LR1 -> LS2 over DPDK Geneve)
-echo "ip netns exec ns1 iperf3 -c $HOST2_TEST_IP"
+echo "ip netns exec ns1 iperf3 -c $HOST3_TEST_IP"
 
 # Test traffic to Host 3 (crossing LS1 -> LR1 -> LS3 over DPDK Geneve)
 echo "ip netns exec ns1 iperf3 -c $HOST3_TEST_IP"
