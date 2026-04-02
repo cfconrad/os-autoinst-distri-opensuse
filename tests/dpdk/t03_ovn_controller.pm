@@ -49,14 +49,14 @@ sub run {
         $env .= ' CTRL_IFC=' . $self->get_ifc_by_pci_id($self->pci1);
         $env .= ' HOST2_DATA_PCI_ID=' . $self->pci2;
         $self->run_test_shell_script('host2.sh', "$env $script_dir/host2.sh");
-        assert_script_run('iperf3 -D -s');
+        assert_script_run('ip netns exec ns2 iperf3 -D -s');
     }
     if (get_var('DPDK_HOST') eq 3) {
         my $env = 'LOCAL_HOSTNAME=host3';
         $env .= ' CTRL_IFC=' . $self->get_ifc_by_pci_id($self->pci1);
         $env .= ' HOST3_DATA_PCI_ID=' . $self->pci2;
         $self->run_test_shell_script('host3.sh', "$env $script_dir/host3.sh");
-        assert_script_run('iperf3 -D -s');
+        assert_script_run('ip netns exec ns3 iperf3 -D -s');
     }
 
     barrier_wait({name => 'wait_3', check_dead_job => 1});
