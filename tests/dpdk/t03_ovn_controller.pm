@@ -36,17 +36,26 @@ sub run {
     barrier_wait({name => 'wait_1', check_dead_job => 1});
 
     if (get_var('DPDK_HOST') eq 1) {
-        $self->run_test_shell_script('host1.sh', "$script_dir/host1.sh");
+        my $env = 'LOCAL_HOSTNAME=host1';
+        $env .= ' CTRL_IFC=' . $self->get_ifc_by_pci_id($self->pci1);
+        $env .= ' HOST1_DATA_PCI_ID=' . $self->pci2;
+        $self->run_test_shell_script('host1.sh', "$env $script_dir/host1.sh");
     }
 
     barrier_wait({name => 'wait_2', check_dead_job => 1});
 
     if (get_var('DPDK_HOST') eq 2) {
-        $self->run_test_shell_script('host2.sh', "$script_dir/host2.sh");
+        my $env = 'LOCAL_HOSTNAME=host2';
+        $env .= ' CTRL_IFC=' . $self->get_ifc_by_pci_id($self->pci1);
+        $env .= ' HOST2_DATA_PCI_ID=' . $self->pci2;
+        $self->run_test_shell_script('host2.sh', "$env $script_dir/host2.sh");
         assert_script_run('iperf3 -D -s');
     }
     if (get_var('DPDK_HOST') eq 3) {
-        $self->run_test_shell_script('host3.sh', "$script_dir/host3.sh");
+        my $env = 'LOCAL_HOSTNAME=host3';
+        $env .= ' CTRL_IFC=' . $self->get_ifc_by_pci_id($self->pci1);
+        $env .= ' HOST3_DATA_PCI_ID=' . $self->pci2;
+        $self->run_test_shell_script('host3.sh', "$env $script_dir/host3.sh");
         assert_script_run('iperf3 -D -s');
     }
 

@@ -51,6 +51,14 @@ sub get_from_data {
     assert_script_run("chmod +x '$target'") if $args{executable};
 }
 
+sub get_ifc_by_pci_id {
+    my ($self, $pci_id) = @_;
+
+    my $id = script_output("ls -1 '/sys/bus/pci/devices/$pci_id/net' 2> /dev/null");
+
+    return $id;
+}
+
 sub install_dependencies {
     my ($self) = @_;
     my @packages = qw(dpdk dpdk-tools pciutils);
