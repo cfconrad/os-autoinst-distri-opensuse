@@ -48,7 +48,7 @@ function setup_network()
   local vlan=${2:?Missing parameter vlan id}
   local ip=${3:?Missing parameter ip address}
   if systemctl is-active wickedd; then
-    cfg="/etc/sysconfig/network/ifcfg-$ifc.$vlan"
+    cfg="/etc/sysconfig/network/ifcfg-vlan$vlan"
     cat > "$cfg" << EOT
 STARTMODE=auto
 ETHERDEVICE=$ifc
