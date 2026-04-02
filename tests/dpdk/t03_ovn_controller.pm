@@ -9,7 +9,7 @@
 # * Each host run a ovn-controller connected to host1
 #
 # Maintainer: QE Core <qe-core@suse.de>
-use Mojo::Base 'Dpdkbase';
+use Mojo::Base 'Dpdkbase', -signatures;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call);
@@ -20,7 +20,7 @@ use lockapi;
 sub extract_var($file, $var) {
     my $line = script_output("cat $file | grep '^$var='");
 
-    if (length($line) > length($var) + 1){
+    if (length($line) > length($var) + 1) {
         return substr($line, length($var) + 1);
     }
     return undef;
@@ -31,7 +31,7 @@ sub run {
     select_serial_terminal;
 
     Dpdkbase::download_data_dir();
-    my $script = Dpdkbase::DPDK_DATA_DIR . '/dpdk/ovn_controller';
+    my $script_dir = Dpdkbase::DPDK_DATA_DIR . '/dpdk/ovn_controller';
 
     barrier_wait({name => 'wait_1', check_dead_job => 1});
 
@@ -53,25 +53,25 @@ sub run {
     barrier_wait({name => 'wait_3', check_dead_job => 1});
 
     if (get_var('DPDK_HOST') eq 1) {
-      for my $host (qw(HOST2 HOST3)) {
-        my $ip = extract_var("$script/setup.cfg", "${host}_TEST_IP");
+        for my $host (qw(HOST2 HOST3)) {
+            my $ip = extract_var("$script_dir/setup.cfg", "${host}_TEST_IP");
 
-        assert_script_run("ip netns exec ns1 iperf3 -c $ip -J | tee $host.json");
+            assert_script_run("ip netns exec ns1 iperf3 -c $ip -J | tee $host.json");
 
-        my $json = decode_json(script_output("cat $host.json"));
+            my $json = decode_json(script_output("cat $host.json"));
 
-        my $sender_bps   = $json->{end}{sum_sent}{bits_per_second};
-        my $receiver_bps = $json->{end}{sum_received}{bits_per_second};
+            my $sender_bps = $json->{end}{sum_sent}{bits_per_second};
+            my $receiver_bps = $json->{end}{sum_received}{bits_per_second};
 
-        my $sender_mbps   = $sender_bps / 1_000_000;
-        my $receiver_mbps = $receiver_bps / 1_000_000;
+            my $sender_mbps = $sender_bps / 1_000_000;
+            my $receiver_mbps = $receiver_bps / 1_000_000;
 
-        my $msg = '';
-        $msg .= sprintf "Sender Throughput:   %.2f Mbps\n", $sender_mbps;
-        $msg .= sprintf "Receiver Throughput: %.2f Mbps\n", $receiver_mbps;
+            my $msg = '';
+            $msg .= sprintf "Sender Throughput:   %.2f Mbps\n", $sender_mbps;
+            $msg .= sprintf "Receiver Throughput: %.2f Mbps\n", $receiver_mbps;
 
-        record_info('RESULT', $msg);
-      }
+            record_info('RESULT', $msg);
+        }
     }
     barrier_wait({name => 'wait_4', check_dead_job => 1});
 }
