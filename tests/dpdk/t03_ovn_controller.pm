@@ -34,6 +34,7 @@ sub run {
     my $script_dir = Dpdkbase::DPDK_DATA_DIR . '/dpdk/ovn_controller';
 
     barrier_wait({name => 'wait_1', check_dead_job => 1});
+    sleep 999999;
 
     if (get_var('DPDK_HOST') eq 1) {
         my $env = 'LOCAL_HOSTNAME=host1';
