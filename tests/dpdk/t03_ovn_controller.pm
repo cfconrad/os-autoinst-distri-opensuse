@@ -13,8 +13,8 @@ use Mojo::Base 'Dpdkbase', -signatures;
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call);
+use Mojo::JSON qw(decode_json);
 use Data::Dumper;
-use mmapi;
 use lockapi;
 
 sub extract_var($file, $var) {
