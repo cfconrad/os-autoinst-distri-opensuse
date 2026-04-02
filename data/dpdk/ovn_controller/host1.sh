@@ -31,6 +31,8 @@ ovs-vsctl set open_vswitch . external_ids:ovn-encap-type=geneve
 ovs-vsctl get open_vswitch . external_ids
 
 echo "Is the ovn-controller connected?"
+ip a s;
+ip r s;
 cnt=0
 while [ "$(ovs-appctl -t /run/ovn/ovn-controller.*.ctl connection-status)" != 'connected' ]; do
   if [ $cnt -gt 10 ]; then
