@@ -94,7 +94,7 @@ sub run_test_shell_script
 
     my $output = script_output($script_cmd . '; echo "==COLLECT_EXIT_CODE==$?=="', proceed_on_failure => 1, timeout => $args{timeout});
     my $result = $output =~ m/==COLLECT_EXIT_CODE==0==/ ? 'ok' : 'fail';
-    $self->record_console_test_result($title, $output, result => $result);
+    $self->record_console_test_result($title, $script_cmd . "\n\n" . $output, result => $result);
 }
 
 sub num_children {
