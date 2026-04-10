@@ -13,7 +13,6 @@ use testapi;
 use utils qw(zypper_call);
 use serial_terminal 'select_serial_terminal';
 use mmapi;
-use lockapi;
 
 use constant DPDK_DATA_DIR => '/root/data';
 
@@ -110,7 +109,7 @@ sub num_children {
 
 sub barrier_wait {
     my ($self, $name) = @_;
-    barrier_wait({name => $name, check_dead_job => 1});
+    lockapi::barrier_wait({name => $name, check_dead_job => 1});
 
     # This is to mitigate the problem, that if a parallel job is running in the
     # barrier_wait() poll loop, while this job finished. This would lead to a

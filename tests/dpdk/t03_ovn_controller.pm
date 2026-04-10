@@ -32,7 +32,7 @@ sub run {
     Dpdkbase::download_data_dir();
     my $script_dir = Dpdkbase::DPDK_DATA_DIR . '/dpdk/ovn_controller';
 
-    $self->barrier_wait('wait_1';
+    $self->barrier_wait('wait_1');
 
     if (get_var('DPDK_HOST') eq 1) {
         my $env = 'LOCAL_HOSTNAME=host1';
