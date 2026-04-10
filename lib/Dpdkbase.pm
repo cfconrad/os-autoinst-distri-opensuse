@@ -108,7 +108,7 @@ sub num_children {
     return $self->{_num_children};
 }
 
-sub do_barrier_wait {
+sub barrier_wait {
     my ($self, $name) = @_;
     barrier_wait({name => $name, check_dead_job => 1});
 
