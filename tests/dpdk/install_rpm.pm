@@ -69,7 +69,7 @@ sub run {
     install_custom_package($install_rpm_from_repo);
 
     if (get_var('ENABLE_DEBUG_REPOS', 0)) {
-        assert_script_run(q(zypper -q lr | tail -n +4 | grep Debug | awk '{ print $1 }' | xargs zypper mr -e));
+        assert_script_run(q(for i in $(zypper -q lr | tail -n +4 | grep Debug | awk '{ print $1 }'); do zypper mr -e $i; done));
     }
 
     for my $pkg (split(/\s+/, $install_rpm)) {
