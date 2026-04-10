@@ -17,10 +17,14 @@ function setup_br_dpdk()
     mount -t hugetlbfs -o pagesize=2M none /mnt/huge_2M
   fi
 
+  echo "Bind pci device $pci_id"
   modprobe vfio-pci
   dpdk-devbind.py --bind=vfio-pci $pci_id
 
-  echo "Change owerner of /dev/vfio/[0-9]* to openvswitch"
+  echo "Show dpdk-devbind.py -s"
+  dpdk-devbind.py -s
+
+  echo "Change owner of /dev/vfio/[0-9]* to openvswitch"
   chown openvswitch:openvswitch /dev/vfio/[0-9]*
 
   echo "Enable DPDK"

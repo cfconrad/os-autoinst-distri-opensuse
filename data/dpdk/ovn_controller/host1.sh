@@ -96,7 +96,7 @@ ip netns exec ns1 ip route add default via $ROUTER1_TEST_IP
 ip netns exec ns1 ip a s
 
 # Test traffic to Host 2 (crossing LS1 -> LR1 -> LS2 over DPDK Geneve)
-echo "ip netns exec ns1 iperf3 -c $HOST3_TEST_IP"
+echo "ip netns exec ns1 iperf3 -c $HOST2_TEST_IP"
 
 # Test traffic to Host 3 (crossing LS1 -> LR1 -> LS3 over DPDK Geneve)
 echo "ip netns exec ns1 iperf3 -c $HOST3_TEST_IP"
