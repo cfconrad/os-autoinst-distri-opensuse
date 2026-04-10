@@ -18,6 +18,7 @@ use registration;
 sub install_custom_package
 {
     my $custom_pkg = shift;
+    state $repo_idx = 0;
 
     return unless $custom_pkg;
 
@@ -29,13 +30,14 @@ sub install_custom_package
 
     my @items = split(/\s+/, $custom_pkg);
     my $alias = undef;
-    my $repo_idx = 0;
 
     for my $item (@items) {
         if ($item =~ /^http/) {
             $repo_idx++;
             $alias = "custom_repo_$repo_idx";
             zypper_ar($item, name => $alias, no_gpg_check => 1, priority => 80);
+        } elsif ($item =~ /^--disable$/) {
+            zypper_call('mr -d ' . $alias);
         } else {
             if ($alias) {
                 zypper_call("in --from $alias $item");
@@ -51,32 +53,45 @@ sub install_custom_package
 sub run {
     my ($self) = @_;
     select_serial_terminal;
+    my @indexes = ("", 0 .. 99);
 
-    my $install_rpm_from_repo = get_var('INSTALL_RPM_FROM_REPO');
-    my $install_rpm = get_var('INSTALL_RPM');
-    my $remove_rpm = get_var('REMOVE_RPM');
-    record_info('INSTALL_RPM', $install_rpm);
-    record_info('FROM_REPO', $install_rpm_from_repo);
-    record_info('REMOVE_RPM', $remove_rpm);
     record_info('zypper lr', script_output('zypper lr -u'));
 
-    for my $pkg (split(/\s+/, $remove_rpm)) {
-        if (script_run("rpm -q $pkg") == 0) {
-            zypper_call("rm $pkg");
+    for my $idx (@indexes) {
+        my $remove_rpm = get_var('REMOVE_RPM' . (length($idx) ? "_$idx" : ""));
+        if ($remove_rpm) {
+            record_info('REMOVE_RPM', $remove_rpm);
+            for my $pkg (split(/\s+/, $remove_rpm)) {
+                if (script_run("rpm -q $pkg") == 0) {
+                    zypper_call("rm $pkg");
+                }
+            }
         }
     }
 
-    install_custom_package($install_rpm_from_repo);
+    for my $idx (@indexes) {
+        my $install_rpm_from_repo = get_var('INSTALL_RPM_FROM_REPO' . (length($idx) ? "_$idx" : ""));
+        if ($install_rpm_from_repo) {
+            record_info('INSTALL_RPM_FROM_REPO', $install_rpm_from_repo);
+            install_custom_package($install_rpm_from_repo);
+        }
+    }
 
     if (get_var('ENABLE_DEBUG_REPOS', 0)) {
         assert_script_run(q(for i in $(zypper -q lr | tail -n +4 | grep Debug | awk '{ print $1 }'); do zypper mr -e $i; done));
     }
 
-    for my $pkg (split(/\s+/, $install_rpm)) {
-        if (script_run("rpm -q $pkg") != 0) {
-            zypper_call("in  $pkg");
+    for my $idx (@indexes) {
+        my $install_rpm = get_var('INSTALL_RPM' . (length($idx) ? "_$idx" : ""));
+        if ($install_rpm) {
+            record_info('INSTALL_RPM', $install_rpm);
+            for my $pkg (split(/\s+/, $install_rpm)) {
+                if (script_run("rpm -q $pkg") != 0) {
+                    zypper_call("in  $pkg");
+                }
+                record_info($pkg, script_output('rpm -qi ' . $pkg));
+            }
         }
-        record_info($pkg, script_output('rpm -qi ' . $pkg));
     }
 }
 
