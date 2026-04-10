@@ -13,6 +13,7 @@ use testapi;
 use utils qw(zypper_call);
 use serial_terminal 'select_serial_terminal';
 use mmapi;
+use lockapi;
 
 use constant DPDK_DATA_DIR => '/root/data';
 
@@ -106,4 +107,31 @@ sub num_children {
     }
     return $self->{_num_children};
 }
+
+sub do_barrier_wait {
+    my ($self, $name) = @_;
+    barrier_wait({name => $name, check_dead_job => 1});
+
+    # This is to mitigate the problem, that if a parallel job is running in the
+    # barrier_wait() poll loop, while this job finished. This would lead to a
+    # failure on the other side.
+    $self->{last_barrier_wait_call} = time;
+}
+
+
+sub post_run {
+    my ($self) = @_;
+
+    if ($self->num_children() > 0) {
+        my $time_since_barrier_wait = time - ($self->{last_barrier_wait_call} // 0);
+        if ($time_since_barrier_wait < lockapi::POLL_INTERVAL) {
+            my $seconds = lockapi::POLL_INTERVAL - $time_since_barrier_wait;
+            #see https://github.com/os-autoinst/os-autoinst/issues/2340
+            bmwqemu::diag("If the parallel job might wait in barrier_wait() poll loop," .
+                  " we should not finish this parent job to early! sleep $seconds seconds");
+            sleep $seconds;
+        }
+    }
+}
+
 1;

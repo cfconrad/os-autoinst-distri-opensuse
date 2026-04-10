@@ -11,8 +11,6 @@ use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call);
 use Data::Dumper;
-use mmapi;
-use lockapi;
 
 sub run {
     my ($self) = @_;
@@ -28,21 +26,21 @@ sub run {
     my $cmd_fwd = sprintf("%s -a %s -a %s --mode fwd $threshold",
         $script, $self->pci3, $self->pci4);
 
-    barrier_wait({name => 'wait_1', check_dead_job => 1});
+    $self->barrier_wait('wait_1');
     if (get_var('DPDK_HOST') eq 1) {
         $self->run_test_shell_script($script, $cmd_tx);
     } else {
         $self->run_test_shell_script($script, $cmd_fwd);
     }
 
-    barrier_wait({name => 'wait_2', check_dead_job => 1});
+    $self->barrier_wait('wait_2');
     if (get_var('DPDK_HOST') eq 3) {
         $self->run_test_shell_script($script, $cmd_tx);
     } else {
         $self->run_test_shell_script($script, $cmd_fwd);
     }
 
-    barrier_wait({name => 'wait_3', check_dead_job => 1});
+    $self->barrier_wait('wait_3');
     if (get_var('DPDK_HOST') eq 3) {
         $self->run_test_shell_script($script, $cmd_tx);
     } else {

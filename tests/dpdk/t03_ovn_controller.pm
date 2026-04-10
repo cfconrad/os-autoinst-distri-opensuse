@@ -15,7 +15,6 @@ use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call);
 use Mojo::JSON qw(decode_json);
 use Data::Dumper;
-use lockapi;
 
 sub extract_var($file, $var) {
     my $line = script_output(qq%(source $file && echo "$var=\$$var")%);
@@ -33,7 +32,7 @@ sub run {
     Dpdkbase::download_data_dir();
     my $script_dir = Dpdkbase::DPDK_DATA_DIR . '/dpdk/ovn_controller';
 
-    barrier_wait({name => 'wait_1', check_dead_job => 1});
+    $self->barrier_wait('wait_1';
 
     if (get_var('DPDK_HOST') eq 1) {
         my $env = 'LOCAL_HOSTNAME=host1';
@@ -42,7 +41,7 @@ sub run {
         $self->run_test_shell_script('host1.sh', "$env $script_dir/host1.sh");
     }
 
-    barrier_wait({name => 'wait_2', check_dead_job => 1});
+    $self->barrier_wait('wait_2');
 
     if (get_var('DPDK_HOST') eq 2) {
         my $env = 'LOCAL_HOSTNAME=host2';
@@ -63,9 +62,10 @@ sub run {
         assert_script_run('ip netns exec ns3 iperf3 -D -s');
     }
 
-    barrier_wait({name => 'wait_3', check_dead_job => 1});
+    $self->barrier_wait('wait_3');
 
     my $threshold = 8_000_000_000;    # 8Gbit
+    my $threshold_mbps = $threshold / 1_000_000;
 
     if (get_var('DPDK_HOST') eq 1) {
         assert_script_run('ip netns exec ns1 ip a s');
@@ -84,18 +84,22 @@ sub run {
             my $sender_mbps = $sender_bps / 1_000_000;
             my $receiver_mbps = $receiver_bps / 1_000_000;
 
+            my $failed_tx = $sender_bps < $threshold;
+            my $failed_rx = $receiver_bps < $threshold;
+
             my $msg = '';
-            $msg .= sprintf "Sender Throughput:   %.2f Mbps\n", $sender_mbps;
-            $msg .= sprintf "Receiver Throughput: %.2f Mbps\n", $receiver_mbps;
+            $msg .= "Destination: $ip\n";
+            $msg .= sprintf "Threashold: %.2f\n", $threshold_mbps;
+            $msg .= sprintf "Tx Throughput: %.2f Mbps %s\n",
+              $sender_mbps, ($failed_tx ? 'FAILED' : '');
+            $msg .= sprintf "Rx Throughput: %.2f Mbps %s\n",
+              $receiver_mbps, ($failed_rx ? 'FAILED' : '');
 
-            record_info('RESULT', $msg);
-
-            if ($sender_bps < $threshold || $receiver_bps < $threshold) {
-                die("Threashold not reached $threshold");
-            }
+            record_info('RESULT', $msg, result => ($failed_rx || $failed_tx) ? 'fail' : 'ok');
+            $self->result('fail') if ($failed_rx || $failed_tx);
         }
     }
-    barrier_wait({name => 'wait_4', check_dead_job => 1});
+    $self->barrier_wait('wait_4');
 }
 
 1;
