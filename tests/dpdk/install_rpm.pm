@@ -58,7 +58,7 @@ sub run {
     record_info('INSTALL_RPM', $install_rpm);
     record_info('FROM_REPO', $install_rpm_from_repo);
     record_info('REMOVE_RPM', $remove_rpm);
-    record_info('zypper lr', script_output('zypper lr'));
+    record_info('zypper lr', script_output('zypper lr -u'));
 
     for my $pkg (split(/\s+/, $remove_rpm)) {
         if (script_run("rpm -q $pkg") == 0) {
