@@ -18,6 +18,11 @@ sub run {
 
     select_console('root-console');
 
+    record_info('zypper lr', script_output('zypper lr -u'));
+    record_info('network', script_output('ip  a s'));
+    record_info('wicked', script_output('wicked ifstatus all'));
+    record_info('config', script_output('for i in $(find /etc/sysconfig/network -name ifcfg*); do echo "XXXXXXXXXX $i"; cat $i; done'));
+
     # Add repo for devel:DMS when using proxy
     if ((get_var('SCC_URL', "") =~ /proxy/)) {
         my $repo_server = "https://download.opensuse.org/repositories/devel:/DMS/";
