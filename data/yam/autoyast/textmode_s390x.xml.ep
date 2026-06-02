@@ -5,9 +5,7 @@
       <do_registration config:type="boolean">true</do_registration>
       <email/>
       <reg_code>{{SCC_REGCODE}}</reg_code>
-      % if ($get_var->('SCC_URL', 'none') ne 'none') {
-          <reg_server><%= $get_var->('SCC_URL') %></reg_server>
-      % }
+      <reg_server>http://version-15.version-15-sp7.product-all.build-44.4.proxy.scc.suse.de</reg_server>
       <install_updates config:type="boolean">true</install_updates>
       <addons config:type="list">
         <addon>
