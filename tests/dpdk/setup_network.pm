@@ -20,11 +20,14 @@ sub run {
     my $iface = script_output(q(ip -o link show | awk -F': ' '$2 != "lo" {print $1, $2}' | sort -n | head -n1 | awk '{print $2}'));
 
     # If NICMAC is given, use interface belonging to this
-    my $mac = get_var('NICMAC');
-    if ($mac) {
-        my $out = script_output("grep -l '$mac' /sys/class/net/*/address");
-        if ($out =~ /\/([^\/]+)\/address/) {
-            $iface = $1;
+    my $macs = get_var('NICMAC');
+    if ($macs) {
+        for my $mac (split(/,/, $macs)) {
+            my $out = script_output("grep -l '$mac' /sys/class/net/*/address");
+            if ($out =~ /\/([^\/]+)\/address/) {
+                $iface = $1;
+                last;
+            }
         }
     }
     record_info('iface', $iface);
