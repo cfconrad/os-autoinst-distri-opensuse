@@ -9,7 +9,8 @@
 package wickedbase;
 
 use base 'opensusebasetest';
-use utils qw(systemctl file_content_replace zypper_call random_string);
+use utils qw(systemctl file_content_replace zypper_call zypper_ar random_string);
+use repo_tools 'generate_version';
 use Encode qw(encode_utf8);
 use network_utils;
 use lockapi;
@@ -1373,4 +1374,58 @@ sub wait_for_background_process {
     return $ret if ($ret == 0);
     die("Background process $pid exit with $ret");
 }
+
+sub install_rpm_from_repo
+{
+    my ($self, $custom_pkg) = @_;
+
+    return unless $custom_pkg;
+
+    if ($custom_pkg =~ /suse\.de/ && script_run('rpm -qi ca-certificates-suse') == 1) {
+        my $repo_url = "https://download.opensuse.org/repositories/SUSE:/CA/";
+        zypper_ar($repo_url . generate_version('_') . '/', name => 'suse_ca', no_gpg_check => 1, priority => 60);
+        zypper_call("-n in ca-certificates-suse");
+    }
+
+    my @items = split(/\s+/, $custom_pkg);
+    my $alias = undef;
+
+    my @opts;
+    for my $item (@items) {
+        if ($item =~ /^http/) {
+            $self->{repo_idx} = ($self->{repo_idx} // 0) + 1;
+            $alias = "custom_repo_" . $self->{repo_idx};
+            # the repo should be given without *.repo file
+            $item =~ s/[^\/]+\.repo$//;
+            zypper_ar($item, name => $alias, no_gpg_check => 1, priority => 80);
+        } elsif ($item =~ /^--disable$/) {
+            zypper_call('mr -d ' . $alias);
+        } elsif ($item =~ /^--/) {
+            push @opts, $item;
+        } else {
+            if ($alias) {
+                zypper_call("in --from $alias @opts $item");
+            } else {
+                zypper_call("in @opts $item");
+            }
+            record_info($item, script_output('rpm -qi ' . $item));
+        }
+    }
+}
+
+sub serve_install_rpm_from_repo
+{
+    my ($self) = @_;
+    my @indexes = ("", 0 .. 99);
+
+    for my $idx (@indexes) {
+        my $var = 'INSTALL_RPM_FROM_REPO' . (length($idx) ? "_$idx" : "");
+        my $install_rpm_from_repo = get_var($var);
+        if ($install_rpm_from_repo) {
+            record_info($var, $install_rpm_from_repo);
+            $self->install_rpm_from_repo($install_rpm_from_repo);
+        }
+    }
+}
+
 1;

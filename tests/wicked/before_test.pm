@@ -75,6 +75,7 @@ EOT
 
     $self->download_data_dir();
     $self->prepare_coredump();
+    $self->serve_install_rpm_from_repo();
 
     my $package_list = 'openvpn tar';
     if ($self->valgrind_enable()) {
