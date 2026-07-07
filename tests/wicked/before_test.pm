@@ -76,7 +76,7 @@ EOT
     $self->download_data_dir();
     $self->prepare_coredump();
 
-    my $package_list = 'openvpn';
+    my $package_list = 'openvpn tar';
     if ($self->valgrind_enable()) {
         $need_reboot = 1;
         zypper_call("-q in valgrind", timeout => 400);
