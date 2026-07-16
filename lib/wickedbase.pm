@@ -1404,6 +1404,7 @@ sub install_rpm_from_repo
             push @opts, $item;
         } else {
             if ($alias) {
+                zypper_call("search --repo $alias --match-exact -s $item");
                 zypper_call("in --from $alias @opts $item");
             } else {
                 zypper_call("in @opts $item");
