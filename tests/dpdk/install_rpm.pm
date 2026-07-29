@@ -35,6 +35,8 @@ sub install_custom_package
         if ($item =~ /^http/) {
             $repo_idx++;
             $alias = "custom_repo_$repo_idx";
+            # the repo should be given without *.repo file
+            $item =~ s/[^\/]+\.repo$//;
             zypper_ar($item, name => $alias, no_gpg_check => 1, priority => 80);
         } elsif ($item =~ /^--disable$/) {
             zypper_call('mr -d ' . $alias);
