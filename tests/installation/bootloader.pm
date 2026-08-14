@@ -55,6 +55,8 @@ sub run {
     if (get_var('AGAMA')) {
         $boot_cmd = 'ctrl-x';
     }
+
+    record_info('Type CLEMIX', utils::VERY_SLOW_TYPING_SPEED);
     my @params;
     push @params, bootmenu_default_params;
     push @params, bootmenu_network_source;

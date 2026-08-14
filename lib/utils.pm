@@ -165,7 +165,7 @@ use constant SLOW_TYPING_SPEED => 13;
 # type even slower towards the end to ensure no keybuffer overflow even
 # when scrolling within the boot command line to prevent character
 # mangling
-use constant VERY_SLOW_TYPING_SPEED => 4;
+use constant VERY_SLOW_TYPING_SPEED => 1;
 
 # openQA internal ftp server url
 our $OPENQA_FTP_URL = "ftp://openqa.suse.de";
