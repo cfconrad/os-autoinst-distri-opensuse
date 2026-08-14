@@ -33,10 +33,10 @@ use Carp qw(croak);
 use Mojo::JSON qw(decode_json);
 use Exporter 'import';
 use File::Basename;
+use testapi;
+use mmapi 'get_current_job_id';
 use sles4sap::azure_cli;
 use sles4sap::qesap::utils;
-use mmapi 'get_current_job_id';
-use testapi;
 
 our @EXPORT = qw(
   qesap_az_get_resource_group
@@ -71,9 +71,22 @@ sub qesap_az_get_resource_group {
     my (%args) = @_;
     my $job_id = get_var('QESAP_DEPLOYMENT_IMPORT', get_current_job_id());
     die "Could not determine job ID to find the resource group" unless defined $job_id;
-    my $all_rg = az_group_name_get();
+
+    # Get the hash result from the new API
+    my $result = az_group_name_get();
+
+    # Optional: check if there's an error and record it before proceeding
+    if (exists $result->{err} && $result->{err} ne '') {
+        record_info('QESAP AZ ERROR', $result->{err});
+    }
+
+    # Extract the array from the hash
+    my $all_rg = $result->{data};
+
+    # Filter the array
     my @selected_rg = grep(/$job_id/, @$all_rg);
     @selected_rg = grep(/$args{substring}/, @selected_rg) if ($args{substring});
+
     record_info('QESAP RG', $selected_rg[0] ? "result:$selected_rg[0]" : 'result:EMPTY');
     return $selected_rg[0];
 }
@@ -306,24 +319,36 @@ sub qesap_az_list_container_files {
 
 =head2 qesap_az_diagnostic_log
 
+qesap_az_diagnostic_log(cmd => 'command', [fatal => 1, timeout => 240]);
+
 Call `az vm boot-diagnostics json` for each running VM in the
 resource group associated to this openQA job
 
 Return a list of diagnostic file paths on the JumpHost
+
+=over
+
+=item B<fatal> - abort whole test suite if this fails, default to 1
+
+=item B<timeout> - the maximum waiting time, default to 240 seconds
+
+=back
 =cut
 
 sub qesap_az_diagnostic_log {
-    my @diagnostic_log_files;
-    my $rg = qesap_az_get_resource_group();
-    my $vm_data = decode_json(script_output("az vm list --resource-group $rg --query '[].{id:id,name:name}' -o json"));
-    my $az_get_logs_cmd = 'az vm boot-diagnostics get-boot-log --ids';
-    foreach (@{$vm_data}) {
-        record_info('az vm boot-diagnostics json', "id: $_->{id} name: $_->{name}");
-        my $boot_diagnostics_log = '/tmp/boot-diagnostics_' . $_->{name} . '.txt';
-        # Ignore the return code, so also miss the pipefail setting
-        script_run(join(' ', $az_get_logs_cmd, $_->{id}, '&>', $boot_diagnostics_log));
-        push(@diagnostic_log_files, $boot_diagnostics_log);
+    my (%args) = @_;
+    my $fatal = $args{fatal} // 1;
+    my @failures;
+
+    my @diagnostic_log_files = az_vm_diagnostic_log_get(
+        resource_group => qesap_az_get_resource_group(),
+        timeout => $args{timeout} // 240,
+        verbose => 1);    #TODO remove it
+
+    if (@failures && $fatal) {
+        die "Fatal Error:\n" . join("\n", @failures);
     }
+
     return @diagnostic_log_files;
 }
 

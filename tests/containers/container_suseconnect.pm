@@ -47,31 +47,36 @@ sub run {
     assert_script_run("$runtime_name pull $base_image");
 
     my $scc_credentials_path = "/etc/zypp/credentials.d/SCCcredentials";
-    my $suseconnect_path = detect_suseconnect_path();
 
     my @repos = get_test_repos();
     my $incident_repos_urls = join(',', @repos);
 
     if ($incident_repos_urls) {
-        assert_script_run("printf '%s\n' '$incident_repos_urls' > ./incident_repos_urls.txt");
+        write_sut_file("/tmp/incident_repos_urls.txt", $incident_repos_urls);
     }
 
     $container_name = "suseconnect-test-$runtime_name";
 
-    my $run_cmd = "$runtime_name run -d " .
-      "-e ADDITIONAL_MODULES=sle-module-desktop-applications,sle-module-development-tools " .
-      "-v $scc_credentials_path:/etc/zypp/credentials.d/SCCcredentials " .
-      "-v $suseconnect_path:/etc/SUSEConnect " .
-      "--name $container_name " .
-      "$base_image sleep infinity";
+    # We need --init to reap zombie processes and increase --pids-limit 4x to let zypper fork a lot.
+    # Otherwise it fails with EAGAIN like this:
+    # error: Couldn't fork %post(...): Resource temporarily unavailable
+    my @run_cmd = ("$runtime_name run -d --init --pids-limit 8192");
+    push @run_cmd, ("--name $container_name",
+        "-e ADDITIONAL_MODULES=sle-module-desktop-applications,sle-module-development-tools",
+        "-v $scc_credentials_path:/etc/zypp/credentials.d/SCCcredentials");
+    if (get_var('SCC_URL')) {
+        my $suseconnect_path = detect_suseconnect_path();
+        push @run_cmd, ("-v $suseconnect_path:/etc/SUSEConnect");
+    }
+    push @run_cmd, ("$base_image sleep infinity");
 
-    assert_script_run($run_cmd);
+    assert_script_run(join(' ', @run_cmd));
 
     if ($incident_repos_urls) {
         assert_script_run("$runtime_name cp ./add-incidents-repos.sh $container_name:/usr/local/bin/add-incidents-repos.sh");
         assert_script_run("$runtime_name exec $container_name chmod +x /usr/local/bin/add-incidents-repos.sh");
 
-        assert_script_run("$runtime_name cp ./incident_repos_urls.txt $container_name:/tmp/incident_repos_urls.txt");
+        assert_script_run("$runtime_name cp /tmp/incident_repos_urls.txt $container_name:/tmp/incident_repos_urls.txt");
         assert_script_run(
             "$runtime_name exec $container_name /usr/local/bin/add-incidents-repos.sh /tmp/incident_repos_urls.txt"
         );
@@ -80,9 +85,9 @@ sub run {
         );
     }
 
+    my $pkg = 'socat';
     assert_script_run(
-        "$runtime_name exec $container_name " .
-          "zypper -n --gpg-auto-import-keys in gvim"
+        "$runtime_name exec $container_name zypper -n --gpg-auto-import-keys in $pkg"
     );
 
     validate_script_output(
@@ -95,7 +100,7 @@ sub run {
     );
     validate_script_output(
         "$runtime_name exec $container_name rpm -qa",
-        sub { m/gvim/ }
+        sub { m/$pkg/ }
     );
 
 }
@@ -110,5 +115,9 @@ sub cleanup {
 
 sub post_run_hook { shift->cleanup() }
 sub post_fail_hook { shift->cleanup() }
+
+sub test_flags {
+    return {fatal => 0};
+}
 
 1;

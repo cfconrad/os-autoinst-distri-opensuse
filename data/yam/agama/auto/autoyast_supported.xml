@@ -76,6 +76,10 @@ systemLog:
     </drive>
   </partitioning>
   <software>
+    <packages t="list">
+      <package>openssh</package>
+      <package>openssh-server-config-rootlogin</package>
+    </packages>
     <patterns config:type="list">
       <pattern>base</pattern>
       <pattern>minimal_base</pattern>
@@ -100,6 +104,14 @@ systemLog:
       </authorized_keys>
     </user>
   </users>
+  <ntp-client>
+    <ntp_servers config:type="list">
+      <ntp_server>
+        <address>3.suse.pool.ntp.org</address>
+        <iburst config:type="boolean">true</iburst>
+      </ntp_server>
+    </ntp_servers>
+  </ntp-client>
   <scripts>
     <pre-scripts config:type="list">
       <script>
@@ -110,15 +122,5 @@ agama questions mode non-interactive
 ]]></source>
       </script>
     </pre-scripts>
-    <chroot-scripts config:type="list">
-      <script>
-        <file_name>post.sh</file_name>
-        <chrooted config:type="boolean">true</chrooted>
-        <source><![CDATA[
-#!/usr/bin/env bash
-echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/root.conf
-]]></source>
-      </script>
-    </chroot-scripts>
   </scripts>
 </profile>

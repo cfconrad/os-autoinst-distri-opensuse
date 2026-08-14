@@ -6,10 +6,10 @@
 # Summary: Select systemd-boot in the installer
 # Maintainer: Fabian Vogt <fvogt@suse.com>
 
-use base 'y2_installbase';
+use Mojo::Base 'y2_installbase';
 use testapi;
 use utils;
-use version_utils qw(is_bootloader_sdboot is_bootloader_grub2_bls is_bootloader_grub2 is_sle is_leap is_staging);
+use version_utils qw(is_bootloader_sdboot is_bootloader_grub2_bls is_bootloader_grub2 is_sle is_leap is_staging is_upgrade);
 
 sub run {
     my ($self) = shift;
@@ -29,30 +29,36 @@ sub run {
         send_key 'ret';
     }
 
+    if (is_upgrade && check_screen('bootloader-technology-mismatch')) {
+        send_key_until_needlematch 'inst-bootloader-settings', 'alt-o';
+    }
+
     assert_screen 'inst-bootloader-settings';
+
+    # Workaround for bug#1158557
+    if (check_screen('inst-bootloader-unknown-udev-device')) {
+        send_key 'ret';
+    }
 
     # Select systemd-boot as bootloader
     send_key 'alt-b', wait_screen_change => 1;
     send_key 'spc', wait_screen_change => 1;
     send_key_until_needlematch 'inst-bootloader-systemd-boot-selected', 'down' if is_bootloader_sdboot;
-    send_key_until_needlematch 'inst-bootloader-grub2-bls-selected', 'down' if is_bootloader_grub2_bls;
+    send_key_until_needlematch 'inst-bootloader-grub2-bls-selected', 'up' if is_bootloader_grub2_bls;
     send_key_until_needlematch get_var('UEFI') ? 'inst-bootloader-grub2-efi-selected' : 'inst-bootloader-grub2-selected', 'up' if is_bootloader_grub2;
     send_key 'ret', wait_screen_change => 1;    # Select the option
 
     unless (get_var('KEEP_GRUB_TIMEOUT')) {
-        # In the case the bootloader selected is the same we're expecting, we have to cycle
-        # through the different controls in the ui to reach the highligted tab, since pressing
-        # enter, does not move us to the 'OK' button anymore.
-        send_key_until_needlematch 'inst-bootloader-settings-first_tab_highlighted', 'tab';
-
-        send_key_until_needlematch 'inst-bootloader-options-highlighted', 'right', 20, 2;
+        my $bootloader_options_shortcut = (get_var('UEFI')) ? 'alt-t' : 'alt-r';
+        $bootloader_options_shortcut = 'alt-l' if get_var('OFFLINE_SUT');
+        send_key $bootloader_options_shortcut, wait_screen_change => 1;    # select Bootloader Options tab
         assert_screen 'installation-bootloader-options';
-        # Uncheck the "automatically boot" checkbox
+
         if (is_bootloader_sdboot || is_bootloader_grub2_bls) {
+            # Uncheck the "automatically boot" checkbox
             send_key 'alt-a', wait_screen_change => 1;
         } else {
-            send_key 'alt-t';
-            wait_still_screen(1);
+            send_key 'alt-t', wait_screen_change => 1;
             type_string "-1";
             send_key 'ret' if check_var('VIDEOMODE', 'text');
         }
@@ -66,4 +72,5 @@ sub run {
     wait_still_screen 3;
     assert_screen 'installation-settings-overview-loaded', 220;
 }
+
 1;

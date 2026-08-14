@@ -3,15 +3,18 @@
 # Copyright 2019 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
-# Summary: Check PSI proc files are accessible when psi=1
-# Maintainer: Richard Palethorpe <rpalethorpe@suse.com>
+# Summary: Check whether PSI proc files are accessible
+# (present by default or when psi=1)
+#
+# Maintainer: Kernel QE <kernel-qa@suse.de>
 
-use base "opensusebasetest";
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use power_action_utils 'power_action';
 use bootloader_setup 'add_grub_cmdline_settings';
 use Utils::Architectures;
+use version_utils qw(is_sle is_tumbleweed);
 
 sub boot {
     my $self = shift;
@@ -29,15 +32,25 @@ sub run {
     my $self = shift;
 
     $self->boot;
-    assert_script_run('! cat /proc/pressure/cpu');
 
-    add_grub_cmdline_settings('psi=1', update_grub => 1);
+    if (is_sle('>=16.1') || is_tumbleweed()) {
+        # Starting with SLE-16.1 along with Tumbleweed (jsc#PED-15418),
+        # CONFIG_PSI_DEFAULT_DISABLED is no longer enabled,
+        # so PSI files are present by default.
+        assert_script_run('cd /proc/pressure');
+        assert_script_run('cat cpu memory io');
+    } else {
+        # On older SLE versions, PSI is disabled by default.
+        assert_script_run('! cat /proc/pressure/cpu');
 
-    power_action('reboot', textmode => 1);
-    $self->boot;
+        add_grub_cmdline_settings('psi=1', update_grub => 1);
 
-    assert_script_run('cd /proc/pressure');
-    assert_script_run('cat cpu memory io');
+        power_action('reboot', textmode => 1);
+        $self->boot;
+
+        assert_script_run('cd /proc/pressure');
+        assert_script_run('cat cpu memory io');
+    }
 }
 
 1;

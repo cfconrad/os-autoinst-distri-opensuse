@@ -14,9 +14,9 @@
 # Maintainer: QE Core <qe-core@suse.de>
 
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
-use utils 'zypper_call';
+use package_utils 'install_package';
 use version_utils qw(is_sle is_public_cloud is_opensuse);
 use publiccloud::utils qw(is_azure is_byos);
 
@@ -32,6 +32,11 @@ sub sudo_with_pw {
     if ($command =~ /sudo -i|sudo -s|sudo su/) {
         enter_cmd "expect -c 'spawn $command;expect \"password for*:\" {send \"$password\\r\";interact} default {exit 1}'";
         assert_screen $args{expected_screen} // 'root-console';
+        # The spawned (login) shell can belong to another user whose ~/.bashrc
+        # does not have the openQA prompt hook for PRETTY_SERIAL_MARKER yet, so
+        # force a re-install on the next command, same as become_root does.
+        # poo#205122
+        $testapi::distri->invalidate_serial_marker_hook();
     }
     else {
         assert_script_run("expect -c '${env}spawn $command;expect \"password for*:\" {send \"$password\\r\";interact} default {exit 1}'$grep", timeout => $args{timeout});
@@ -103,11 +108,11 @@ sub full_test {
 
 sub run {
     select_console 'root-console';
-    zypper_call 'in sudo expect';
+    install_package('sudo expect', trup_reboot => 1) if (script_run('rpm -qi sudo expect'));
     select_console 'user-console';
     # Check if sudo asks for the root password.
-    # On Azure from SLE15 onwards, 'Defaults targetpw' is disabled. There sudo is expected to ask for the user password
-    my $exp_user = (is_azure && is_sle(">=15") || is_sle(">=16") || (is_opensuse && check_var('AGAMA', 1))) ? "$testapi::username" : "root";
+    # On Azure on SLE15, 'Defaults targetpw' is disabled.
+    my $exp_user = (is_azure && is_sle(">=15") || is_sle(">=16") && !is_public_cloud || (is_opensuse && check_var('AGAMA', 1))) ? "$testapi::username" : "root";
     # Workaround for the the 15-SP2 images, where the change is not yet applied
     # 15-SP2 will get this change eventually, but it is unknown when the images will be refreshed.
     if (is_azure && is_sle("=15-SP2")) {

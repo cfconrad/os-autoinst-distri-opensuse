@@ -14,7 +14,7 @@
 #   in the variable BCI_TEST_ENVS.
 # Maintainer: QE-C team <qa-c@suse.de>
 
-use Mojo::Base qw(consoletest);
+use Mojo::Base 'consoletest';
 use XML::LibXML;
 use testapi;
 use serial_terminal 'select_serial_terminal';
@@ -138,6 +138,7 @@ sub run {
     record_info('Run', "Starting the tests for the following environments:\n$test_envs");
     assert_script_run("cd /root/BCI-tests && git fetch && git reset --hard $bci_tests_branch");
     assert_script_run("export TOX_PARALLEL_NO_SPINNER=1");
+    assert_script_run("export TOX_SKIP_ENV=" . get_var('BCI_SKIP_ENVS', ''));
     assert_script_run("export CONTAINER_RUNTIME=$engine");
     if ($os_version) {
         script_run("export OS_VERSION=$os_version");
@@ -160,6 +161,8 @@ sub run {
     # Mark the job as failed if any of the tests failed
     die("$error_count tests failed.") if ($error_count > 0);
 }
+
+sub post_run_hook { }
 
 sub test_flags {
     return {fatal => 0, no_rollback => 1};

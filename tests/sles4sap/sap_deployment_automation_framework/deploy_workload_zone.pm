@@ -5,14 +5,15 @@
 # Maintainer: QE-SAP <qe-sap@suse.de>
 # Summary: Deployment of the workload zone using SDAF automation
 
-use parent 'sles4sap::sap_deployment_automation_framework::basetest';
+use Mojo::Base qw(sles4sap::sap_deployment_automation_framework::basetest publiccloud::basetest);
 
 use sles4sap::sap_deployment_automation_framework::deployment;
 use sles4sap::sap_deployment_automation_framework::naming_conventions;
-use sles4sap::sap_deployment_automation_framework::deployment_connector qw(no_cleanup_tag);
+use sles4sap::sap_deployment_automation_framework::deployment_connector qw(no_cleanup_tag find_deployment_id);
 use sles4sap::sap_deployment_automation_framework::networking qw(assign_address_space calculate_subnets);
 use sles4sap::sap_deployment_automation_framework::configure_workload_tfvars qw(create_workload_tfvars);
 use sles4sap::console_redirection;
+use sles4sap::azure_cli qw(az_resource_list az_resource_tag);
 use serial_terminal qw(select_serial_terminal);
 use testapi;
 
@@ -21,6 +22,7 @@ sub test_flags {
 }
 
 sub run {
+    my ($self) = @_;
     # Skip module if existing deployment is being re-used
     return if sdaf_deployment_reused();
 
@@ -30,6 +32,15 @@ sub run {
     # From now on everything is executed on Deployer VM (residing on cloud).
     connect_target_to_serial();
     load_os_env_variables();
+
+    my $os;
+    # This section is only needed by Azure tests using images uploaded
+    if (get_var('PUBLIC_CLOUD_IMAGE_LOCATION')) {
+        my $provider = $self->provider_factory();
+        $os = $self->{provider}->get_image_id();
+    } else {
+        $os = get_required_var('PUBLIC_CLOUD_IMAGE_ID');
+    }
 
     my $workload_vnet_code = get_workload_vnet_code();
     set_var('SDAF_VNET_CODE', $workload_vnet_code);
@@ -58,8 +69,7 @@ sub run {
     for my $variable_name (keys(%network_data)) {
         set_var(uc($variable_name), $network_data{$variable_name});
     }
-
-    create_workload_tfvars(network_data => \%network_data, workload_vnet_code => $workload_vnet_code);
+    create_workload_tfvars(network_data => \%network_data, workload_vnet_code => $workload_vnet_code, os_image => $os);
 
     az_login();
     sdaf_execute_deployment(
@@ -67,9 +77,15 @@ sub run {
         retries => $terraform_retries,
         timeout => $terraform_timeout);
 
+    if (get_var('SDAF_RETAIN_DEPLOYMENT')) {
+        my $workload_rg = get_sdaf_resource_group(
+            deployment_id => find_deployment_id(), resource_group_type => 'workload_zone'
+        );
+        apply_no_cleanup_tag(resource_group => $workload_rg, no_cleanup_tag => no_cleanup_tag());
+    }
+
     # disconnect the console
     disconnect_target_from_serial();
-
     # reset temporary variables
     set_var('SDAF_VNET_CODE', undef);
     serial_console_diag_banner('Module sdaf_deploy_workload_zone.pm : end');

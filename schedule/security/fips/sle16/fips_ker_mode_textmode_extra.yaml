@@ -41,3 +41,5 @@ schedule:
     - console/nginx
     - console/gdb
     - console/sysctl
+    - console/clamav
+    - security/oqa_agnostic/go_post_quantum

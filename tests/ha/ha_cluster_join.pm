@@ -7,12 +7,13 @@
 # Summary: Add node to existing cluster
 # Maintainer: QE-SAP <qe-sap@suse.de>, Loic Devulder <ldevulder@suse.com>
 
-use base 'haclusterbasetest';
+use Mojo::Base 'haclusterbasetest';
 use testapi;
 use lockapi;
 use serial_terminal qw(select_serial_terminal);
 use hacluster;
 use utils qw(zypper_call);
+use package_utils qw(install_package);
 
 sub wait_for_password_prompt {
     my %args = @_;
@@ -31,11 +32,12 @@ sub run {
 
     # HA test modules use packages from ClusterTools2. Attempt to install it here and in
     # ha_cluster_init, but continue if it's not possible (retval 104)
-    zypper_call('in ClusterTools2', exitcode => [0, 104]);
+    my $search_rc = zypper_call('se ClusterTools2', exitcode => [0, 104]);
+    install_package("ClusterTools2", trup_reboot => 1) if ($search_rc == 0);
 
     # Qdevice configuration
     if (get_var('QDEVICE')) {
-        zypper_call 'in corosync-qdevice';
+        install_package('corosync-qdevice', trup_reboot => 1);
         barrier_wait("QNETD_SERVER_READY_$cluster_name");
     }
 
@@ -48,6 +50,7 @@ sub run {
 
     # Try to join the HA cluster through first node
     assert_script_run "ping -c1 $node_to_join";
+    wait_serial($testapi::distri->{serial_term_prompt}, no_regex => 1, quiet => 1);
     record_info 'cluster_join', "Joining $node_to_join";
     enter_cmd "crm cluster join -yc $node_to_join ; echo cluster-join-finished-\$?";
     wait_for_password_prompt(timeout => $join_timeout);

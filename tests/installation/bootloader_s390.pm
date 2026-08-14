@@ -8,6 +8,8 @@
 #   terminal and an ssh connection
 # Maintainer: Matthias Griessmeier <mgriessmeier@suse.de>
 
+## no os-autoinst style
+
 
 package bootloader_s390;
 
@@ -77,7 +79,9 @@ sub prepare_parmfile {
     }
 
     $params .= specific_bootmenu_params;
-    $params .= registration_bootloader_cmdline if check_var('SCC_REGISTER', 'installation') || get_var('FLAVOR') =~ 'Online';
+    if (!(is_agama && check_var('FLAVOR', 'Full'))) {
+        $params .= registration_bootloader_cmdline if check_var('SCC_REGISTER', 'installation') || get_var('FLAVOR') =~ 'Online';
+    }
 
     # Pass autoyast parameter for s390x, shorten the url because of 72 columns limit in x3270 xedit
     # If 'AUTOYAST_PREPARE_PROFILE' is true, shorten url directly, otherwise shorten url with data_url method

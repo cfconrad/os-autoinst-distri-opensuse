@@ -109,7 +109,9 @@ sub test {
         assert_script_run("! $runtime volume inspect $test_volume");
     }
 
-    my $all = ($runtime eq "docker") ? "-a" : "";
+    # podman behaviour changed in podman v6.0.0 to match Docker's behaviour
+    my $podman_version = ($runtime eq "podman") ? script_output("podman version -f '{{.Version}}' | cut -d. -f1") : undef;
+    my $all = ($runtime eq "docker" || $podman_version >= 6) ? "-a" : "";
 
     # Create a dangling (not used by any container) volume and test its removal
     assert_script_run("$runtime volume create $test_volume");
@@ -121,9 +123,9 @@ sub test {
 sub run {
     my ($self, $args) = @_;
     my $runtime = $args->{runtime};
+    select_serial_terminal();
     my $engine = $self->containers_factory($runtime);
 
-    select_serial_terminal();
     test $runtime;
     $engine->cleanup_system_host();
 
@@ -163,4 +165,8 @@ sub post_run_hook {
     my ($self) = @_;
     cleanup();
     $self->SUPER::post_run_hook;
+}
+
+sub test_flags {
+    return {fatal => 0};
 }

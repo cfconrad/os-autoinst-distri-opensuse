@@ -7,6 +7,8 @@ package virt_autotest_base;
 # Summary: virt_autotest: the initial version of virtualization automation test in openqa, with kvm support fully, xen support not done yet
 # Maintainer: alice <xlai@suse.com>
 
+## no os-autoinst style
+
 use File::Basename;
 use base "opensusebasetest";
 use testapi;
@@ -266,10 +268,10 @@ sub post_fail_hook {
 
     #FOR S390X LPAR
     if (is_s390x) {
-        #collect and upload supportconfig log from S390X LPAR
+        #collect and upload required logs from S390X LPAR
         virt_utils::lpar_cmd("supportconfig -B supportconfig", {timeout => 600});
-        upload_logs("/var/log/scc_supportconfig.txz");
-        upload_logs("/tmp/s390x_guest_install_test.tar.bz2");
+        virt_utils::lpar_upload_logs("/var/log/scc_supportconfig.txz");
+        virt_utils::lpar_upload_logs("/tmp/s390x_guest_install_test.tar.bz2");
         virt_utils::lpar_cmd("rm -f /var/log/scc_supportconfig.*;rm -rf /tmp/s390x_guest_install_test.*");
         return;
     }

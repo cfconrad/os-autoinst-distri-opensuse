@@ -13,13 +13,13 @@ use warnings;
 use version;
 use testapi;
 use Mojo::Base -signatures;
+use List::Util qw(first);
 use Exporter qw(import);
 use Carp qw(croak);
 use Utils::Git qw(git_clone);
 use File::Basename;
 use Regexp::Common qw(net);
 use utils qw(write_sut_file file_content_replace define_secret_variable);
-use Scalar::Util 'looks_like_number';
 use Mojo::JSON qw(decode_json);
 use publiccloud::utils qw(get_credentials);
 use sles4sap::azure_cli;
@@ -37,6 +37,7 @@ use sles4sap::sap_deployment_automation_framework::naming_conventions qw(
 
 our @EXPORT = qw(
   $output_log_file
+  log_command_output
   az_login
   check_credentials
   sdaf_ssh_key_from_keyvault
@@ -48,16 +49,14 @@ our @EXPORT = qw(
   sdaf_execute_deployment
   load_os_env_variables
   sdaf_cleanup
-  sdaf_execute_playbook
-  ansible_execute_command
-  playbook_settings
-  sdaf_register_byos
   get_sdaf_instance_id
   sdaf_deployment_reused
   validate_components
   get_fencing_mechanism
   sdaf_upload_logs
-  get_workload_resource_group
+  collect_guestregister_logs
+  get_sdaf_resource_group
+  apply_no_cleanup_tag
 );
 
 our $output_log_file = '';
@@ -163,7 +162,8 @@ sub export_credentials {
         };
     } else {
         record_info('Credentials', 'Fetching credentials from remote server');
-        $data = get_credentials(url_suffix => 'azure.json');
+        $data = get_credentials(namespace => 'sdaf', url_suffix => 'azure.json');
+        $data = $data->{get_required_var('PUBLIC_CLOUD_NAMESPACE')}->{get_required_var('SDAF_ENV_CODE')};
     }
 
     my @variables = (
@@ -207,29 +207,40 @@ sub check_credentials {
         ARM_TENANT_ID => $data->{tenant_id},
         ARM_SUBSCRIPTION_ID => $data->{subscription_id}
     );
-    my $env = get_required_var('SDAF_ENV_CODE');
-    my %query = (
-        ARM_CLIENT_ID => "${env}-client-id",
-        ARM_CLIENT_SECRET => "${env}-client-secret",
-        ARM_TENANT_ID => "${env}-tenant-id",
-        ARM_SUBSCRIPTION_ID => "${env}-subscription-id"
+    my %queries = (
+        ARM_CLIENT_ID => 'client-id',
+        ARM_CLIENT_SECRET => 'client-secret',
+        ARM_TENANT_ID => 'tenant-id',
+        ARM_SUBSCRIPTION_ID => 'subscription-id'
     );
 
+    my $env = get_required_var('SDAF_ENV_CODE');
+    my $key_vault = get_required_var('SDAF_DEPLOYER_KEY_VAULT');
+    my $vnet_code = get_required_var('SDAF_DEPLOYER_VNET_CODE');
+    my $region_code = convert_region_to_short(get_required_var('PUBLIC_CLOUD_REGION'));
+
+    my @secret_ids = @{az_keyvault_secret_list(vault_name => $key_vault, query => '[].id')};
     for my $key (keys %credentials) {
-        my @secret_ids = @{az_keyvault_secret_list(
-                vault_name => get_required_var('SDAF_DEPLOYER_KEY_VAULT'), query => "\"[?ends_with(name, \'$query{$key}\')].id\"")};
-        croak "Multiple or no secrets found: \n" . join("\n", @secret_ids) unless @secret_ids == 1;
+        # Check for full name first and fallback to older naming convention
+        my $long_name = "$env-$region_code-$vnet_code-$queries{$key}";
+        my $short_name = $queries{$key};
+        my $secret_id = (first { /$long_name/ } @secret_ids) //
+          (first { /$short_name/ } @secret_ids) ||
+          die "No secrets found: \n" . join("\n", @secret_ids);
 
         az_keyvault_secret_show(
-            id => $secret_ids[0],
+            id => $secret_id,
             query => 'value',
             output => 'tsv',
             save_to_file => "$tmpfile");
 
         # Keep secrets hidden in serial output
         define_secret_variable('SECRET_VARIABLE', $credentials{$key});
-        if (script_run("grep \$SECRET_VARIABLE $tmpfile > /dev/null 2>&1")) {
+        # Use echo/grep/cat to ignore the " and/or ' added in $SECRET_VARIABLE when using worker settings
+        # For example: handle "123-456-789"/'123-456-789', the correct one is 123-456-789
+        if (script_run("echo \$SECRET_VARIABLE | grep `cat $tmpfile` > /dev/null 2>&1")) {
             record_info("Check $key", "check_credentials failed on $key\n", result => 'softfail');
+            record_info("Check $key", "");
             $result = 1;
         }
         else {
@@ -283,9 +294,13 @@ L<https://learn.microsoft.com/en-us/azure/sap/automation/deploy-control-plane?ta
 =cut
 
 sub az_login {
+    # This is to remove telemetry messages which can mangle JSON outputs.
+    assert_script_run(
+        'az config set core.survey_message=false core.collect_telemetry=no --only-show-errors --output json', timeout => 240
+    );
     my $credentials = export_credentials();
-    my $login_cmd = 'while ! az login --service-principal -u ${ARM_CLIENT_ID} -p ${ARM_CLIENT_SECRET} -t ${ARM_TENANT_ID}; do sleep 10; done';
-    assert_script_run($login_cmd, timeout => 30);
+    my $login_cmd = 'while ! az login --service-principal -u ${ARM_CLIENT_ID} -p ${ARM_CLIENT_SECRET} -t ${ARM_TENANT_ID} -o none 1>/dev/null 2>&1; do sleep 10; done';
+    assert_script_run($login_cmd, timeout => 300);
     record_info('AZ login', "Subscription id: $credentials->{subscription_id}");
     return ($credentials->{subscription_id});
 }
@@ -467,13 +482,15 @@ sub load_os_env_variables {
 
 =head2 sdaf_ssh_key_from_keyvault
 
-    sdaf_ssh_key_from_keyvault(key_vault=>$key_vault [, target_file=>'/path/to/glory/and_happiness']);
+    sdaf_ssh_key_from_keyvault(key_vault=>$key_vault [, query=>'sshkey', target_file=>'/path/to/glory/and_happiness']);
 
 Retrieves public and private ssh key from specified keyvault and sets up permissions.
 
 =over
 
 =item * B<key_vault>: Key vault name
+
+=item * B<query>: Query keyword, default 'sshkey', ['sshkey' | 'sid-sshkey' | 'iscsi-sshkey']
 
 =item * B<target_file>: Full file path, where to write the public key. Default '~/.ssh/id_rsa'
 
@@ -483,10 +500,11 @@ Retrieves public and private ssh key from specified keyvault and sets up permiss
 sub sdaf_ssh_key_from_keyvault {
     my (%args) = @_;
     croak 'Missing mandatory argument: key_vault' unless $args{key_vault};
+    $args{query} //= 'sshkey';
     $args{target_file} //= homedir() . '/.ssh/id_rsa';
     my ($target_filename, $target_path) = fileparse($args{target_file});
     my @secret_ids = @{az_keyvault_secret_list(
-            vault_name => $args{key_vault}, query => '"[?ends_with(name, \'sshkey\')].id"')};
+            vault_name => $args{key_vault}, query => "\"[?ends_with(name, \'$args{query}\')].id\"")};
 
     croak "Multiple or no secrets found: \n" . join("\n", @secret_ids) unless @secret_ids == 1;
 
@@ -513,7 +531,7 @@ sub sdaf_ssh_key_from_keyvault {
         sleep 5;
     }
 
-    record_info('SSH KEY', "SSH public key '$target_path/$target_filename' is ready to be used.");
+    record_info('SSH KEY', "SSH public key '${target_path}${target_filename}' is ready to be used.");
 }
 
 =head2 serial_console_diag_banner
@@ -582,6 +600,8 @@ sub sdaf_execute_deployment {
     # It is used by SDAF internally, so keep it set in OS env
     export_credentials();
     set_os_variable('parameterFile', $tfvars_filename);
+    set_os_variable('TF_PARALLELLISM', 3);
+    assert_script_run("echo \$TF_PARALLELLISM");
 
     # SDAF has to be executed from the profile directory
     assert_script_run("cd $tfvars_path");
@@ -627,8 +647,10 @@ This is done for better debugging and logging transparency. Only sensitive value
 sub get_sdaf_deployment_command {
     my (%args) = @_;
     my $cmd;
+    my $control_plane_name = get_required_var('SDAF_ENV_CODE') . '-' . convert_region_to_short(get_required_var('PUBLIC_CLOUD_REGION')) . '-' . get_required_var('SDAF_DEPLOYER_VNET_CODE');
     if ($args{deployment_type} eq 'workload_zone') {
         $cmd = join(' ', sdaf_scripts_dir() . '/install_workloadzone.sh',
+            '--control_plane_name', "$control_plane_name",    # control plane name
             '--parameterfile', $args{tfvars_filename},    # workload zone tfvars file
             '--deployer_environment', get_os_variable('deployer_env_code'),    # VNET code
             '--deployer_tfstate_key', get_os_variable('deployerState'),    # tfstate name. State file is stored in storage account.
@@ -708,12 +730,14 @@ sub prepare_sdaf_project {
     }
     record_info("Release: $branch");
 
+    assert_script_run('rm -rf sap-automation');
     git_clone(get_required_var('SDAF_GIT_AUTOMATION_REPO'),
         branch => $branch,
         depth => '1',
         single_branch => 'yes',
         output_log_file => log_dir() . '/git_clone_automation.txt');
 
+    assert_script_run('rm -rf sap-automation-samples');
     git_clone(get_required_var('SDAF_GIT_TEMPLATES_REPO'),
         branch => get_var('SDAF_GIT_TEMPLATES_BRANCH'),
         depth => '1',
@@ -721,6 +745,7 @@ sub prepare_sdaf_project {
         output_log_file => log_dir() . '/git_clone_templates.log');
 
     assert_script_run("cp -Rp sap-automation-samples/Terraform/WORKSPACES $deployment_dir/WORKSPACES");
+    assert_script_run("cp -Rp ~/Azure_SAP_Automated_Deployment/WORKSPACES/.sap_deployment_automation $deployment_dir/WORKSPACES");
     # Ensure correct directories are in place
     my %vnet_codes = (
         workload_zone => $workload_vnet_code,
@@ -745,28 +770,6 @@ sub prepare_sdaf_project {
     assert_script_run("mkdir -p $_") foreach @create_workspace_dirs;
 }
 
-=head2 resource_group_exists
-
-    resource_group_exists($resource_group);
-
-Checks if resource group exists. Function accepts only full resource name.
-Croaks if command does not return true/false value.
-
-=over
-
-=item * B<$resource_group>: Resource group name to check
-
-=back
-=cut
-
-sub resource_group_exists {
-    my ($resource_group) = @_;
-    croak 'Mandatory positional argument "$resource_group" not defined.' unless $resource_group;
-
-    my $cmd_out = script_output("az group exists -n $resource_group");
-    die "Command 'az group exists -n $resource_group' failed.\nCommand returned: $cmd_out" unless grep /false|true/, $cmd_out;
-    return ($cmd_out eq 'true');
-}
 
 =head2 sdaf_execute_remover
 
@@ -851,8 +854,8 @@ sub sdaf_cleanup {
     my %result;
     # Sap system needs to be destroyed before workload zone so order matters here.
     for my $deployment_type ('sap_system', 'workload_zone') {
-        my $resource_group = resource_group_exists(generate_resource_group_name(deployment_type => $deployment_type));
-        unless ($resource_group) {
+        my $group_exists = az_group_exists(name => generate_resource_group_name(deployment_type => $deployment_type));
+        unless ($group_exists) {
             record_info('Cleanup skip', "Resource group for deployment type '$deployment_type' does not exist. Skipping cleanup");
             next;
         }
@@ -903,91 +906,6 @@ sub sdaf_destroy_resources(%args) {
     az_group_delete(name => $resource_name, timeout => 1800);
 }
 
-=head2 sdaf_execute_playbook
-
-    sdaf_execute_playbook(
-        playbook_filename=>'playbook_04_00_01_db_ha.yaml',
-        sdaf_config_root_dir=>'/path/to/joy/and/happiness/'
-        sap_sid=>'ABC',
-        timeout=>'42',
-        verbosity_level=>'3'
-        );
-
-Execute playbook specified by B<playbook_filename> and record command output in separate log file.
-Verbosity level of B<ansible-playbook> is controlled by openQA parameter B<SDAF_ANSIBLE_VERBOSITY_LEVEL>.
-If undefined, it will use standard output without adding any B<-v> flag. See function B<sdaf_execute_playbook> for details.
-
-=over
-
-=item * B<playbook_filename>: Filename of the playbook to be executed.
-
-=item * B<sdaf_config_root_dir>: SDAF Config directory containing SUT ssh keys
-
-=item * B<sap_sid>: SAP system ID. Default 'SAP_SID'
-
-=item * B<timeout>: Timeout for executing playbook. Passed into asset_script_run. Default: 1800s
-
-=item * B<$verbosity_level>: Change default verbosity value by either anything equal to 'true' or int between 1-6. Default: false
-
-=back
-=cut
-
-sub sdaf_execute_playbook {
-    my (%args) = @_;
-    $args{timeout} //= 1800;    # Most playbooks take more than default 90s
-    $args{sap_sid} //= get_required_var('SAP_SID');
-    $args{verbosity_level} //= get_var('SDAF_ANSIBLE_VERBOSITY_LEVEL');
-
-    croak 'Missing mandatory argument "playbook_filename".' unless $args{playbook_filename};
-    croak 'Missing mandatory argument "sdaf_config_root_dir".' unless $args{sdaf_config_root_dir};
-
-    my $playbook_options = join(' ',
-        sdaf_ansible_verbosity_level($args{verbosity_level}),    # verbosity controlled by OpenQA parameter
-        "--inventory-file=\"$args{sap_sid}_hosts.yaml\"",
-        "--private-key=$args{sdaf_config_root_dir}/sshkey",
-        "--extra-vars='_workspace_directory=$args{sdaf_config_root_dir}'",
-        '--extra-vars="@sap-parameters.yaml"',    # File is generated by SDAF, check official docs (SYNOPSIS) for more
-        '--ssh-common-args="-o StrictHostKeyChecking=no -o ServerAliveInterval=60 -o ServerAliveCountMax=120"'
-    );
-
-    $output_log_file = log_dir() . "/$args{playbook_filename}" =~ s/.yaml|.yml/.txt/r;
-    my $playbook_file = join('/', deployment_dir(), 'sap-automation', 'deploy', 'ansible', $args{playbook_filename});
-    my $playbook_cmd = join(' ', 'ansible-playbook', $playbook_options, $playbook_file);
-
-    record_info('Playbook run', "Executing playbook: $playbook_file\nExecuted command:\n$playbook_cmd");
-    assert_script_run("cd $args{sdaf_config_root_dir}");
-    my $rc = script_run(log_command_output(command => $playbook_cmd, log_file => $output_log_file),
-        timeout => $args{timeout}, output => "Executing playbook: $args{playbook_filename}");
-    upload_logs($output_log_file);
-    die "Execution of playbook failed with RC: $rc" if $rc;
-    record_info('Playbook OK', "Playbook execution finished: $playbook_file");
-}
-
-=head2 sdaf_ansible_verbosity_level
-
-    sdaf_ansible_verbosity_level($verbosity_level);
-
-Returns string that is to be used as verbosity parameter B<-v>  for 'ansible-playbook' command.
-This is controlled by positional argument B<$verbosity_level>.
-Values can specify verbosity level using integer up to 6 (max supported by ansible)
-or just set to anything equal to B<'true'> which will default to B<-vvvv>. Value B<-vvvv> should be enough to debug network
-connection problems according to ansible documentation:
-L<https://docs.ansible.com/ansible/latest/cli/ansible-playbook.html#cmdoption-ansible-playbook-v>
-
-=over
-
-=item * B<$verbosity_level>: Change default verbosity value by either anything equal to 'true' or int between 1-6. Default: false
-
-=back
-=cut
-
-sub sdaf_ansible_verbosity_level {
-    my ($verbosity_level) = @_;
-    return '' unless $verbosity_level;
-    return '-' . 'v' x $verbosity_level if looks_like_number($verbosity_level) and $verbosity_level <= 6;
-    return '-vvvv';    # Default set to "-vvvv"
-}
-
 =head2 get_sdaf_instance_id
 
     get_sdaf_instance_id(pattern=>['SCS', 'ERS', 'PAS']);
@@ -1010,143 +928,6 @@ sub get_sdaf_instance_id {
     $instance_id = script_output("grep ^${pattern}_instance_number $tfvar_file | cut -d '=' -f2 | grep -o '[0-9]\\+'");
     record_info("$args{pattern} ID: $instance_id");
     return $instance_id;
-}
-
-=head2 ansible_execute_command
-
-    ansible_execute_command(
-        command=>'rm -Rf /', host_group=>'QES_SCS', sdaf_config_root_dir=>'/some/path' , sap_sid=>'CAT');
-
-Execute command on host group using ansible. Returns execution output.
-
-=over
-
-=item * B<sdaf_config_root_dir>: SDAF Config directory containing SUT ssh keys
-
-=item * B<sap_sid>: SAP system ID. Default 'SAP_SID'
-
-=item * B<host_group>: Host group name from inventory file
-
-=item * B<command>: Command to be executed
-
-=item * B<verbose>: verbose ansible output
-
-=item * B<proceed_on_failure>: proceed on failure setting
-
-=back
-=cut
-
-sub ansible_execute_command {
-    my (%args) = @_;
-    croak 'Missing mandatory argument "sdaf_config_root_dir".' unless $args{sdaf_config_root_dir};
-
-    my @cmd = ('ansible', $args{host_group},
-        "--private-key=$args{sdaf_config_root_dir}/sshkey",
-        "--inventory=$args{sap_sid}_hosts.yaml",
-        $args{verbose} ? '-vvv' : '',
-        '--module-name=shell');
-
-    return script_output(join(' ', @cmd, "--args=\"$args{command}\""), proceed_on_failure => $args{proceed_on_failure});
-}
-
-=head2 playbook_settings
-
-    playbook_settings(components=>['db_install', 'db_ha']);
-
-Display simple command outputs from all DB hosts using B<ansible> command.
-
-=over
-
-=item * B<components>: B<ARRAYREF> of components that should be installed
-
-=back
-=cut
-
-sub playbook_settings {
-    my (%args) = @_;
-    # General playbooks that must be run in all scenarios
-    my @playbooks = (
-        # Fetches SSH key from Workload zone keyvault for accesssing SUTs
-        {playbook_filename => 'pb_get-sshkey.yaml', timeout => 90},
-        # Validate parameters
-        {playbook_filename => 'playbook_00_validate_parameters.yaml', timeout => 120},
-        # Base operating system configuration
-        {playbook_filename => 'playbook_01_os_base_config.yaml'});
-
-    # DB installation pulls in SAP specific configuration
-    if (grep /db_install/, @{$args{components}}) {
-        # SAP-specific operating system configuration
-        push @playbooks, {playbook_filename => 'playbook_02_os_sap_specific_config.yaml'};
-        # SAP Bill of Materials processing - this also mounts install media storage
-        push @playbooks, {playbook_filename => 'playbook_03_bom_processing.yaml', timeout => 7200};
-        # SAP HANA database installation
-        push @playbooks, {playbook_filename => 'playbook_04_00_00_db_install.yaml', timeout => 3600};
-    }
-
-    # playbooks required for all nw* scenarios
-    if (grep /nw/, @{$args{components}}) {
-        # SAP ASCS installation, including ENSA if specified in tfvars
-        push @playbooks, {playbook_filename => 'playbook_05_00_00_sap_scs_install.yaml', timeout => 7200};
-        # Execute database import
-        push @playbooks, {playbook_filename => 'playbook_05_01_sap_dbload.yaml', timeout => 7200};
-    }
-
-    # Run HA related playbooks at the end as it can mix up node order ###
-    if (grep /db_ha/, @{$args{components}}) {
-        # SAP HANA high-availability configuration
-        push @playbooks, {playbook_filename => 'playbook_04_00_01_db_ha.yaml', timeout => 3600};
-    }
-
-    # playbooks required for all nw* scenarios
-    if (grep /nw/, @{$args{components}}) {
-        # SAP primary application server installation
-        push @playbooks, {playbook_filename => 'playbook_05_02_sap_pas_install.yaml', timeout => 7200};
-        # SAP additional application server installation
-        push @playbooks, {playbook_filename => 'playbook_05_03_sap_app_install.yaml', timeout => 3600};
-    }
-
-    if (grep /nw_ensa/, @{$args{components}}) {
-        # Configure ENSA cluster
-        push @playbooks, {playbook_filename => 'playbook_06_00_acss_registration.yaml', timeout => 1800};
-    }
-
-    return (\@playbooks);
-}
-
-=head2 sdaf_register_byos
-
-    sdaf_register_byos(sdaf_config_root_dir=>'/stairway/to_heaven', scc_reg_code=>'CODE-XYZ', sap_sid='PRD');
-
-Performs SCC registration on BYOS image using B<registercloudguest> method.
-
-=over
-
-=item * B<sdaf_config_root_dir>: SDAF root configuration directory
-
-=item * B<scc_reg_code>: SCC registration code
-
-=item * B<sap_sid>: SAP system ID
-
-=back
-=cut
-
-sub sdaf_register_byos {
-    my (%args) = @_;
-    my @mandatory_args = qw(sdaf_config_root_dir scc_reg_code sap_sid);
-
-    for my $arg (@mandatory_args) {
-        croak "Missing mandatory argument \$args($arg)", unless $args{$arg};
-    }
-
-    record_info('Register SUTs');
-    assert_script_run("cd $args{sdaf_config_root_dir}");
-    ansible_execute_command(
-        command => "sudo registercloudguest -r $args{scc_reg_code}",
-        host_group => "$args{sap_sid}_DB",
-        sdaf_config_root_dir => $args{sdaf_config_root_dir},
-        sap_sid => $args{sap_sid},
-        verbose => 1
-    );
 }
 
 =head2 sdaf_deployment_reused
@@ -1244,29 +1025,70 @@ sub get_fencing_mechanism {
     return ($supported_fencing_values{$fencing_type});
 }
 
-=head2 get_workload_resource_group
+=head2 get_sdaf_resource_group
 
-    get_workload_resource_group(deployment_id=>'1234');
+    get_sdaf_resource_group(deployment_id=>'1234', resource_group_type=>'workload_zone');
 
-Finds and returns resource group belonging to the tests workload zone.
+Finds and returns resource group belonging to the test according to deployment type.
 
 B<Value conversion:>
 
 =over
 
-=item * B<deployment_id> =>  Test/deployment ID
+=item * B<deployment_id>: Test/deployment ID
+
+=item * B<resource_group_type>: Type of resource group.
+    Supported values: workload_zone, sap_system
 
 =back
 
 =cut
 
-sub get_workload_resource_group {
+sub get_sdaf_resource_group {
     my (%args) = @_;
     croak 'Missing mandatory argument "$args{deployment_id}"' unless $args{deployment_id};
-    my $query = "[?contains(name, 'workload') && contains(name, '$args{deployment_id}')].name";
-    my $groups = az_group_name_get(query => $query);
+    croak 'Missing mandatory argument "$args{resource_group_type}"' unless $args{resource_group_type};
+
+    # Capture the full hash returned by the new az_group_name_get
+    my $result = az_group_name_get(
+        query => "[?contains(name, '$args{resource_group_type}') && contains(name, '$args{deployment_id}')].name");
+
+    # Apply the filter: remove known noisy warnings
+    if (exists $result->{err}) {
+        # Define the filter regex based on the branch
+        $result->{err} =~ s/.*(FutureWarning|Launching flake|self.).*//g;
+        # Remove empty lines left behind by the filtering
+        $result->{err} =~ s/^\s*\n//gm;
+        record_info('AZ ERROR', "Error while fetching resource groups: $result->{err}") if ($result->{err} =~ /\S+/);
+    }
+
+    my $groups = $result->{data};
     die "Zero or more than one resource groups found:\n" . join("\n", @$groups) unless (@$groups == 1);
     return $groups->[0];
+}
+
+=head3 collect_guestregister_logs
+
+    collect_guestregister_logs()
+
+    Collect and upload SDAF logs related to registercloudguest service.
+
+=cut
+
+sub collect_guestregister_logs {
+    my @commands = (
+        'systemctl status guestregister.service',
+        'journalctl -u guestregister.service --no-pager',
+        'grep -E "ERROR:|WARNING:|401|422|failed" /var/log/cloudregister || true',
+        'zypper lr -u || true'
+    );
+    my @output;
+    for my $cmd (@commands) {
+        push(@output, "\n### COMMAND: $cmd ###\n");
+        push(@output, script_output("sudo $cmd", proceed_on_failure => 1));
+        push(@output, "\n#####################\n");
+    }
+    record_info('REGISTER OUT', join("\n", @output));
 }
 
 =head3 sdaf_upload_logs
@@ -1301,6 +1123,10 @@ sub sdaf_upload_logs {
     record_info('crm configure show', 'Failed to run "crm configure show"', result => 'fail') if (script_run("sudo crm configure show > $crm_cfg_log", timeout => 120));
     upload_logs("$crm_cfg_log", failok => 1);
 
+    # Upload registercloudguest log
+    collect_guestregister_logs();
+    upload_logs('/var/log/cloudregister', log_name => "$autotest::current_test->{name}-${hostname}_cloudregister.log", failok => 1);
+
     # Upload zypper log
     upload_logs('/var/log/zypper.log', log_name => "$autotest::current_test->{name}-${hostname}_zypper.log", failok => 1);
 
@@ -1314,10 +1140,11 @@ sub sdaf_upload_logs {
 
     # Uploading NW install logs
     record_info('Uploading NW ERS/SCS install logs');
-    my $nw_log = script_run("ls /var/tmp/$sap_sid | grep $sap_sid");
-    if (!script_run("ls /var/tmp/$sap_sid | grep $sap_sid")) {
-        my $nw_log = script_output("ls /var/tmp/$sap_sid | grep $sap_sid | grep 'zip'");
-        upload_logs("/var/tmp/$sap_sid/$nw_log", failok => 1);
+    my $nw_logs = script_output("ls /var/tmp/$sap_sid | grep ${sap_sid}.*zip", proceed_on_failure => 1);
+    if ($nw_logs =~ /\Q$sap_sid\E/ && $nw_logs =~ /zip/) {
+        foreach my $file (split /\n/, $nw_logs) {
+            upload_logs("/var/tmp/$sap_sid/$file", log_name => "$autotest::current_test->{name}-${hostname}_${file}", failok => 1);
+        }
     }
 
     # Uploading supportconfig log (it is time consuming so it is conditional)
@@ -1335,6 +1162,40 @@ sub sdaf_upload_logs {
 
     # need to return positive value for unit test to work properly
     return 1;
+}
+
+=head2 apply_no_cleanup_tag
+
+    apply_no_cleanup_tag(resource_group=>'workload_zone', no_cleanup_tag=>'pc_ignore');
+
+Checks resources inside B<resource_group> for B<SDAF_NO_CLEANUP_TAG> and applies one if missing.
+
+=over
+
+=item * B<resource_group>: Resource group name
+
+=item * B<no_cleanup_tag>: Tag name
+
+=back
+
+=cut
+
+sub apply_no_cleanup_tag {
+    my (%args) = @_;
+    for my $argument ('resource_group', 'no_cleanup_tag') {
+        croak "Missing mandatory argument '\$args{$argument}'" unless $args{$argument};
+    }
+    my $query = "[?tags.$args{no_cleanup_tag} == null].id";
+    my @untagged_resources = @{
+        az_resource_list(resource_group => $args{resource_group},
+            query => $query)};
+    record_info('Retain deployment',
+        "Adding missing tag '$args{no_cleanup_tag}' on following resources:\n" .
+          join("\n", @untagged_resources)) if @untagged_resources;
+    az_resource_tag(
+        resource_ids => \@untagged_resources,
+        tags => ["$args{no_cleanup_tag}=1"]
+    ) if @untagged_resources;
 }
 
 1;

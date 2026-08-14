@@ -8,6 +8,8 @@ package virt_utils;
 #          This file provides fundamental utilities.
 # Maintainer: alice <xlai@suse.com>
 
+## no os-autoinst style
+
 use base Exporter;
 use Exporter;
 use Sys::Hostname;
@@ -35,6 +37,7 @@ our @EXPORT = qw(
   handle_sp_in_settings_with_sp0
   clean_up_red_disks
   lpar_cmd
+  lpar_upload_logs
   generate_guest_asset_name
   get_guest_disk_name_from_guest_xml
   compress_single_qcow2_disk
@@ -91,9 +94,7 @@ sub get_version_for_daily_build_guest {
         $version = get_var("VERSION", '');
     }
     $version = lc($version);
-    if ($version !~ /sp/m) {
-        $version = $version . "-fcs";
-    }
+    $version =~ s/\./-/g;
     return $version;
 }
 
@@ -133,7 +134,7 @@ sub repl_repo_in_sourcefile {
         my $soucefile = "/usr/share/qa/virtautolib/data/" . "sources." . locate_sourcefile;
         my $newrepo = get_repo_0_prefix . get_var("REPO_0");
         # for sles15sp2+, install host with Online installer, while install guest with Full installer
-        $newrepo =~ s/-Online-/-Full-/ if ($verorig =~ /15-sp[2-9]/i);
+        $newrepo =~ s/-Online-/-Full-/ if ($verorig =~ /15-sp[2-9]/i || get_var('GUEST_FLAVOR', '') =~ /full/i);
         my $shell_cmd
           = "if grep $veritem $soucefile >> /dev/null;then sed -i \"s#^$veritem=.*#$veritem=$newrepo#\" $soucefile;else echo \"$veritem=$newrepo\" >> $soucefile;fi";
         if (is_s390x) {
@@ -178,7 +179,7 @@ sub repl_module_in_sourcefile {
     if (is_s390x) {
         lpar_cmd("$command");
         lpar_cmd("grep Module $source_file -r");
-        upload_asset "/usr/share/qa/virtautolib/data/sources.de", 1, 1;
+        lpar_upload_logs("/usr/share/qa/virtautolib/data/sources.de");
     }
     else {
         assert_script_run($command, timeout => 120);
@@ -330,21 +331,58 @@ sub lpar_cmd {
 
     die 'Command not provided' unless $cmd;
 
-    my $ret = console('svirt')->run_cmd($cmd, timeout => $timeout);
-    $ret //= 1;
+    # Append 2>&1 to capture standard error (stderr) into standard output (stdout),
+    # unless the command already includes it.
+    $cmd .= ' 2>&1' unless $cmd =~ /2>&1/;
 
+    # Execute the command with wantarray => 1 to capture both RC and combined output
+    my ($ret, $output) = console('svirt')->run_cmd($cmd, timeout => $timeout, wantarray => 1);
+
+    # Fallbacks in case run_cmd returns undefined values
+    $ret = 1 unless defined $ret;
+    $output = '' unless defined $output;
+
+    # Record the result and the captured output/errors to openQA Web UI
     if ($ret == 0) {
-        record_info('LPAR_CMD_PASS', "Command finished with RC 0: $cmd");
+        record_info('LPAR_CMD_PASS', "Command finished with RC 0: $cmd\n\nOutput:\n$output");
     }
     else {
-        record_info('LPAR_CMD_FAIL', "Command failed with RC $ret: $cmd");
+        record_info('LPAR_CMD_FAIL', "Command failed with RC $ret: $cmd\n\nOutput:\n$output");
     }
 
-    die "Find new failure (RC $ret), please check manually for command: $cmd"
+    # Die with the output string if the command failed and we are not ignoring the RC
+    die "Find new failure (RC $ret), please check manually for command: $cmd\nOutput:\n$output"
       unless ($ignore_return_code || $ret == 0);
 
-    # Return the captured return code
-    return $ret;
+    # Return context-aware results: list of (RC, output) or just RC
+    return wantarray ? ($ret, $output) : $ret;
+}
+
+=head2 lpar_upload_logs
+
+  lpar_upload_logs($file_path, [$custom_upname])
+
+Upload a log file directly from the s390x LPAR host to the openQA web UI.
+This helper subroutine executes a native C<curl> command via C<lpar_cmd()>,
+bypassing the standard C<upload_logs()> to avoid fragile C<wait_serial> timeouts
+caused by console context mismatches. It takes the absolute C<$file_path> on the host,
+and an optional C<$custom_upname> for the openQA Assets tab (defaults to the file's base name).
+
+=cut
+
+sub lpar_upload_logs {
+    my ($file_path, $custom_upname) = @_;
+
+    my ($filename) = $file_path =~ m|([^/]+)$|;
+    my $upname = $custom_upname || $filename;
+    my $upload_url = autoinst_url("/uploadlog/$filename");
+
+    my $curl_cmd = "curl -s --form upload=\@$file_path " .
+      "--form upname=$upname " .
+      "--max-time 90 $upload_url";
+
+    record_info('Upload Log', "Uploading $file_path directly from LPAR");
+    lpar_cmd($curl_cmd);
 }
 
 # Guest xml will be uploaded with name format [generated_name_by_this_func].xml
@@ -379,7 +417,7 @@ sub get_guest_disk_name_from_guest_xml {
     my $guest = shift;
 
     # Our automation only supports single guest disk
-    my $disk_from_xml = script_output "virsh dumpxml $guest | xmlstarlet sel -t -v //disk/source/\@file";
+    my $disk_from_xml = script_output "virsh dumpxml $guest | xmlstarlet sel -t -v //disk/source/\@file | grep -vE \'(ignition|combustion).*\.(qcow2|raw|img)\'";
     record_info('Guest disk config from xml', "Guest $guest disk_from_xml is: $disk_from_xml.");
     die 'There is no guest disk file parsed out from guest xml configuration!' unless $disk_from_xml;
 
@@ -441,7 +479,6 @@ sub download_guest_assets {
 
     # clean up vm stuff
     script_run "[ -d $vm_xml_dir ] && rm -rf $vm_xml_dir; mkdir -p $vm_xml_dir";
-    my $disk_image_dir = script_output "source /usr/share/qa/virtautolib/lib/virtlib; get_vm_disk_dir";
     script_run "[ -d /tmp/prj3_guest_migration/ ] && rm -rf /tmp/prj3_guest_migration/" if get_var('VIRT_NEW_GUEST_MIGRATION_SOURCE');
 
     # check if vm xml files have been uploaded
@@ -452,6 +489,10 @@ sub download_guest_assets {
         for my $i (1 .. @guests) {
             # ASSET_n0: put the guest xml file
             # ASSET_n1: put the guest disk file
+            unless (get_var("ASSET_${i}0", "")) {
+                record_info('Softfail', "ASSET_${i}0 is empty!", result => 'softfail');
+                next;
+            }
             if (get_var("ASSET_${i}0", "") =~ /$guest_asset_name/) {
 
                 # Download the guest xml file

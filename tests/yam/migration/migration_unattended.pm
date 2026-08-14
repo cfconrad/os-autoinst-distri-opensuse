@@ -4,15 +4,15 @@
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Migration activation then reboot to perform migration.
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "opensusebasetest";
+use Mojo::Base 'opensusebasetest';
 use testapi;
-use grub_utils 'grub_test';
-use migration 'disable_installation_repos';
 use power_action_utils 'power_action';
 use utils qw(zypper_call reconnect_mgmt_console upload_folders);
+use Utils::Backends qw(is_ipmi);
 use Utils::Architectures 'is_s390x';
+use Utils::Backends 'is_pvm';
 use registration;
 
 sub run {
@@ -20,26 +20,18 @@ sub run {
 
     select_console('root-console');
 
-    assert_script_run("echo 'url: " . get_var('SCC_URL') . "' > /etc/SUSEConnect");
-
-    my $repo_server = get_var('REPO_MIRROR_HOST', 'download.suse.de');
-    my $repo_home = "http://" . $repo_server . "/ibs/home:/fcrozat:/SLES16/"
-      . (get_var('AGAMA_PRODUCT_ID') =~ /SLES_SAP/ ? 'SLES_SAP_' : 'SLE_')
-      . "\$releasever";
-    my $repo_images = 'http://' . $repo_server . '/ibs/home:/fcrozat:/SLES16/images/';
-    zypper_call("ar --refresh -p 90 '$repo_home' home_sles16");
-    zypper_call("ar --refresh -p 90 $repo_images home_images");
+    # Add repo for devel:DMS when using proxy or rmt
+    if ((get_var('SCC_URL', "") =~ /proxy|rmt/)) {
+        my $repo_server = "https://download.opensuse.org/repositories/devel:/DMS/";
+        my $repo_url = $repo_server . "SLE_" . (get_var('VERSION_UPGRADE_FROM') =~ s/-/_/gr);
+        zypper_call("ar --refresh -p 90 '$repo_url' Migration");
+    }
 
     # install the migration image and active it
     my $migration_tool = is_s390x ? 'SLES16-Migration' : 'suse-migration-sle16-activation';
-    zypper_call("--gpg-auto-import-keys -n in $migration_tool");
+    record_info("installing DMS", script_output("zypper --gpg-auto-import-keys -n in $migration_tool"));
 
-    # disable repos of the product to migrate from due to proxySCC is not serving SLES 15 SP*
-    my $version = get_var('VERSION_UPGRADE_FROM');
-    $version =~ s/-/_/;
-    script_run('for s in $(zypper -t ls | grep ' . "$version" . ' | sed -e \'s,|.*,,g\'); do zypper modifyservice --disable $s; done');
-
-    # deacivate unwanted/unsupported extensions before doing migration
+    # deactivate unwanted/unsupported extensions before doing migration
     if (get_var('SCC_SUBTRACTIONS')) {
         foreach my $addon (split(',', get_var('SCC_SUBTRACTIONS'))) {
             my $extension = get_addon_fullname($addon);
@@ -48,12 +40,30 @@ sub run {
         }
     }
 
+    # clean repos before migration
+    if ((get_var('SCC_URL', "") =~ /proxy|rmt/)) {
+        zypper_call("rr Migration");
+    }
+    my $repo_num = script_output(q(zypper lr -u | awk -F '|' '/(cd|ftp):/ {printf $1}'));
+    zypper_call("rr $repo_num") if $repo_num;
+
+    # Add product increment repo
+    if (my $repo_increment = get_var('INCREMENT_REPO')) {
+        $repo_increment .= '/repo/' . (get_var('PRODUCT')) . '-' . (get_var('VERSION')) . '-' . (get_var('ARCH'));
+        zypper_call("ar --refresh $repo_increment Increment_repo");
+    }
+
+    # list repos and check network before migration
+    record_info('list repos', script_output('zypper lr -u'));
+    record_info('network', script_output('ip a s'));
+    record_info('wicked', script_output('wicked ifstatus all'));
+    record_info('config', script_output('for i in $(find /etc/sysconfig/network -name ifcfg*); do echo "XXXXXXXXXX $i"; cat $i; done'));
+
     # upload logs to know system state before migration
     upload_logs("/boot/grub2/grub.cfg", failok => 1);
     upload_folders(folders => '/etc/zypp/repos.d/');
 
     if (is_s390x) {
-        assert_script_run("echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/root.conf");
         enter_cmd '/usr/sbin/run_migration';
         reset_consoles;
         reconnect_mgmt_console(timeout => 600);
@@ -62,10 +72,11 @@ sub run {
         assert_script_run("sed -i 's/set timeout=[0-9]*/set timeout=-1/' /etc/grub.d/99_migration");
         assert_script_run("grub2-mkconfig -o /boot/grub2/grub.cfg");
         power_action('reboot', textmode => 1, keepconsole => 1, first_reboot => 1);
-        assert_screen('grub-menu-migration', 120);
+        reconnect_mgmt_console(timeout => 600) if (is_ipmi | is_pvm),;
+        assert_screen('grub-menu-migration', is_ipmi ? 600 : 120);
         send_key 'ret';
-        assert_screen('migration-running', 60);
-        assert_screen('grub2', 1000);
+        assert_screen('migration-running', 60) unless (is_pvm);
+        assert_screen('grub2', 1200);
     }
 }
 

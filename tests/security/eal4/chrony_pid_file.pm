@@ -7,7 +7,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#111386
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use serial_terminal 'select_serial_terminal';
@@ -43,10 +43,6 @@ sub run {
 
     # Attempt to create a file in /run, expected result: fail
     validate_script_output('touch /run/test 2>&1', sub { m/Permission denied/ }, proceed_on_failure => 1);
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

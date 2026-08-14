@@ -6,9 +6,11 @@
 # Summary: Add phub extension for required dependecnies
 # Maintainer: QE Core <qe-core@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
+use transactional 'reboot_on_changes';
+use version_utils 'is_transactional';
 use registration qw(add_suseconnect_product get_addon_fullname is_phub_ready);
 
 sub run {
@@ -17,6 +19,7 @@ sub run {
     return unless is_phub_ready();
 
     eval { add_suseconnect_product(get_addon_fullname('phub')); };
+    reboot_on_changes if is_transactional;
     if ($@) {
         if (check_var('BETA', '1')) {
             force_soft_failure('poo#120879, PackageHub installation might fail in early development');

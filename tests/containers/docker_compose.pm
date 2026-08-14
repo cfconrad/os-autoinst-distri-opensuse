@@ -11,6 +11,7 @@ use Mojo::Base 'containers::basetest', -signatures;
 use testapi;
 use serial_terminal qw(select_serial_terminal);
 use version_utils;
+use version;
 use utils;
 use Utils::Architectures;
 use containers::bats;
@@ -20,17 +21,18 @@ my $version;
 
 sub setup {
     my $self = shift;
-    my @pkgs = qw(docker docker-buildx docker-compose go1.24 make);
+    my @pkgs = qw(docker docker-buildx docker-compose go1.26 make openssl);
     $self->setup_pkgs(@pkgs);
 
-    # docker-compose needs to be patched upstream to support SELinux
+    # docker-compose tests needs to be patched upstream to support SELinux
     configure_docker(selinux => 0, tls => 1);
 
     # Some tests need this file
     run_command "mkdir /root/.docker || true";
     run_command "touch /root/.docker/config.json";
 
-    $version = script_output qq($docker_compose version | awk '{ print "v"\$4 }');
+    $version = script_output qq($docker_compose version | awk '{ print \$4 }');
+    $version = "v$version" if ($version !~ /^v/);
     record_info "docker-compose version", $version;
 
     patch_sources "compose", $version, "pkg/e2e";
@@ -41,20 +43,41 @@ sub test ($target) {
     my %env = (
         COMPOSE_E2E_BIN_PATH => $docker_compose,
         # This test fails on v2.39.2 at least
-        EXCLUDE_E2E_TESTS => 'TestWatchMultiServices|TestBuildTLS',
+        EXCLUDE_E2E_TESTS => 'TestWatchMultiServices',
     );
     # Fails on non-x86_64 with: "exec /transform: exec format error"
     $env{EXCLUDE_E2E_TESTS} .= "|TestConvertAndTransformList" unless is_x86_64;
     my $env = join " ", map { "$_=\"$env{$_}\"" } sort keys %env;
 
-    my @xfails = ();
+    # Extract "v2" or "v5" from $version
+    my $v = substr($version, 0, 2);
+    my @xfails = (
+        # These fail with Docker v29: https://github.com/docker/compose/issues/13565
+        # and multi-arch may need the containerd image store as documented here:
+        # https://docs.docker.com/build/building/multi-platform/
+        "github.com/docker/compose/$v/pkg/e2e::TestBuildPlatformsStandardErrors",
+        "github.com/docker/compose/$v/pkg/e2e::TestBuildPlatformsStandardErrors/builder_does_not_support_multi-arch",
+        "github.com/docker/compose/$v/pkg/e2e::TestLocalComposeRun",
+        "github.com/docker/compose/$v/pkg/e2e::TestLocalComposeRun/compose_run_-rm_with_stop_signal",
+        # Flaky tests:
+        "github.com/docker/compose/$v/pkg/e2e::TestBuildTLS",
+        "github.com/docker/compose/$v/pkg/e2e::TestUpDependenciesNotStopped",
+        "github.com/docker/compose/$v/pkg/e2e::TestUpStopWithLogsMixed",
+        "github.com/docker/compose/$v/pkg/e2e::TestWatch",
+        "github.com/docker/compose/$v/pkg/e2e::TestWatch/debian",
+    );
+    push @xfails, (
+        # These fail due to https://github.com/docker/compose/issues/14005
+        "github.com/docker/compose/v5/pkg/e2e::TestImageVolume",
+        "github.com/docker/compose/v5/pkg/e2e::TestImageVolumeRecreateOnRebuild",
+    ) if (is_tumbleweed);
 
-    run_command "$env make $target |& tee $target.txt || true", timeout => 3600;
-
+    run_timeout_command "$env make $target &> $target.txt", no_assert => 1, timeout => 3600;
+    upload_logs "$target.txt", failok => 1;
     assert_script_run "mv /tmp/report/report.xml $target.xml";
+    die "Testsuite failed" if script_run("test -s $target.xml");
     patch_junit "docker-compose", $version, "$target.xml", @xfails;
-    parse_extra_log(XUnit => "$target.xml");
-    upload_logs("$target.txt");
+    parse_extra_log(XUnit => "$target.xml", timeout => 180);
 }
 
 sub run {
@@ -64,10 +87,12 @@ sub run {
     $self->setup;
 
     select_serial_terminal;
-    assert_script_run "cd /var/tmp/compose";
+    run_command "cd /var/tmp/compose";
     run_command 'PATH=$PATH:/var/tmp/compose/bin/build';
 
-    my @targets = split(/\s+/, get_var("RUN_TESTS", "e2e-compose e2e-compose-standalone"));
+    # We don't run the e2e-compose-standalone target as this is deprecated:
+    # https://docs.docker.com/compose/install/standalone/
+    my @targets = split(/\s+/, get_var("RUN_TESTS", "e2e-compose"));
     test $_ foreach (@targets);
 }
 
@@ -76,15 +101,13 @@ sub cleanup {
 }
 
 sub post_fail_hook {
-    my ($self) = @_;
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 sub post_run_hook {
-    my ($self) = @_;
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 1;

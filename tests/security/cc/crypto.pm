@@ -7,7 +7,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#95485, poo#102693
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use audit_test qw(run_testcase compare_run_log);
@@ -26,10 +26,6 @@ sub run {
     # Compare current test results with baseline
     my $result = compare_run_log('crypto');
     $self->result($result);
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

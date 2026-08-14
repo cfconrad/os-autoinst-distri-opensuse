@@ -7,13 +7,14 @@
 # Summary: Create HA cluster using crm cluster init
 # Maintainer: QE-SAP <qe-sap@suse.de>, Loic Devulder <ldevulder@suse.com>
 
-use base 'haclusterbasetest';
+use Mojo::Base 'haclusterbasetest';
 use testapi;
 use lockapi;
 use serial_terminal qw(select_serial_terminal);
 use hacluster;
 use utils qw(zypper_call clear_console file_content_replace);
 use version_utils qw(is_sle package_version_cmp);
+use package_utils qw(install_package);
 
 sub type_qnetd_pwd {
     if (wait_serial(qr/Password:\s*$/i)) {
@@ -27,6 +28,7 @@ sub type_qnetd_pwd {
 sub cluster_init {
     my ($init_method, $fencing_opt, $unicast_opt, $qdevice_opt) = @_;
 
+    wait_serial($testapi::distri->{serial_term_prompt}, no_regex => 1, quiet => 1);
     record_info 'cluster_init', "Initializing cluster with: -y $fencing_opt $unicast_opt $qdevice_opt";
     if ($init_method eq 'crm-cluster-init') {
         enter_cmd "crm cluster init -y $fencing_opt $unicast_opt $qdevice_opt ; echo cluster-init-finished-\$?";
@@ -62,11 +64,12 @@ sub run {
 
     # HA test modules use packages from ClusterTools2. Attempt to install it here and in
     # ha_cluster_join, but continue if it's not possible (retval 104)
-    zypper_call('in ClusterTools2', exitcode => [0, 104]);
+    my $search_rc = zypper_call('se ClusterTools2', exitcode => [0, 104]);
+    install_package("ClusterTools2", trup_reboot => 1) if ($search_rc == 0);
 
     # Qdevice configuration
     if (get_var('QDEVICE')) {
-        zypper_call 'in corosync-qdevice';
+        install_package('corosync-qdevice', trup_reboot => 1);
         my $qnet_node_host = choose_node(3);
         $qdevice_opt = "--qnetd-hostname=" . get_ip($qnet_node_host);
         barrier_wait("QNETD_SERVER_READY_$cluster_name");
@@ -92,8 +95,8 @@ sub run {
         file_content_replace("$sbd_cfg", "SBD_DELAY_START=.*" => "SBD_DELAY_START=yes");
     }
 
-    # Execute csync2 to synchronise the sysconfig sbd file
-    exec_csync;
+    # Synchronize the sysconfig sbd file
+    sync_file($sbd_cfg);
 
     # Set wait_for_all option to 0 if we are in a two nodes cluster situation
     # We need to set it for reproducing the same behaviour we had with no-quorum-policy=ignore
@@ -114,8 +117,8 @@ sub run {
     diag 'Waiting for other nodes to join...';
     barrier_wait("NODE_JOINED_$cluster_name");
 
-    # Execute csync2 to synchronise the configuration files
-    exec_csync;
+    # Synchronize the configuration files
+    sync_file($corosync_conf);
 
     # State of SBD if shared storage SBD is used
     if (!get_var('USE_DISKLESS_SBD')) {
@@ -129,7 +132,13 @@ sub run {
                 last;
             }
             elsif (!$count) {
-                die "Unexpected node count in sdb list command output";
+                # Fail only if after removing repeated nodes, the number still does not match
+                my %aux = map { (split(/\s/, $_))[1] => 1 } (grep { /clear/ } split(/\n/, $sbd_output));
+                my $actual_node_count = keys %aux;
+                die 'Unexpected node count in sbd list command output' if (get_node_number != $actual_node_count);
+                # If actual number of nodes match, then we're here because some of the nodes are listed
+                # more than once
+                record_soft_failure 'bsc#1249216 - Cluster node listed more than one time in sbd device';
             }
             sleep 2;
             record_info('Retry');

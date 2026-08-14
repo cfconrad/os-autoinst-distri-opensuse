@@ -11,8 +11,8 @@ use Mojo::Base 'containers::basetest', -signatures;
 use testapi;
 use serial_terminal qw(select_serial_terminal);
 use version_utils;
+use version;
 use utils;
-use Utils::Architectures qw(is_x86_64);
 use containers::bats;
 
 my $api_version;
@@ -21,7 +21,7 @@ my $version;
 sub setup {
     my $self = shift;
 
-    my @pkgs = qq(docker jq make python3 python3-docker python3-paramiko python3-pytest python3-pytest-timeout);
+    my @pkgs = qq(docker jq make openssl python3 python3-docker python3-paramiko python3-pytest python3-pytest-timeout);
     $self->setup_pkgs(@pkgs);
 
     configure_docker(selinux => 1, tls => 1);
@@ -57,8 +57,6 @@ sub test ($target) {
         "tests/integration/api_swarm_test.py",
         "tests/integration/models_swarm_test.py"
     );
-    # This test uses the vieux/sshfs plugin which doesn't seem to be available for other arches
-    push @ignore, "tests/integration/api_plugin_test.py" unless is_x86_64;
     my $ignore = join " ", map { "--ignore=$_" } @ignore;
 
     # Used by pytest to ignore individual tests
@@ -76,22 +74,18 @@ sub test ($target) {
     my $pytest_args = "-vv --capture=tee-sys -o junit_logging=all --junit-xml $target.xml $ignore $deselect";
 
     # For these tests we use the concept of expected failures instead of deselecting them which prevents them from running
-    my @xfails = ();
-    push @xfails, (
-        # Flaky test
-        "tests.integration.api_container_test.AttachContainerTest::test_attach_no_stream",
+    my @xfails = (
         # This test with websockets is broken
         "tests.integration.api_container_test.AttachContainerTest::test_run_container_reading_socket_ws",
+        # https://github.com/docker/docker-py/issues/3389
+        "tests.integration.api_network_test.TestNetworks::test_connect_with_mac_address",
     );
-    push @xfails, (
-        "tests.unit.api_build_test.BuildTest::test_set_auth_headers_with_dict_and_no_auth_configs",
-    ) if (is_sle(">=16"));
 
-    run_command "$env pytest $pytest_args tests/$target &> $target.txt || true", timeout => 3600;
-
+    run_timeout_command "$env pytest $pytest_args tests/$target &> $target.txt", no_assert => 1, timeout => 3600;
+    upload_logs "$target.txt", failok => 1;
+    die "Testsuite failed" if script_run("test -s $target.xml");
     patch_junit "docker-py", $version, "$target.xml", @xfails;
-    parse_extra_log(XUnit => "$target.xml");
-    upload_logs("$target.txt");
+    parse_extra_log(XUnit => "$target.xml", timeout => 180);
 }
 
 sub run {
@@ -115,15 +109,13 @@ sub cleanup {
 }
 
 sub post_fail_hook {
-    my ($self) = @_;
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 sub post_run_hook {
-    my ($self) = @_;
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 1;

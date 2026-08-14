@@ -62,6 +62,7 @@ QE-SAP <qe-sap@suse.de>
 use Mojo::Base 'publiccloud::basetest';
 use testapi;
 use serial_terminal qw( select_serial_terminal );
+use version_utils qw( is_sle );
 use sles4sap::ipaddr2 qw(
   ipaddr2_bastion_pubip
   ipaddr2_os_sanity
@@ -82,11 +83,12 @@ sub run {
     # It has to know about it to decide which ssh are expected in internal VMs
     my %sanity_args = (bastion_ip => $bastion_ip);
     $sanity_args{user} = 'root' unless check_var('IPADDR2_ROOTLESS', '1');
+    $sanity_args{enable_dig} = 1 unless is_sle('16+');
     ipaddr2_os_sanity(%sanity_args);
 }
 
 sub test_flags {
-    return {fatal => 1, publiccloud_multi_module => 1};
+    return {fatal => 1};
 }
 
 sub post_fail_hook {
@@ -96,7 +98,6 @@ sub post_fail_hook {
         diagnostic => get_var('IPADDR2_DIAGNOSTIC', 0),
         cloudinit => get_var('IPADDR2_CLOUDINIT', 1),
         ibsm_rg => get_var('IBSM_RG'));
-    $self->SUPER::post_fail_hook;
 }
 
 1;

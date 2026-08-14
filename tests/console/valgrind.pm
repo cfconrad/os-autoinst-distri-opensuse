@@ -19,13 +19,14 @@
 # - Check the valgrind tool "massif"
 # Maintainer: QE Core <qe-core@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
 use Utils::Logging;
 use registration qw(cleanup_registration register_product add_suseconnect_product get_addon_fullname remove_suseconnect_product);
 use version_utils "is_sle";
+use package_utils 'install_package';
 
 sub assert_present {
     my $text = shift;
@@ -39,6 +40,7 @@ sub run {
     prepare();
     record_info("valgrind", script_output("valgrind --version"));
 
+    script_run 'export DEBUGINFOD_URLS=""';
     # Run valgrind memchecks
     assert_script_run 'valgrind --tool=memcheck --trace-children=yes ./valgrind-test';
     my $cmd = 'valgrind -s --log-fd=1';    # command with common options
@@ -139,7 +141,7 @@ sub prepare {
         add_suseconnect_product(get_addon_fullname('sdk'));
     }
 
-    zypper_call '-v in gcc valgrind', timeout => 1000;
+    install_package('gcc valgrind', trup_reboot => 1, timeout => 1000);
 
     # Compile the valgrind test program
     assert_script_run 'mkdir -p /var/tmp/valgrind';

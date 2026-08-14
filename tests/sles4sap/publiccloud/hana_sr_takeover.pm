@@ -1,11 +1,11 @@
 # Copyright SUSE LLC
 # SPDX-License-Identifier: FSFAP
-# Maintainer: QE-SAP <qe-sap@suse.de>
 # Summary: Test module for performing database takeover using various methods on "master" HANA database.
+# Maintainer: QE-SAP <qe-sap@suse.de>
 
 =head1 NAME
 
-hana_sr_takeover.pm - Performs a HANA database takeover.
+sles4sap/publiccloud/hana_sr_takeover.pm - Performs a HANA database takeover.
 
 =head1 DESCRIPTION
 
@@ -37,15 +37,15 @@ QE-SAP <qe-sap@suse.de>
 
 =cut
 
-use base 'sles4sap_publiccloud_basetest';
+use Mojo::Base 'sles4sap::publiccloud_basetest';
 use testapi;
-use sles4sap_publiccloud;
+use sles4sap::publiccloud;
 use publiccloud::utils;
 use hacluster qw($crm_mon_cmd);
 use serial_terminal 'select_serial_terminal';
 
 sub test_flags {
-    return {fatal => 1, publiccloud_multi_module => 1};
+    return {fatal => 1};
 }
 
 sub run {
@@ -87,8 +87,11 @@ sub run {
         $sbd_delay = $self->sbd_delay_formula();
     }
 
+    # Cache the online_string to avoid repeated SSH calls to pacemaker_version()
+    my $online_string = get_online_string($self);
+
     # Stop/kill/crash HANA DB and wait till SSH is again available with pacemaker running.
-    $self->stop_hana(method => $takeover_action);
+    $self->stop_hana(method => $takeover_action, online_string => $online_string);
 
     # SBD delay is active only after reboot
     if ($takeover_action eq 'crash' || $takeover_action eq 'stop') {
@@ -108,7 +111,7 @@ sub run {
     record_info(ucfirst($site_name) . ' start');
 
     $self->cleanup_resource();
-    $self->wait_for_cluster(wait_time => 60, max_retries => 10);
+    $self->wait_for_cluster(wait_time => 60, max_retries => 10, online_string => $online_string);
     die "Required hana resource is NOT running on $self->{my_instance}, aborting" unless $self->is_hana_resource_running();
     $self->display_full_status();
     if ($self->get_promoted_hostname() eq $target_site->{instance_id}) {

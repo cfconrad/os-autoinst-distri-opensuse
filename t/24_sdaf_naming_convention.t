@@ -65,8 +65,8 @@ subtest '[get_tfvars_path] Test passing scenarios' => sub {
         env_code => 'LAB'
     );
     my %expected_results = (
-        workload_zone => '/narnia/LAB-SECE-SAP04-INFRASTRUCTURE-0079.tfvars',
-        sap_system => '/narnia/LAB-SECE-SAP04-QAS-0079.tfvars',
+        workload_zone => '/narnia/LAB-SECE-SAP04-INFRASTRUCTURE.terrraform.tfstate',
+        sap_system => '/narnia/LAB-SECE-SAP04-SID.terrraform.tfstate',
         library => '/narnia/LAB-SECE-SAP_LIBRARY-0079.tfvars',
         deployer => '/narnia/LAB-SECE-SAP04-INFRASTRUCTURE-0079.tfvars'
     );
@@ -143,7 +143,9 @@ subtest '[get_tfvars_path] Test passing scenarios' => sub {
 };
 
 subtest '[get_sut_sshkey_path]' => sub {
-    is get_sut_sshkey_path(config_root_path => '/Project/Zeta'), '/Project/Zeta/sshkey', 'Return correct ssh key path.';
+    my $mock_lib = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::naming_conventions', no_auto => 1);
+    $mock_lib->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
+    is get_sut_sshkey_path(config_root_path => '/Project/Zeta'), '/Project/Zeta/sid-sshkey', 'Return correct ssh key path.';
     dies_ok { get_sut_sshkey_path() } 'Fail with missing config root path argument';
 };
 

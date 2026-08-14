@@ -5,9 +5,9 @@
 
 # Package: rmt-server yast2-rmt
 # Summary: Test for the yast2-rmt module
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use parent "y2_module_consoletest";
+use Mojo::Base 'y2_module_consoletest';
 
 use utils;
 use testapi;

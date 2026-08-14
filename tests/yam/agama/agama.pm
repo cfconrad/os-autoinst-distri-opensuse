@@ -3,9 +3,9 @@
 
 # Summary: Run interactive installation with Agama,
 # using a web automation tool to test directly from the Live ISO.
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base Yam::Agama::agama_base;
+use Mojo::Base 'Yam::Agama::agama_base';
 use Carp qw(croak);
 use testapi qw(
   diag
@@ -23,6 +23,7 @@ use testapi qw(
 );
 use Utils::Architectures qw(is_s390x is_ppc64le);
 use Utils::Backends qw(is_pvm is_svirt);
+use version_utils qw(is_vmware);
 use power_action_utils 'power_action';
 
 sub is_headless_installation {
@@ -44,9 +45,10 @@ sub run {
       " --test-reporter-destination=/tmp/$tap" .
       " /usr/share/agama/system-tests/${test}.js" .
       " --product-version " . get_required_var('VERSION') .
-      " --agama-version " . get_required_var('AGAMA_VERSION') .
+      " --agama-web-ui-package-version " . get_var('AGAMA_WEBUI_PACKAGE_VERSION') .
       " $test_options";
 
+    select_console 'install-shell';
     record_info("node cmd", $node_cmd);
     my $ret = script_run($node_cmd, timeout => 2400);
 
@@ -68,7 +70,7 @@ sub run {
         my $svirt = console('svirt')->change_domain_element(os => boot => {dev => 'hd'});
     }
 
-    (is_s390x() || is_pvm() || is_headless_installation()) ?
+    (is_s390x() || is_pvm() || is_headless_installation()) || is_vmware() ?
       # reboot via console
       power_action('reboot', keepconsole => 1, first_reboot => 1) :
       # graphical reboot

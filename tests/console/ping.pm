@@ -17,7 +17,7 @@
 use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
-use utils 'zypper_call';
+use package_utils 'install_package';
 use version_utils qw(is_jeos is_sle);
 
 sub run {
@@ -27,7 +27,7 @@ sub run {
     select_serial_terminal;
     $ping_group_range = script_output('sysctl net.ipv4.ping_group_range');
 
-    zypper_call('in iputils libcap-progs sudo');
+    install_package('iputils libcap-progs sudo', trup_reboot => 1);
     $capability = script_output('getcap $(command -v ping)', proceed_on_failure => 1);
 
     record_info('KERNEL VERSION', script_output('uname -a'));
@@ -129,7 +129,7 @@ sub run {
 }
 
 sub test_flags {
-    return {fatal => 0};
+    return {fatal => 0, no_rollback => 1};
 }
 
 1;

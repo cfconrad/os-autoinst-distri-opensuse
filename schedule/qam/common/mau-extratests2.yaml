@@ -34,7 +34,30 @@ schedule:
 conditional_schedule:
   version_specific:
     VERSION:
+      '16.0':
+        - console/pkcon
+        - '{{fwupd}}'
+        - console/rust
+        - console/gcc
+        - console/ndctl
+        - console/curl_ipv6
+        - console/wget_ipv6
+        - console/osinfo_db
+        - console/ovn
+        - console/firewalld
+        - console/nginx
+        - console/libgcrypt
+        - console/zziplib
+        - console/journald_fss
+        - console/valgrind
+        - console/valkey
+        - console/ds389_advanced_functional
       15-SP7:
+        - console/pkcon
+        - '{{fwupd}}'
+        - console/rust
+        - console/gcc
+        - console/ndctl
         - console/curl_ipv6
         - console/wget_ipv6
         - console/osinfo_db
@@ -47,8 +70,13 @@ conditional_schedule:
         - '{{arch_specific}}'
         - console/valgrind
         - console/valkey
-        - '{{arch_specific15_sp5plus}}'
+        - console/ds389_advanced_functional
       15-SP6:
+        - console/pkcon
+        - '{{fwupd}}'
+        - console/rust
+        - console/gcc
+        - console/ndctl
         - console/curl_ipv6
         - console/wget_ipv6
         - console/osinfo_db
@@ -61,8 +89,13 @@ conditional_schedule:
         - '{{arch_specific}}'
         - console/valgrind
         - console/valkey
-        - '{{arch_specific15_sp5plus}}'
+        - console/ds389_advanced_functional
       15-SP5:
+        - console/pkcon
+        - '{{fwupd}}'
+        - console/rust
+        - console/gcc
+        - console/ndctl
         - console/curl_ipv6
         - console/wget_ipv6
         - console/osinfo_db
@@ -74,8 +107,13 @@ conditional_schedule:
         - console/nginx
         - '{{arch_specific}}'
         - console/valgrind
-        - '{{arch_specific15_sp5plus}}'
+        - console/ds389_advanced_functional
       15-SP4:
+        - console/pkcon
+        - '{{fwupd}}'
+        - console/rust
+        - console/gcc
+        - console/ndctl
         - console/curl_ipv6
         - console/wget_ipv6
         - console/osinfo_db
@@ -87,6 +125,7 @@ conditional_schedule:
         - console/nginx
         - '{{arch_specific}}'
         - console/valgrind
+        - console/ds389_advanced_functional
       15-SP3:
         - console/curl_ipv6
         - console/wget_ipv6
@@ -135,16 +174,18 @@ conditional_schedule:
         - console/journald_fss
       aarch64:
         - console/journald_fss
-  arch_specific15_sp5plus:
-    ARCH:
-      x86_64:
-        - console/year_2038_detection
-      aarch64:
-        - console/year_2038_detection
   arch_systemtap:
     ARCH:
       x86_64:
         - console/systemtap
       s390x:
         - console/systemtap
+  fwupd:
+    ARCH:
+      x86_64:
+        - console/fwupd
+      aarch64:
+        - console/fwupd
+      ppc64le:
+        - console/fwupd
 ...

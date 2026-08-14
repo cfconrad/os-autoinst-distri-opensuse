@@ -409,7 +409,9 @@ Log in as root in the current console
 sub become_root {
     my ($self) = @_;
 
+    $self->detect_serial_marker_capability() if $self->get_pretty_serial_marker();
     $self->script_sudo('bash', 1);
+    $self->invalidate_serial_marker_hook();
     # No need to apply on more recent kernels
     if (is_sle('<=15-SP2') || is_leap('<=15.2')) {
         disable_serial_getty() unless $self->script_run("systemctl is-enabled serial-getty\@$testapi::serialdev");
@@ -898,7 +900,7 @@ sub activate_console {
             # case the system is still booting (https://bugzilla.novell.com/show_bug.cgi?id=895602)
             # or when using remote consoles which can take some seconds, e.g.
             # just after ssh login
-            assert_screen \@tags, $args{timeout} // 60;
+            assert_screen \@tags, $args{timeout} // 90;
             if (match_has_tag("tty$nr-selected")) {
                 enter_cmd "$user";
                 handle_password_prompt;
@@ -950,7 +952,6 @@ sub activate_console {
         handle_password_prompt($console);
         assert_screen('text-logged-in-root', 60) unless is_hyperv;
         $self->set_standard_prompt('root', os_type => $os_type, skip_set_standard_prompt => $args{skip_set_standard_prompt});
-        save_svirt_pty;
     }
     elsif (
         $console eq 'installation'

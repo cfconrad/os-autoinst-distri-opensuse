@@ -3,18 +3,19 @@
 # Copyright 2019-2024 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
-# Package: python3-ec2metadata iproute2 ca-certificates
+# Package: iproute2 ca-certificates
 # Summary: This is just bunch of random commands overviewing the public cloud instance
 # We just register the system, install random package, see the system and network configuration
 # This test module will fail at the end to prove that the test run will continue without rollback
 #
 # Maintainer: QE-C team <qa-c@suse.de>
 
-use base 'publiccloud::basetest';
+use Mojo::Base 'publiccloud::basetest';
 use registration;
 use testapi;
 use utils;
 use publiccloud::utils;
+use publiccloud::zypper 'pc_wait_quit_local';
 use version_utils qw(is_sle is_sle_micro);
 use Utils::Logging 'tar_and_upload_log';
 
@@ -24,12 +25,14 @@ sub run {
     assert_script_run("uname -a");
 
     assert_script_run("cat /etc/os-release");
-    if (is_ec2) {
-        script_run("ec2metadata --api latest --document | tee ec2metadata.txt");
-        upload_logs("ec2metadata.txt");
-    }
 
     assert_script_run("ps aux | nl");
+
+    # Workaround for missing iproute2 package in 15-SP4 CHOST images (bsc#1264714)
+    if (get_required_var('FLAVOR') =~ 'GCE-CHOST-BYOS' && (is_sle("=15-SP4") || is_sle("=15-SP5")) && script_run("ip l") != 0) {
+        record_soft_failure("bsc#1264714 Missing iproute2 package");
+        script_retry("zypper -n in iproute2", retry => 3, timeout => 300);
+    }
 
     my $ip_color = (is_sle('>=15-SP3')) ? '-c=never' : '';
     assert_script_run("ip $ip_color a s");
@@ -44,6 +47,9 @@ sub run {
     # Check for bsc#1165915
     zypper_call("ref");
     my $register = (is_sle_micro) ? "transactional-update register --status-text" : "SUSEConnect --status-text";
+    # poo#204534: a background transactional-update task (e.g. snapper
+    # cleanup) may still hold the lock right after boot/registration.
+    pc_wait_quit_local() if is_sle_micro;
     assert_script_run($register, 300);
 
     zypper_call("lr -d");
@@ -66,7 +72,7 @@ sub collect_system_information {
 }
 
 sub test_flags {
-    return {fatal => 1, publiccloud_multi_module => 1};
+    return {fatal => 1};
 }
 
 1;

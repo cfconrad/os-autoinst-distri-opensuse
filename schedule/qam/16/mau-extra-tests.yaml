@@ -6,12 +6,15 @@ schedule:
   - boot/boot_to_desktop
   - console/prepare_test_data
   - console/consoletest_setup
+  - console/openssl_nodejs
   - console/chrony
   - console/dnsmasq
   - console/sshd
   - console/cron
   - console/mta
   - console/sudo
+  - console/synce4l_gpsd
   - x11/evolution/evolution_prepare_servers
   - console/mutt
   - network/samba/server
+  - console/networkmanager

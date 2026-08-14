@@ -7,7 +7,7 @@
 #          This is the part running on agent node.
 # Maintainer: Nan Zhang <nan.zhang@suse.com> qe-virt@suse.de
 
-use base multi_machine_job_base;
+use Mojo::Base 'multi_machine_job_base';
 use testapi;
 use lockapi;
 use transactional;
@@ -95,6 +95,7 @@ kubelet-arg:
   - cpu-manager-policy=static
   - kube-reserved=cpu=500m
   - system-reserved=cpu=500m
+nonroot-devices: true
 __END
 (exit \$?)");
 
@@ -117,11 +118,6 @@ __END
 
     # Wait for restarting rke2-server service complete
     barrier_wait('rke2_server_restart_complete');
-
-    # Workaround for bsc#1217658
-    my $config_toml_tmpl = 'config.toml.tmpl';
-    assert_script_run("curl " . data_url("virt_autotest/kubevirt_tests/$config_toml_tmpl") . " -o $config_toml_tmpl");
-    assert_script_run("cp $config_toml_tmpl /var/lib/rancher/rke2/agent/etc/containerd/$config_toml_tmpl");
 
     # Restart RKE2 service and check the service is active well after restart
     systemctl('restart rke2-agent.service', timeout => 180);

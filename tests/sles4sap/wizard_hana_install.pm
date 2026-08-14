@@ -7,7 +7,7 @@
 # Verify installation with sles4sap/hana_test
 # Maintainer: QE-SAP <qe-sap@suse.de>
 
-use base 'sles4sap';
+use Mojo::Base 'sles4sap';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(file_content_replace type_string_slow);
@@ -56,9 +56,6 @@ sub run {
     # in SLE15SP5 and above wizard is called "bone-installation-wizard"
     my $wiz_name = (is_sle('15-SP5+') and get_var('BONE')) ? "bone-installation-wizard" : "sap-installation-wizard";
     my $wizard_package_version = script_output("rpm -q --qf '%{VERSION}\n' $wiz_name");
-
-    # initial workaround for 15-SP7 and b1 installer 2505
-    $self->b1_workaround_os_version;
 
     # start wizard
     if (check_var('DESKTOP', 'textmode')) {

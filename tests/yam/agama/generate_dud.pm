@@ -3,9 +3,9 @@
 
 # Summary: Run interactive installation with Agama,
 # using a web automation tool to test directly from the Live ISO.
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base Yam::Agama::agama_base;
+use Mojo::Base 'Yam::Agama::agama_base';
 use testapi;
 use utils;
 use autoyast qw(expand_agama_profile generate_json_profile);
@@ -18,16 +18,16 @@ sub run {
     select_console 'install-shell';
 
     # https://progress.opensuse.org/issues/185122
-    zypper_call("ar -f -G https://download.suse.de/ibs/SUSE:/SLFO:/Products:/SLES:/" . get_var('VERSION') . ":/PUBLISH/product/repo/SLES-" . get_var('VERSION') . "-" . get_var('ARCH') . "/?ssl_verify=no install");
-    zypper_call("in -y mkdud");
+    zypper_call("ar -f -G https://download.suse.de/ibs/SUSE:/SLFO:/Products:/SLES:/" . get_var('VERSION') . ":/TEST/product/repo/SLES-" . get_var('VERSION') . "-" . get_var('ARCH') . "/?ssl_verify=no install");
+    zypper_call("in --no-recommends -y mkdud");
     assert_script_run("mkdir -p tmp/dud/root");
     assert_script_run("curl -o tmp/dud/root/autoinst.json $profile_url");
-    assert_script_run("mkdud --create $archived_dud_with_profile tmp/dud/root --dist tw");
+    assert_script_run("mkdud --create $archived_dud_with_profile tmp/dud/root --dist sles" . get_var('VERSION'));
     upload_asset($archived_dud_with_profile);
 
     my $arch = get_required_var('ARCH');
     my $archived_dud_with_kernel_module = "kernel-" . $arch . ".dud";
-    assert_script_run("mkdud --create $archived_dud_with_kernel_module --arch $arch --dist sle16 /lib/modules/`uname -r`/kernel/fs/nfs/nfs.ko");
+    assert_script_run("mkdud --create $archived_dud_with_kernel_module --arch $arch --dist sles" . get_var('VERSION') . " /lib/modules/`uname -r`/kernel/fs/nfs/nfs.ko");
     upload_asset($archived_dud_with_kernel_module);
 }
 

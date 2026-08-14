@@ -23,15 +23,17 @@ use strict;
 use warnings;
 use testapi;
 use utils;
-use version_utils qw(is_sle is_public_cloud get_version_id is_transactional is_openstack is_sle_micro check_version);
-use transactional qw(reboot_on_changes trup_call process_reboot);
+use version_utils qw(is_sle is_public_cloud get_version_id is_transactional is_sle_micro check_version);
+use transactional qw(process_reboot);
 use registration qw(get_addon_fullname add_suseconnect_product %ADDONS_REGCODE);
 use maintenance_smelt qw(is_embargo_update);
+use publiccloud::zypper ();
 
 # Indicating if the openQA port has been already allowed via SELinux policies
 my $openqa_port_allowed = 0;
 
 our @EXPORT = qw(
+  additional_repos
   deregister_addon
   define_secret_variable
   get_credentials
@@ -39,6 +41,8 @@ our @EXPORT = qw(
   is_byos
   is_ondemand
   is_ec2
+  is_ec2_xen
+  is_ecs
   is_azure
   is_gce
   is_container_host
@@ -46,30 +50,21 @@ our @EXPORT = qw(
   is_cloudinit_supported
   registercloudguest
   register_addon
-  register_openstack
   register_addons_in_pc
   gcloud_install
   get_ssh_private_key_path
   permit_root_login
   prepare_ssh_tunnel
-  kill_packagekit
+  add_additional_authorized_keys
   allow_openqa_port_selinux
   ssh_update_transactional_system
   create_script_file
   install_in_venv
   venv_activate
   get_python_exec
-  zypper_add_repo_remote
-  zypper_remove_repo_remote
-  get_installed_packages_remote
-  get_available_packages_remote
-  zypper_install_remote
-  zypper_install_available_remote
-  wait_quit_zypper_pc
   detect_worker_ip
-  upload_asset_on_remote
-  zypper_call_remote
   calculate_custodian_ttl
+  pc_data_url
 );
 
 # Check if we are a BYOS test run
@@ -87,6 +82,16 @@ sub is_ondemand() {
 # Check if we are on an AWS test run
 sub is_ec2() {
     return is_public_cloud && check_var('PUBLIC_CLOUD_PROVIDER', 'EC2');
+}
+
+# check is this is a EC2 ECS instance
+sub is_ecs() {
+    return is_public_cloud && get_var('FLAVOR') =~ /-ECS-/i;
+}
+
+sub is_ec2_xen {
+    # https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html -> Xen-based instances
+    return is_public_cloud && is_ec2 && get_var("PUBLIC_CLOUD_INSTANCE_TYPE") =~ /^(m1|m2|m3|m4|t1|t2|c1|c3|c4|r3|r4|x1|x1e|d2|h1|i2|i3|f1|g3|p2|p3)/;
 }
 
 # Check if we are on an Azure test run
@@ -222,8 +227,13 @@ sub registercloudguest {
         die 'cloud-regionsrv-client should be installed' if !is_container_host;
     }
 
+    my $custom_smt;
+    if ((my $smt_ip = get_var('PUBLIC_CLOUD_SMT_IP')) && (my $smt_fqdn = get_var('PUBLIC_CLOUD_SMT_FQDN')) && (my $smt_fp = get_var('PUBLIC_CLOUD_SMT_FP'))) {
+        $custom_smt = "--smt-ip $smt_ip --smt-fqdn $smt_fqdn --smt-fp $smt_fp";
+    }
+
     my $cmd_time = time();
-    $instance->ssh_script_retry(cmd => "sudo $suseconnect -r $regcode", timeout => 420, retry => 3, delay => 120);
+    $instance->ssh_script_retry(cmd => "sudo $suseconnect $custom_smt -r $regcode", timeout => 420, retry => 3, delay => 120);
     record_info('registration time', 'The registration took ' . (time() - $cmd_time) . ' seconds.');
 
     # If the SSH master socket is active, exit it, so the next SSH command will (re)login
@@ -233,36 +243,37 @@ sub registercloudguest {
 }
 
 sub register_addons_in_pc {
-    my ($instance) = @_;
+    my ($instance, %args) = @_;
+    my $timeout = $args{timeout} // 90;
     my @addons = split(/,/, get_var('SCC_ADDONS', ''));
     my $remote = $instance->username . '@' . $instance->public_ip;
-    my $zcmd = "--gpg-auto-import-keys ref";
-    my $ret = $instance->zypper_call_remote(cmd => $zcmd, exitcode => [0, 6], timeout => 300);
-    die 'No enabled repos defined: bsc#1245651' if $ret == 6;    # from zypper man page: ZYPPER_EXIT_NO_REPOS
-    $instance->zypper_call_remote(cmd => $zcmd, timeout => 300, retry => 6, delay => 200);
+    # Refresh repos. publiccloud::zypper::pc_refresh always uses plain zypper
+    # (never transactional-update, which does not support repo actions, see
+    # poo#195920). Accept all exit codes and inspect the result here so we
+    # can give the historical bsc references.
+    my $ret = publiccloud::zypper::pc_refresh(
+        $instance,
+        timeout => $timeout,
+        exitcode => [
+            publiccloud::zypper::EXIT_OK,
+            publiccloud::zypper::EXIT_NO_REPOS,
+            publiccloud::zypper::EXIT_LOCKED,
+        ],
+    );
+    die 'No enabled repos defined: bsc#1245651' if $ret == publiccloud::zypper::EXIT_NO_REPOS;
+    die 'System management is locked by the application with pid xxx (/usr/bin/zypper)' if $ret == publiccloud::zypper::EXIT_LOCKED;
     for my $addon (@addons) {
         next if ($addon =~ /^\s+$/);
         register_addon($remote, $addon);
     }
-    record_info('repos (lr)', $instance->run_ssh_command(cmd => "sudo zypper lr"));
-    record_info('repos (ls)', $instance->run_ssh_command(cmd => "sudo zypper ls"));
-}
-
-sub register_openstack {
-    my $instance = shift;
-
-    my $regcode = get_required_var 'SCC_REGCODE';
-    my $fake_scc = get_var 'SCC_URL', '';
-
-    my $cmd = "sudo SUSEConnect -r $regcode";
-    $cmd .= " --url $fake_scc" if $fake_scc;
-    $instance->ssh_assert_script_run(cmd => $cmd, timeout => 700, retry => 5);
+    record_info('repos (lr)', $instance->ssh_script_output(cmd => "sudo zypper lr"));
+    record_info('repos (ls)', $instance->ssh_script_output(cmd => "sudo zypper ls"));
 }
 
 # Validation for update repos
 sub validate_repo {
     my ($maintrepo) = @_;
-    if (is_sle_micro('>=6.0')) {
+    if (is_sle_micro('>=6.0') || is_sle('>=16') || get_var("PUBLIC_CLOUD_XFS")) {
         record_info("Product Increments", "Can't validate repository");
         return 1;
     }
@@ -311,7 +322,8 @@ sub get_credentials {
     my $url = $base_url . '/' . $args{namespace} . '/' . $args{url_suffix};
 
     my $url_auth = Mojo::URL->new($url)->userinfo("$user:$pwd");
-    my $ua = Mojo::UserAgent->new;
+    # Force the usage of IPv4 because we use IP address whitelisting. For unknown reasons both Domain and LocalAddr are required.
+    my $ua = Mojo::UserAgent->new(socket_options => {Domain => AF_INET, LocalAddr => '0.0.0.0'});
     $ua->insecure(1);
     my $tx = $ua->get($url_auth);
     my $res = $tx->result;
@@ -347,12 +359,12 @@ sub gcloud_install {
     # WARNING:  Python 3.6.x is no longer officially supported by the Google Cloud CLI
     # and may not function correctly. Please use Python version 3.8 and up.
     my @pkgs = qw(curl tar gzip);
-    my $py_version = get_var('PYTHON_VERSION', '3.11');
+    my $py_version = is_sle(">=16.0") ? "3" : get_var('PYTHON_VERSION', '3.11');
     my $py_pkg_version = $py_version =~ s/\.//gr;
     push @pkgs, 'python' . $py_pkg_version;
-    add_suseconnect_product(get_addon_fullname('python3')) if is_sle('15-SP6+');
+    add_suseconnect_product(get_addon_fullname('python3')) if (is_sle('15-SP6+') && is_sle("<16.0"));
 
-    zypper_call("in @pkgs", $timeout);
+    publiccloud::zypper::pc_install_packages_local(\@pkgs, timeout => $timeout);
 
     assert_script_run("export CLOUDSDK_PYTHON=/usr/bin/python$py_version");
     assert_script_run("export CLOUDSDK_CORE_DISABLE_PROMPTS=1");
@@ -366,7 +378,7 @@ sub gcloud_install {
 
 sub get_ssh_private_key_path {
     # Paramiko needs to be updated for ed25519 https://stackoverflow.com/a/60791079
-    return (is_azure() || is_openstack() || get_var('PUBLIC_CLOUD_LTP')) ? "~/.ssh/id_rsa" : '~/.ssh/id_ed25519';
+    return (is_azure() || get_var('PUBLIC_CLOUD_LTP')) ? "~/.ssh/id_rsa" : '~/.ssh/id_ed25519';
 }
 
 sub permit_root_login {
@@ -408,6 +420,7 @@ sub prepare_ssh_tunnel {
         $instance->ssh_assert_script_run('sudo sed -i "/^AllowTcpForwarding/c\AllowTcpForwarding yes" /etc/ssh/sshd_config') if (is_hardened());
     }
     $instance->ssh_assert_script_run('sudo systemctl reload sshd');
+    $instance->wait_for_ssh();
     record_info('sshd -G', $instance->ssh_script_output('sudo sshd -G', proceed_on_failure => 1));
 
     permit_root_login($instance);
@@ -417,14 +430,18 @@ sub prepare_ssh_tunnel {
     assert_script_run "touch $ssh_sut; chmod 777 $ssh_sut";
 }
 
-sub kill_packagekit {
+
+sub add_additional_authorized_keys {
     my ($instance) = @_;
-    my $ret = $instance->ssh_script_run(cmd => "sudo pkcon quit", timeout => 120);
-    if ($ret) {
-        # Older versions of systemd don't support "disable --now"
-        $instance->ssh_script_run(cmd => "sudo systemctl stop packagekitd");
-        $instance->ssh_script_run(cmd => "sudo systemctl disable packagekitd");
-        $instance->ssh_script_run(cmd => "sudo systemctl mask packagekitd");
+    my $keys_source = get_var('PUBLIC_CLOUD_AUTHORIZED_KEYS');
+    return unless $keys_source;
+
+    # Accept either a URL (fetched with curl on the remote) or a base64-encoded string.
+    # Encode a key with: PUBLIC_CLOUD_AUTHORIZED_KEYS=$(base64 -w0 ~/.ssh/id_ed25519.pub)
+    if ($keys_source =~ m{^https?://}) {
+        $instance->ssh_script_run(cmd => qq(curl -sLSf '$keys_source' | tee -a ~/.ssh/authorized_keys));
+    } else {
+        $instance->ssh_script_run(cmd => qq(echo "$keys_source" | base64 -d | tee -a ~/.ssh/authorized_keys));
     }
 }
 
@@ -434,13 +451,7 @@ sub allow_openqa_port_selinux {
     return if ($openqa_port_allowed);
 
     # Additional packages required for semanage
-    my $pkgs = 'policycoreutils-python-utils';
-    if (is_transactional) {
-        trup_call("pkg install $pkgs");
-        reboot_on_changes;
-    } else {
-        zypper_call("in $pkgs");
-    }
+    publiccloud::zypper::pc_install_packages_local(['policycoreutils-python-utils']);
     # allow ssh tunnel port (to openQA)
     my $upload_port = get_required_var('QEMUPORT') + 1;
     assert_script_run("semanage port -a -t ssh_port_t -p tcp $upload_port");
@@ -462,20 +473,19 @@ Transactional systems like SLE micro used C<transactional_update up> and reboot.
 
 sub ssh_update_transactional_system {
     my ($instance) = @_;
-    my $cmd_time = time();
-    my $cmd = "sudo transactional-update -n up";
-    my $cmd_name = "transactional update";
-    # first run, possible update of packager
-    my $ret = $instance->ssh_script_run(cmd => $cmd, timeout => 1500);
-    $instance->softreboot(timeout => get_var('PUBLIC_CLOUD_REBOOT_TIMEOUT', 600));
-    record_info($cmd_name, 'The command ' . $cmd_name . ' took ' . (time() - $cmd_time) . ' seconds.');
-    die "$cmd_name failed with $ret" if ($ret != 0 && $ret != 102 && $ret != 103);
-    # second run, full system update
-    $cmd_time = time();
-    $ret = $instance->ssh_script_run(cmd => $cmd, timeout => 6000);
-    $instance->softreboot(timeout => get_var('PUBLIC_CLOUD_REBOOT_TIMEOUT', 600));
-    record_info($cmd_name, 'The second command ' . $cmd_name . ' took ' . (time() - $cmd_time) . ' seconds.');
-    die "$cmd_name failed with $ret" if ($ret != 0 && $ret != 102);
+    my $cmd_name = 'transactional update';
+
+    # First run: may update the packager itself.
+    my $t0 = time();
+    publiccloud::zypper::pc_transactional_call($instance, 'up', timeout => 1500);
+    record_info($cmd_name, "The command $cmd_name took " . (time() - $t0) . ' seconds.');
+
+    # Second run: full system update. Treat reboot-needed (102) and the
+    # extra "reboot scheduled" (103) as success; transactional_call already
+    # accepts these by default.
+    $t0 = time();
+    publiccloud::zypper::pc_transactional_call($instance, 'up', timeout => 6000);
+    record_info($cmd_name, "The second command $cmd_name took " . (time() - $t0) . ' seconds.');
 }
 
 
@@ -660,180 +670,6 @@ exit \$exit_code
 EOT
 }
 
-=head2 get_installed_packages_remote
-
-get_installed_packages_remote($instance, $packages_ref)
-
-This function checks which packages from the provided list are installed on the remote instance.
-It returns an array reference containing the names of the installed packages.
-
-=cut
-
-sub get_installed_packages_remote {
-    my ($instance, $packages_ref) = @_;
-
-    my $pkg_list = join(' ', @$packages_ref);
-    my $cmd = "rpm -q --qf '%{NAME}|' $pkg_list 2>/dev/null";
-
-    my $output = $instance->run_ssh_command(
-        cmd => $cmd,
-        proceed_on_failure => 1
-    );
-
-    my %installed;
-    for my $entry (split /\|/, $output) {
-        next if $entry =~ /is not installed/i;
-        $installed{$entry} = 1;
-    }
-
-    my @found = grep { $installed{$_} } @$packages_ref;
-    return \@found;
-}
-
-=head2 get_available_packages_remote
-
-get_available_packages_remote($instance, $packages_ref)
-
-This function checks which packages from the provided list are available for installation on the remote instance.
-It returns an array reference containing the names of the available packages.
-It uses `zypper -x info` to query the availability of packages.
-
-=cut
-
-sub get_available_packages_remote {
-    my ($instance, $packages_ref) = @_;
-    die "Expected arrayref" unless ref($packages_ref) eq 'ARRAY';
-
-    my %installed = map { $_ => 1 } @{get_installed_packages_remote($instance, $packages_ref)};
-    my @not_installed = grep { !$installed{$_} } @$packages_ref;
-    return [] unless @not_installed;
-
-    my $pkg_list = join(' ', @not_installed);
-    my $output = $instance->run_ssh_command(
-        cmd => "zypper -x info $pkg_list 2>/dev/null",
-        proceed_on_failure => 1
-    );
-
-    # Grep all "Name           : <pkg>" lines
-    my %available = map { $_ => 1 } ($output =~ /^Name\s*:\s*(\S+)/mg);
-
-    # Return only those that are in the original not-installed list
-    my @result = grep { $available{$_} } @not_installed;
-    return \@result;
-}
-
-=head2 zypper_add_repo_remote
-
-zypper_add_repo_remote($instance, $repo_name, $repo_url)
-
-This function adds a repository to the remote instance using zypper.
-It uses the `-fG` options to add the repository as a GPG-verified repository.
-
-=cut
-
-sub zypper_add_repo_remote {
-    my ($instance, $repo_name, $repo_url) = @_;
-    $instance->run_ssh_command(
-        cmd => "sudo zypper -n addrepo -fG $repo_url $repo_name",
-        timeout => 600
-    );
-}
-
-=head2 zypper_remove_repo_remote
-
-zypper_remove_repo_remote($instance, $repo_name)
-
-This function removes a repository from the remote instance using zypper.
-It uses the `-n` option to run the command non-interactively.
-
-=cut
-
-sub zypper_remove_repo_remote {
-    my ($instance, $repo_name) = @_;
-    $instance->run_ssh_command(
-        cmd => "sudo zypper -n removerepo $repo_name",
-        timeout => 600
-    );
-}
-
-=head2 zypper_install_remote
-
-zypper_install_remote($instance, $packages)
-
-This function installs the specified packages on the remote instance using zypper.
-It handles both transactional updates and regular zypper installations based on the system type.
-
-=cut
-
-sub zypper_install_remote {
-    my ($instance, $packages) = @_;
-
-    my @pkg_list = ref($packages) eq 'ARRAY' ? @$packages : ($packages);
-    my $pkg_str = join(' ', @pkg_list);
-
-    if (is_transactional) {
-        $instance->run_ssh_command(
-            cmd => "sudo transactional-update -n pkg install --no-recommends $pkg_str",
-            timeout => 900
-        );
-        $instance->softreboot();
-    } else {
-        $instance->run_ssh_command(
-            cmd => "sudo zypper -n in --no-recommends $pkg_str",
-            timeout => 600
-        );
-    }
-}
-
-=head2 zypper_install_available_remote
-
-zypper_install_available_remote($instance, $packages_ref)
-
-This function checks which packages from the provided list are available for installation on the remote instance.
-If any packages are available, it installs them using zypper_install_remote.
-
-=cut
-
-sub zypper_install_available_remote {
-    my ($instance, $packages_ref) = @_;
-    my $available_ref = get_available_packages_remote($instance, $packages_ref);
-    return unless @$available_ref;
-    zypper_install_remote($instance, $available_ref);
-}
-
-=head2 wait_quit_zypper_pc
-
-    wait_quit_zypper_pc($instance
-        [, timeout => 20 ]   # per-attempt SSH timeout (s)
-        [, delay   => 10 ]   # delay between attempts (s)
-        [, retry   => 60 ]   # number of attempts
-    );
-
-Wait until no background zypper-related processes are running on the remote
-instance. Uses C<retry_ssh_command> for polling. Returns on success; dies
-after retries are exhausted.
-
-=cut
-
-sub wait_quit_zypper_pc {
-    my ($instance, %args) = @_;
-
-    my $timeout = $args{timeout} // 20;    # per-attempt SSH timeout
-    my $delay = $args{delay} // 10;    # seconds between polls
-    my $retry = $args{retry} // 120;    # total attempts (~10 min ceiling)
-
-    # Succeeds (RC 0) only when NO matching processes exist.
-    # Using '!' avoids explicit 'exit' and works cleanly with retry_ssh_command.
-    my $cmd = q{pgrep -f "zypper|purge-kernels|rpm" && false || true};
-
-    $instance->retry_ssh_command(
-        cmd => $cmd,
-        timeout => $timeout,
-        delay => $delay,
-        retry => $retry,
-    );
-}
-
 =head2 detect_worker_ip
 
     detect_worker_ip($proceed_on_failure)
@@ -864,118 +700,7 @@ sub detect_worker_ip {
     die "Worker IP could not be determined - return was $ip";
 }
 
-sub upload_asset_on_remote {
-    my (%args) = @_;
-
-    my $instance = $args{instance};
-    my $source_data_url_path = $args{source_data_url_path};
-    my $destination_path = $args{destination_path};
-    my $elevated = $args{elevated} // 0;
-
-    die 'Missing instance' unless $instance;
-    die 'Missing source_data_url_path' unless $source_data_url_path;
-    die 'Missing destination_path' unless $destination_path;
-
-    my $filename = basename($source_data_url_path);
-
-    my $curl_cmd = "curl " . data_url($source_data_url_path) . " -o ./$filename";
-    assert_script_run($curl_cmd);
-
-    $instance->scp("./$filename", "remote:/tmp/$filename");
-
-    my $prefix = $elevated ? 'sudo ' : '';
-    my $mv_cmd = $prefix . "mv /tmp/$filename $destination_path";
-    $instance->ssh_assert_script_run($mv_cmd);
-}
-
-=head2 $instance->zypper_call_remote
-
-    $instance->zypper_call_remote($command [, exitcode => $exitcode] [, timeout => $timeout];
-
-Function wrapping zypper command for remote execution via ssh; not for tunnelling.
-Implements similar routine as lib/utils::zypper_call_remote, but for remote execution on publiccloud instances.
-
-Usage example:
-    $instance->zypper_call_remote("up", exitcode => [0,102,103], timeout => 300);
-
-=cut
-
-sub zypper_call_remote {
-    my $instance = shift;
-    my %args = testapi::compat_args({cmd => undef}, ['cmd'], @_);
-    $args{rc_only} = 1;
-    $args{timeout} //= 700;
-    die "Invalid value 'timeout' = 0" unless ($args{timeout});
-    die "Empty 'cmd' argument in zypper call" unless ($args{cmd});
-    die "Exit code is from PIPESTATUS[0], not grep" if $args{cmd} =~ /^((?!`).)*\| ?grep/;
-    my $log = "/var/log/zypper.log";
-    my $exit_codes = $args{exitcode} || [0];
-    my $retry = $args{retry} // 1;
-    my $delay = $args{delay} // 5;
-    my $proceed = $args{proceed_on_failure} // 0;
-    my $zcmd = $args{cmd};
-    # full command to run in ssh
-    $args{cmd} = "sudo zypper -n $zcmd";
-    #
-    delete $args{exitcode};
-    delete $args{retry};
-    delete $args{delay};
-    # retry loop
-    my $ret;
-    for (1 .. $retry) {
-        # pause on next
-        sleep($delay) if (defined($ret));
-        # remote execution
-        $ret = $instance->run_ssh_command(%args);
-        last if ($ret == 0);
-        # check exit codes
-        if ($ret == 4) {
-            if ($instance->ssh_script_run(qq[sudo grep "Error code.*502" $log]) == 0) {
-                die 'According to bsc#1070851 zypper should automatically retry internally. Bugfix missing for current product?';
-            }
-            elsif ($instance->ssh_script_run(qq[sudo grep "Solverrun finished with an ERROR" $log]) == 0) {
-                my $search_conflicts = q[sudo awk '
-                    /Solverrun finished with an ERROR/,/statistics/{ 
-                    print group"|", $0; if ($0 ~ /statistics/ ){ print "EOL"; group++ } }' ] . $log;
-                my $conflicts = $instance->ssh_script_output($search_conflicts);
-                record_info("Conflicts", $conflicts, result => 'fail');
-                diag "Package conflicts found, not retrying anymore" if $conflicts;
-                last;
-            }
-            next;
-        }
-        last;
-    }
-    # Result management
-    my $command = $args{cmd};
-    unless (grep { $_ == $ret } @$exit_codes) {
-        $instance->ssh_script_run(qq[sudo chmod o+r $log]);
-        $instance->upload_log($log);
-        my $msg = qq[$command failed with code: $ret];
-        if ($ret == 104) {
-            $msg .= " (ZYPPER_EXIT_INF_CAP_NOT_FOUND)\n\nRelated zypper logs:\n";
-            $instance->ssh_script_run(qq[sudo tac $log | grep -F -m1 -B100000 "Hi, me zypper" | tac | grep -E '(SolverRequester.cc|THROW|CAUGHT)' > /tmp/z104.txt]);
-            $msg .= $instance->ssh_script_output('cat /tmp/z104.txt');
-        }
-        elsif ($ret == 107) {
-            $msg .= " (ZYPPER_EXIT_INF_RPM_SCRIPT_FAILED)\n\nRelated zypper logs:\n";
-            $instance->ssh_script_run(qq[sudo tac $log | grep -F -m1 -B100000 "Hi, me zypper" | tac | grep -E 'RpmPostTransCollector.cc(executeScripts):.* scriptlet failed, exit status' > /tmp/z107.txt]);
-            $msg .= $instance->ssh_script_output('cat /tmp/z107.txt') . "\n\n";
-        }
-        else {
-            $instance->ssh_script_run(qq[sudo tac $log | grep -F -m1 -B100000 "Hi, me zypper" | tac | grep 'Exception.cc' > /tmp/zlog.txt]);
-            $msg .= "\n\nRelated zypper logs:\n";
-            $msg .= $instance->ssh_script_output('cat /tmp/zlog.txt');
-        }
-        die $msg unless ($proceed);
-        record_info("zypper error", $msg, result => 'fail');
-    }
-    record_info("zypper remote call", "Command: $command \nResult: $ret");
-    return $ret;
-}
-
-
-=head2 calculate_custodian_ttl {
+=head2 calculate_custodian_ttl
 
 
 calculate_custodian_ttl($ttl_in_seconds)
@@ -987,11 +712,14 @@ This tag is needed to compare TTL vs Creation time in Cloud Custodian.
 =cut
 
 sub calculate_custodian_ttl {
-    my $ttl_in_seconds = @_;
+    my ($ttl_in_seconds) = @_;
 
-    # UTC time
-    my $now = gmtime;
-    my $expiration_time = $now + $ttl_in_seconds;
+    # Unix time in seconds
+    my $now_timestamp = time();
+    my $expiration_timestamp = $now_timestamp + $ttl_in_seconds;
+
+    # Convert to UTC
+    my $expiration_time = gmtime($expiration_timestamp);
 
     # convert to proper format
     my $custodian_expiration_date = $expiration_time->strftime("%Y-%m-%dT%H:%M:%SZ");
@@ -999,5 +727,57 @@ sub calculate_custodian_ttl {
     return $custodian_expiration_date;
 }
 
-1;
+=head2 pc_data_url
 
+  pc_data_url($path);
+
+returns the URL to download osado artifact much like testapi::data_url
+
+Note: Use with curl -L to follow redirects.
+
+=cut
+
+sub pc_data_url {
+    my $path = shift;
+    # Note: We can't use CASEDIR because internally is a local path in vars.json
+    my $git_url = get_required_var("TEST_GIT_URL");
+    my $commit = get_required_var("TEST_GIT_HASH");
+
+    # Convert the ssh URL "git@github.com:foobar" into "https://github.com/foobar" for curl/wget consumption
+    $git_url =~ s{^.*@([^:]+):}{https://$1/};
+
+    # Strip .git suffix
+    $git_url =~ s{\.git$}{};
+
+    return "$git_url/raw/$commit/data/$path" if ($git_url =~ m{^https?://(?:www\.)?github\.com});
+    return "$git_url/-/raw/$commit/$path" if ($git_url =~ m{^https?://(?:www\.)?gitlab\.});
+    # Assume Gitea (used by src.suse.de & src.opensuse.org)
+    return "$git_url/src/commit/$commit/$path";
+}
+
+=head2 additional_repos
+
+additional_repos();
+
+This function returns a list of additional repos
+relevant to the Public Cloud job
+
+=cut
+
+sub additional_repos {
+    my @repos = ();
+
+    # Add repo for xfstests
+    if (get_var("PUBLIC_CLOUD_XFS")) {
+        my $version = get_required_var("VERSION");
+        my $prefix = "";
+        $prefix = "SLE" if is_sle;
+        $prefix = "SLES" if is_sle(">=16.0");
+        $prefix = "SL-Micro" if is_sle_micro(">=6.0");
+        die "Unsupported product for QA:Head" unless $prefix;
+        push @repos, "https://dist.suse.de/ibs/QA:/Head/$prefix-$version/";
+    }
+    return @repos;
+}
+
+1;

@@ -11,6 +11,7 @@ use Mojo::Base 'containers::basetest', -signatures;
 use testapi;
 use serial_terminal qw(select_serial_terminal);
 use version_utils;
+use version;
 use utils;
 use Utils::Architectures qw(is_x86_64);
 use containers::bats;
@@ -42,26 +43,19 @@ sub test ($target) {
 
     # Used by pytest to ignore individual tests
     my @deselect = ();
-    push @deselect, (
-        # This test depends on an image available only for x86_64
-        "podman/tests/integration/test_manifests.py::ManifestsIntegrationTest::test_manifest_crud",
-    ) unless is_x86_64;
     my $deselect = join " ", map { "--deselect=$_" } @deselect;
 
     my @xfails = ();
-    push @xfails, (
-        "podman.tests.integration.test_container_create.ContainersIntegrationTest::test_container_devices",
-    ) if (get_var("ROOTLESS"));
 
     my %env = ();
     my $env = join " ", map { "$_=$env{$_}" } sort keys %env;
     my $pytest_args = "-vv --capture=tee-sys -o junit_logging=all --junit-xml $target.xml $ignore $deselect";
 
-    run_command "$env pytest $pytest_args podman/tests/$target &> $target.txt || true", timeout => 3600;
-
+    run_timeout_command "$env pytest $pytest_args podman/tests/$target &> $target.txt", no_assert => 1, timeout => 3600;
+    upload_logs "$target.txt", failok => 1;
+    die "Testsuite failed" if script_run("test -s $target.xml");
     patch_junit "podman-py", $version, "$target.xml", @xfails;
-    parse_extra_log(XUnit => "$target.xml");
-    upload_logs("$target.txt");
+    parse_extra_log(XUnit => "$target.xml", timeout => 180);
 }
 
 sub run {
@@ -83,13 +77,13 @@ sub cleanup {
 }
 
 sub post_fail_hook {
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 sub post_run_hook {
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 1;

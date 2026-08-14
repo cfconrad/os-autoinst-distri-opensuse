@@ -6,7 +6,7 @@
 # Summary: Enable and test that systemd is running in WSL
 # Maintainer: qa-c  <qa-c@suse.de>
 
-use Mojo::Base qw(windowsbasetest);
+use Mojo::Base 'windowsbasetest';
 use testapi;
 use utils qw(zypper_call enter_cmd_slow);
 use version_utils qw(is_opensuse is_tumbleweed);
@@ -42,8 +42,6 @@ sub run {
             wait_still_screen stilltime => 3, timeout => 10, similarity_level => 43;
         }
     );
-    # Hopefully temporary workaround for https://github.com/microsoft/WSL/issues/11857
-    $self->run_in_powershell(cmd => q(echo "[wsl2]`nkernelCommandLine = cgroup_no_v1=all" >> ~/.wslconfig)) if is_tumbleweed;
     $self->run_in_powershell(cmd => q(wsl --shutdown));
     $self->run_in_powershell(
         cmd => '$port.WriteLine($(wsl /bin/bash -c "systemctl is-system-running"))',

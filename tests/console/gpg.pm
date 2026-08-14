@@ -19,7 +19,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#65375, poo#97685, poo#104556
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use Utils::Backends;
 use Utils::Architectures;
@@ -188,7 +188,9 @@ sub run {
     validate_script_output("gpgconf --show-versions", sub { m/.*$gpg_fips_string.*/ }) if (is_sle('15+') && !is_jeos && !is_public_cloud);
 
     # increase entropy for key generation for s390x on svirt backend
-    if (is_s390x && ((is_sle('15+') && is_sle('<16')) || is_transactional) && (is_svirt)) {
+    my $is_sle15 = is_sle('15+') && is_sle('<16');
+    my $is_transactional_and_slmicro_lt62 = is_transactional && is_sle_micro('<6.2');
+    if (is_s390x && is_svirt && ($is_sle15 || $is_transactional_and_slmicro_lt62)) {
         if (is_transactional) {
             trup_call('pkg install haveged');
             process_reboot(trigger => 1);
@@ -209,7 +211,7 @@ sub run {
         libgcrypt20 => '1.9.0',
         'libgcrypt20-hmac' => '1.9.0'
     };
-    delete $pkg_list->{'libgcrypt20-hmac'} if is_sle('15-SP6+');
+    delete $pkg_list->{'libgcrypt20-hmac'} if is_sle('15-SP6+') || is_sle_micro('6.2+');
 
     if (is_public_cloud() && check_var('BETA', '1')) {
         if (zypper_call("in " . join(' ', keys %$pkg_list), exitcode => [0, 4]) == '4') {

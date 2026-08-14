@@ -11,6 +11,7 @@ use Mojo::Base 'containers::basetest', -signatures;
 use testapi;
 use serial_terminal;
 use version_utils;
+use version;
 use utils;
 use Utils::Architectures;
 use containers::bats;
@@ -20,19 +21,26 @@ my @test_dirs;
 
 sub setup {
     my $self = shift;
-    my @pkgs = qw(containerd-ctr distribution-registry docker docker-buildx docker-rootless-extras glibc-devel go1.24 rootlesskit selinux-tools);
+    my @pkgs = qw(containerd-ctr distribution-registry docker docker-buildx docker-rootless-extras glibc-devel go1.26 nftables-devel openssl rootlesskit selinux-tools skopeo);
+    # To test cross-platform builds
+    push @pkgs, "qemu-linux-user" unless is_sle("<16");
     $self->setup_pkgs(@pkgs);
 
     configure_docker(selinux => 1, tls => 0);
 
+    # https://docs.docker.com/build/building/multi-platform/
+    run_command "docker run --privileged --rm tonistiigi/binfmt --install all" unless is_sle("<16");
+
     # Tests use "ctr"
     run_command "cp /usr/sbin/containerd-ctr /usr/local/bin/ctr";
 
-    $version = script_output "docker version --format '{{.Client.Version}}'";
+    $version = script_output "docker version --format '{{.Client.Version}}' 2>/dev/null", proceed_on_failure => 1;
     $version =~ s/-ce$//;
-    $version = "v$version";
+    $version = "docker-v$version";
     record_info "docker version", $version;
 
+    # Used by skopeo in containers/download-frozen-image.sh
+    configure_podman_mirror;
     run_command "ln -s /var/tmp/docker-frozen-images /";
 
     configure_rootless_docker if get_var("ROOTLESS");
@@ -47,32 +55,30 @@ sub setup {
     # Build test helpers
     run_command "cp -f vendor.mod go.mod || true";
     run_command "cp -f vendor.sum go.sum || true";
-    run_command '(cd testutil/fixtures/plugin/basic; go mod init docker-basic-plugin; go build -o $GOPATH/bin/docker-basic-plugin)';
+    run_command '(cd testutil/fixtures/plugin/basic && go mod init docker-basic-plugin && go build -o $GOPATH/bin/docker-basic-plugin) || true';
 
     if (my $test_dirs = get_var("RUN_TESTS", "")) {
         @test_dirs = split(/,/, $test_dirs);
     } else {
         # Ignore the tests in these directories in integration/
+        # as they fail in the current openQA setup
         my @ignore_dirs = (
-            "network",
-            "networking",
+            "network.*",
             "plugin.*",
         );
         my $ignore_dirs = join "|", map { "integration/$_" } @ignore_dirs;
         # Adapted from https://build.opensuse.org/projects/openSUSE:Factory/packages/docker/files/docker-integration.sh
         @test_dirs = split(/\n/, script_output(qq(go list -test -f '{{- if ne .ForTest "" -}}{{- .Dir -}}{{- end -}}' ./integration/... | sed "s,^\$(pwd)/,," | grep -vxE '($ignore_dirs)')));
     }
+    record_info("test_dirs", join(" ", @test_dirs));
+
+    run_command "mkdir ~/.docker || true";
+    run_command "echo {} > ~/.docker/config.json";
 
     # Preload Docker images used for testing
     my $frozen_images = script_output q(grep -oE '[[:alnum:]./_-]+:[[:alnum:]._-]+@sha256:[0-9a-f]{64}' Dockerfile | xargs echo);
-    run_command "contrib/download-frozen-image-v2.sh /var/tmp/docker-frozen-images $frozen_images", timeout => 180;
-
-    if (grep { $_ eq "integration-cli" } @test_dirs) {
-        # integration-cli tests need an older cli version
-        my $arch = get_var("ARCH");
-        my $cliversion = get_var("DOCKER_CLIVERSION", script_output q(sed -n '/DOCKERCLI_INTEGRATION_VERSION=/s/.*=v//p' Dockerfile));
-        run_command "curl -sSL https://download.docker.com/linux/static/stable/$arch/docker-$cliversion.tgz | tar zxvf - -C /var/tmp --strip-components 1 docker/docker";
-    }
+    assert_script_run "curl -o contrib/download-frozen-image-v2.sh " . data_url("containers/download-frozen-image.sh");
+    run_command "contrib/download-frozen-image-v2.sh /var/tmp/docker-frozen-images $frozen_images", timeout => 300;
 }
 
 sub run {
@@ -80,61 +86,68 @@ sub run {
     select_serial_terminal;
     $self->setup;
 
-    my $firewall_backend = script_output "docker info -f '{{ .FirewallBackend.Driver }}' | awk -F+ '{ print \$1 }'";
+    my $firewall_backend = get_var("FIREWALL_BACKEND", script_output "docker info -f '{{ .FirewallBackend.Driver }}' | awk -F+ '{ print \$1 }'");
     record_info "firewall backend", $firewall_backend;
     my $test_no_firewalld = ($firewall_backend eq "iptables") ? "true" : "";
 
+    my $docker_dest = "/var/tmp/moby/bundles/tmp";
+    run_command "mkdir -p $docker_dest";
+
     my %env = (
+        DOCKER_INTEGRATION_DAEMON_DEST => $docker_dest,
         DOCKER_FIREWALL_BACKEND => $firewall_backend,
-        DOCKER_ROOTLESS => get_var("ROOTLESS", ""),
         DOCKER_TEST_NO_FIREWALLD => $test_no_firewalld,
+        DOCKER_ROOTLESS => get_var("ROOTLESS", ""),
         TZ => "UTC",
     );
 
     my @xfails = (
-        # Flaky tests
-        "github.com/docker/docker/integration/service::TestServicePlugin",
+        # We don't yet support CDI
+        "github.com/moby/moby/v2/integration/container::TestEtcCDI",
+        # Flaky tests:
+        "github.com/moby/moby/v2/integration/container::TestContainerRestartWithCancelledRequest",
+        "github.com/moby/moby/v2/integration/container::TestHealthKillContainer",
+        "github.com/moby/moby/v2/integration/container::TestStopContainerWithTimeoutCancel",
+        "github.com/moby/moby/v2/integration/service::TestRestoreIngressRulesOnFirewalldReload",
     );
+    # Cross-platform builds only work on 15-SP6+
     push @xfails, (
-        # These tests use amd64 images:
-        "github.com/docker/docker/integration/image::TestAPIImageHistoryCrossPlatform",
-    ) unless (is_x86_64);
-    push @xfails, (
-        # These tests fail as rootless on SLES 15
-        "github.com/docker/docker/integration/container::TestNetworkLoopbackNat",
+        "github.com/moby/moby/v2/integration/image::TestAPIImageHistoryCrossPlatform",
     ) if (is_sle("<16"));
+    # This may fail on SLES 15 due to older version of rootlesskit (1.1.1)
+    push @xfails, (
+        "github.com/moby/moby/v2/integration/container::TestNetworkLoopbackNat",
+    ) if (is_sle("<16") && get_var("ROOTLESS"));
 
     my $tags = "apparmor selinux seccomp pkcs11";
+
     foreach my $dir (@test_dirs) {
         my $report = $dir =~ s|/|-|gr;
-        $env{TEST_CLIENT_BINARY} = "/var/tmp/docker" if ($dir eq "integration-cli");
         my $env = join " ", map { "$_=\"$env{$_}\"" } sort keys %env;
         run_command "pushd $dir";
-        run_command "$env gotestsum --junitfile $report.xml --format standard-verbose ./... -- -tags '$tags' |& tee -a /var/tmp/report.txt", timeout => 900;
+        run_timeout_command "$env gotestsum --junitfile $report.xml --format standard-verbose ./... -- -tags '$tags' |& tee -a /var/tmp/report.txt", no_assert => 1, timeout => 900;
         patch_junit "docker", $version, "$report.xml", @xfails;
-        parse_extra_log(XUnit => "$report.xml");
+        parse_extra_log(XUnit => "$report.xml", timeout => 180);
         run_command "popd";
     }
-    upload_logs("/var/tmp/report.txt");
+    upload_logs "/var/tmp/report.txt", failok => 1;
 }
 
 sub cleanup {
     cleanup_rootless_docker if get_var("ROOTLESS");
     select_serial_terminal;
-    script_run "rm -f /usr/local/bin/{ctr,docker,ping} /var/tmp/docker";
+    script_run "rm -f /usr/local/bin/{ctr,docker,ping}";
     cleanup_docker;
 }
 
 sub post_fail_hook {
-    my ($self) = @_;
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 sub post_run_hook {
-    my ($self) = @_;
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 1;

@@ -25,7 +25,8 @@ use Carp qw(croak);
 use Data::Dumper;
 use XML::Simple;
 use serial_terminal qw(select_serial_terminal set_serial_prompt serial_term_prompt);
-use Utils::Backends 'is_pvm';
+use Utils::Backends qw(is_pvm);
+use iscsi qw(lio_show_iqn);
 
 our @EXPORT = qw(
   $crm_mon_cmd
@@ -36,7 +37,9 @@ our @EXPORT = qw(
   $corosync_consensus
   $sbd_watchdog_timeout
   $sbd_delay_start
-  $pcmk_delay_max
+  $crm_config_show_fence_sbd
+  sync_file
+  sync_path
   exec_csync
   add_file_in_csync
   get_cluster_info
@@ -100,6 +103,10 @@ our @EXPORT = qw(
   sbd_device_report
   get_fencing_type
   check_crm_nonroot
+  get_crmsh_version
+  get_fencing_ra_name
+  pcmk_delay_max_cmd
+  get_bootstrap_properties
 );
 
 =head1 SYNOPSIS
@@ -129,7 +136,7 @@ Extension (HA or HAE) tests.
 
 =item * B<$sbd_delay_start>: command to extract the value of C<SBD_DELAY_START> from C</etc/sysconfig/sbd>
 
-=item * B<$pcmk_delay_max>: command to get the value of the C<pcmd_delay_max> parameter from the STONITH resource in the cluster configuration.
+=item * B<$crm_config_show_fence_sbd>: command to extract the part of the cluster configuration relating to B<fence_sbd>
 
 =back
 
@@ -143,7 +150,7 @@ our $corosync_token = q@corosync-cmapctl | awk -F " = " '/runtime.config.totem.t
 our $corosync_consensus = q@corosync-cmapctl | awk -F " = " '/runtime.config.totem.consensus\s/ {print int($2/1000)}'@;
 our $sbd_watchdog_timeout = q@grep -oP '(?<=^SBD_WATCHDOG_TIMEOUT=)[[:digit:]]+' /etc/sysconfig/sbd@;
 our $sbd_delay_start = q@grep -oP '(?<=^SBD_DELAY_START=)([[:digit:]]+|yes|no)+' /etc/sysconfig/sbd@;
-our $pcmk_delay_max = q@crm resource param stonith-sbd show pcmk_delay_max| sed 's/[^0-9]*//g'@;
+our $crm_config_show_fence_sbd = 'crm -D plain configure show 2>&1 | grep sbd';
 
 # Private functions
 sub _just_the_ip {
@@ -161,6 +168,42 @@ sub _test_var_defined {
 }
 
 # Public functions
+
+=head2 sync_file
+
+ sync_file('/path/to/file');
+
+Wrapper function to synchronize a specific file to all nodes in the cluster based
+on the OS version. It will call C<crm cluster copy> in SLES 16 or newer, and
+C<add_file_in_csync> which internally calls C<exec_csync> in versions older than 16.
+
+=cut
+
+sub sync_file {
+    my $file = shift;
+    is_sle('>=16') ? assert_script_run("crm cluster copy $file") : add_file_in_csync(value => $file);
+}
+
+=head2 sync_path
+
+ sync_path('/path/to/dir');
+ sync_path('/path/to/files*');
+
+Function to syncronize a list of files or a directory to all nodes in the cluster based
+on the OS version. It will use C<add_file_in_csync> which internally calls C<exec_csync> when
+the OS is older than 16.0; on newer, it will call C<crm cluster copy> for all files matching the
+given path after expanding any shell wildcards and recursing into any directories.
+
+=cut
+
+sub sync_path {
+    my $path = shift;
+    # In OS older than 16, use add_file_in_csync and let csync2 handle it
+    return (add_file_in_csync(value => $path)) if is_sle('<16');
+    # On 16 or newer, expand any wildcard and pass the path to find to get all files
+    # Loop will abort with retval 1 in case any of the crm cluster copy commands fail
+    assert_script_run qq@for p in $path; do find "\$p" -type f -print; done | while read f; do crm cluster copy "\$f" || exit 1; done@;
+}
 
 =head2 exec_csync
 
@@ -766,22 +809,27 @@ Without it, the method uses B<assert_script_run()> and will croak on failure.
 
 sub check_cluster_state {
     my %args = @_;
+    my $verify_cmd = 'crm_verify -LV';
 
     # We may want to check cluster state without stopping the test
     my $cmd_sub = (defined $args{proceed_on_failure} && $args{proceed_on_failure} == 1) ? \&script_run : \&assert_script_run;
 
     $cmd_sub->("$crm_mon_cmd", 180);
-    if (is_sle '12-sp3+') {
-        # Add sleep as command 'crm_mon' outputs 'Inactive resources:' instead of 'no inactive resources' on 12-sp5
+    # Add retry mechanism as command 'crm_mon' outputs 'Inactive resources:' instead of 'no inactive resources' sometime
+    my $retry = 10;
+    while ($retry--) {
+        last if (!script_run("$crm_mon_cmd | grep -i 'no inactive resources'"));
         sleep 5;
-        $cmd_sub->("$crm_mon_cmd | grep -i 'no inactive resources'");
+        if ($retry == 1) {
+            $cmd_sub->("$crm_mon_cmd | grep -i 'no inactive resources'");
+        }
     }
+
     $cmd_sub->('crm_mon -1 | grep \'partition with quorum\'');
 
     # If running with versions of crmsh older than 4.4.2, do not use check_online_nodes (see POD below)
     # Fall back to the older method of checking Online vs. Configured nodes
-    my $out = script_output(q|rpm -q --qf 'crmshver=%{VERSION}\n' crmsh|);
-    my ($ver) = $out =~ /crmshver=(\S+)/m or die "Couldn't parse crmsh version from: $out";
+    my $ver = get_crmsh_version();
     my $cmp_result = package_version_cmp($ver, '4.4.2');
     if ($cmp_result < 0) {
         $cmd_sub->(q/crm_mon -s | grep "$(crm node list | grep -E -c ': member|: normal') nodes online"/);
@@ -792,10 +840,26 @@ sub check_cluster_state {
 
     # As some options may be deprecated, test shouldn't die on 'crm_verify'
     if (get_var('HDDVERSION')) {
-        script_run 'crm_verify -LV';
+        script_run $verify_cmd;
     }
     else {
-        $cmd_sub->('crm_verify -LV');
+        # Need both retval and output, so use utils::cmd_run
+        # Also redirect stderr to stdout to get the actual command output
+        my ($ret, $out) = cmd_run("$verify_cmd 2>&1");
+        return if (defined $ret && $ret == 0);
+        if ($ret == 78) {
+            my $errors = 0;
+            foreach my $line (split(/\n/, $out)) {
+                record_soft_failure "jsc#PED-14519 - $verify_cmd shows deprecation warnings"
+                  if ($line =~ /Support for legacy name .stonith.+is deprecated/);
+                next if ($line =~ /^[Ww]arning/);
+                next if ($line =~ /^Configuration may need attention/);
+                ++$errors;
+            }
+            return unless ($errors);
+        }
+        die "$verify_cmd failed. return value=[$ret]; output=[$out]"
+          unless ($args{proceed_on_failure});
     }
 }
 
@@ -1227,7 +1291,7 @@ sub collect_sbd_delay_parameters {
           script_output_retry_check(cmd => $sbd_delay_start, regex_string => '^\d+$|yes|no', sleep => '3', retry => '3'),
         # pcmk_delay_max is not always present for example in 3 node clusters or diskless SBD scenario
         'pcmk_delay_max' => get_var('USE_DISKLESS_SBD') ? 30 :
-          script_output_retry_check(cmd => $pcmk_delay_max, regex_string => '^\d+$', sleep => '3', retry => '3', ignore_failure => 1) // 0
+          script_output_retry_check(cmd => pcmk_delay_max_cmd(), regex_string => '^\d+$', sleep => '3', retry => '3', ignore_failure => 1) // 0
     );
 
     return (%params);
@@ -1544,7 +1608,7 @@ This generates the information that nodes need to use iSCSI. This is stored in
 =cut
 
 sub generate_lun_list {
-    my $target_iqn = script_output('lio_node --listtargetnames 2>/dev/null');
+    my $target_iqn = lio_show_iqn();
     my $target_ip_port = script_output("ls /sys/kernel/config/target/iscsi/${target_iqn}/tpgt_1/np 2>/dev/null");
     my $dev_by_path = '/dev/disk/by-path';
     my $index = get_var('ISCSI_LUN_INDEX', 0);
@@ -1851,8 +1915,7 @@ B<Return values:>
 sub crm_list_options {
     my (%args) = @_;
 
-    my $outver = script_output(q|rpm -q --qf 'crmshver=%{VERSION}\n' crmsh|);
-    my ($ver) = $outver =~ /crmshver=(\S+)/m or die "Couldn't parse crmsh version from: $outver";
+    my $ver = get_crmsh_version();
     my $cmp_result = package_version_cmp($ver, '5.0.0');
     return 0 if ($cmp_result < 0);
     my $out;
@@ -2006,7 +2069,7 @@ sub parse_sbd_metadata {
     my @val = ();
     my $metadata = {};
     my $device_name = "";
-    foreach my $line (split(/\n/, script_output('crm sbd configure show disk_metadata'))) {
+    foreach my $line (split(/\n/, script_output('crm sbd configure show disk_metadata', proceed_on_failure => 1))) {
         if ($line =~ /^==Dumping header on disk (\S+)/) {
             $device_name = $1;
         } elsif ($line =~ /Timeout\s+\((\w+)\)\s+\:\s+(\d+)/) {
@@ -2122,9 +2185,15 @@ sub check_crm_nonroot {
 
     my $orig_prompt = serial_term_prompt() // '# ';
 
+    # The nested 'su -' shell has not PROMPT_COMMAND hook, so pretty
+    # serial markers would never be emited there. See poo#204471
+    # This command disables the pretty serial markers within the scope
+    # of this function
+    my $marker_guard = $testapi::distri->pretty_serial_marker_guard(0);
+
     # Login as non-root user
     enter_cmd "su - $user";
-    wait_serial '> ', no_regex => 1, timeout => 2;
+    wait_serial '> ', no_regex => 1;
     set_serial_prompt '> ';
 
     # Unset all related PATH which belong to non-root user.
@@ -2140,9 +2209,97 @@ sub check_crm_nonroot {
     enter_cmd 'exit';
 
     $testapi::distri->{serial_term_prompt} = $orig_prompt;
-    wait_serial $orig_prompt, no_regex => 1, timeout => 2;
+    wait_serial $orig_prompt, no_regex => 1;
 
     select_serial_terminal();
+}
+
+=head2 get_crmsh_version
+
+    get_crmsh_version();
+
+Gets the B<crmsh> package version from the SUT.
+
+=cut
+
+sub get_crmsh_version {
+    my $out = script_output(q|rpm -q --qf 'crmshver=%{VERSION}\n' crmsh|);
+    $out =~ /crmshver=(\S+)/m or die "Couldn't parse crmsh version from: $out";
+    return ($1);
+}
+
+=head2 get_fencing_ra_name
+
+    get_fencing_ra_name($crm_config_output);
+
+Gets the correct name of the B<fence_sbd> primitive from a snippet of the cluster
+configuration provided as an argument, such as the output of the command stored
+in C<$crm_config_show_fence_sbd>.
+
+=cut
+
+sub get_fencing_ra_name {
+    my $conf = shift;
+    $conf =~ m/primitive (\S+) \S+:.+sbd/ or die "Found no primitive matching [sbd] in conf:[$conf]";
+    return ($1);
+}
+
+=head2 pcmk_delay_max_cmd
+
+    pcmk_delay_max_cmd();
+    pcmk_delay_max_cmd($primitive_name);
+
+Returns the command required to get the value of the attribute C<pcmk_delay_max> in the
+cluster configuration. If no argument is provided, it will try to determine the correct
+name for the B<fence_sbd> primitive using C<get_fencing_ra_name>, otherwise it will use
+whatever primitive name is provided as an argument.
+
+=cut
+
+sub pcmk_delay_max_cmd {
+    my $primitive_name = shift // get_fencing_ra_name(script_output($crm_config_show_fence_sbd));
+    return "crm resource param $primitive_name show pcmk_delay_max | sed 's/[^0-9]*//g'";
+}
+
+=head2 get_bootstrap_properties
+
+    get_bootstrap_properties()
+
+Runs C<crm -D plain configure show cib-bootstrap-options> in the System Under Test and parses
+the output into a Perl HASH.
+
+For example, an output like:
+
+    property cib-bootstrap-options: \
+	dc-version="1.2.3.4" \
+	cluster-infrastructure=corosync \
+	have-watchdog=true \
+	cluster-name=hacluster \
+	stonith-enabled=true \
+	stonith-timeout=71 \
+	priority-fencing-delay=60 \
+	last-lrm-refresh=1777299458';
+
+Would produce a HASH like:
+
+    $VAR1 = {
+          'dc-version' => '"1.2.3.4"',
+          'cluster-infrastructure' => 'corosync',
+          'stonith-enabled' => 'true',
+          'last-lrm-refresh' => '1777299458',
+          'stonith-timeout' => '71',
+          'cluster-name' => 'hacluster',
+          'priority-fencing-delay' => '60',
+          'have-watchdog' => 'true'
+        };
+
+=cut
+
+sub get_bootstrap_properties {
+    my $out = script_output('crm -D plain configure show cib-bootstrap-options');
+    die "cib-bootstrap-options does not start with [property] keyword [$out]" unless ($out =~ /^property/);
+    my %properties = map { /(\S+)=(\S+)/ } split(/\n/, $out);
+    return \%properties;
 }
 
 1;

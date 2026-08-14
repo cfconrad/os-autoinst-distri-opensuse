@@ -3,9 +3,9 @@
 
 # Summary: Boot to agama adding bootloader kernel parameters and expecting web ui up and running.
 # At the moment redirecting to legacy handling for remote architectures booting.
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "installbasetest";
+use Mojo::Base 'installbasetest';
 
 use testapi;
 use autoyast qw(create_file_as_profile_companion expand_agama_profile generate_json_profile parse_dud_parameter);
@@ -40,13 +40,26 @@ sub prepare_boot_params {
     # add default boot params
     if (my $inst_auto = get_var('INST_AUTO')) {
         create_file_as_profile_companion() if get_var('AGAMA_PROFILE_OPTIONS') =~ /files=true/;
-        my $profile_url = ($inst_auto =~ /\.libsonnet/) ?
-          generate_json_profile($inst_auto) :
-          expand_agama_profile($inst_auto);
+        my $profile_url = $inst_auto;
+        unless ($inst_auto =~ /usb:\/\//) {
+            $profile_url = ($inst_auto =~ /\.libsonnet/) ?
+              generate_json_profile($inst_auto) :
+              expand_agama_profile($inst_auto);
+        }
         set_var('INST_AUTO', $profile_url);
-        push @params, "inst.auto=\"$profile_url\"", 'inst.finish=stop';
+        push @params, "inst.auto=\"$profile_url\"";
+        push @params, map { "inst.finish=$_" } grep { $_ && !get_var('INST_FINISH_DISABLED') } (get_var('INST_FINISH') || 'stop');
     }
-    push @params, 'inst.register_url=' . get_var('SCC_URL') if get_var('SCC_URL') && get_var('FLAVOR') =~ /^(Online.*|agama-installer)$/;
+
+    # add register url
+    my $has_scc_url = get_var('SCC_URL');
+    my $is_online_flavor = get_var('FLAVOR') =~ /^(Online.*|agama-installer)$/;
+    my $is_forced_register = get_var('AGAMA_FORCE_REGISTER');
+    my $is_leap = get_var('ISO') =~ /Leap/;
+    my $should_register = ($is_online_flavor || $is_forced_register) && !$is_leap;
+    if ($has_scc_url && $should_register) {
+        push @params, 'inst.register_url=' . get_var('SCC_URL');
+    }
 
     push @params, 'inst.install_url=' . get_var('INST_INSTALL_URL') if get_var('INST_INSTALL_URL');
 
@@ -88,7 +101,7 @@ sub run {
 
     my $grub_menu = $testapi::distri->get_grub_menu_agama();
     my $grub_entry_edition = $testapi::distri->get_grub_entry_edition();
-    my $agama_up_an_running = $testapi::distri->get_agama_up_an_running();
+    my $agama_up_and_running = $testapi::distri->get_agama_up_and_running();
 
     my @params = prepare_boot_params();
 
@@ -104,9 +117,13 @@ sub run {
     return if check_var('AGAMA_GRUB_SELECTION', 'rescue_system');
     if (get_var('EXTRABOOTPARAMS', '') =~ /systemd.unit=multi-user.target/) {
         wait_serial('Connect to the Agama installer using these URLs:', 300) || die "Agama installer didn't start";
-    } else {
-        $agama_up_an_running->expect_is_shown();
+        return;
     }
+    if (check_var('AGAMA_GRUB_SELECTION', 'check_medium')) {
+        wait_serial("Medium check succeeded", 600) || die "Medium check failed";
+        send_key 'ret' if wait_serial("Press any key to continue...", 60);
+    }
+    $agama_up_and_running->expect_is_shown();
 }
 
 sub post_fail_hook {

@@ -29,12 +29,12 @@
 
 package sev_snp_validation;
 
-use base 'virt_feature_test_base';
+use Mojo::Base 'virt_feature_test_base';
 use POSIX 'strftime';
 use testapi qw(:DEFAULT);
 use serial_terminal qw(select_serial_terminal);
 use virt_autotest::common;
-use virt_autotest::utils;
+use virt_autotest::utils qw(guest_is_sle wait_guest_online is_guest_online execute_over_ssh upload_virt_logs);
 use version_utils qw(is_sle package_version_cmp);
 use Utils::Architectures;
 use package_utils;
@@ -43,7 +43,8 @@ use power_action_utils 'power_action';
 
 # Define constants for SNP verification
 use constant {
-    SNP_HOST_TOOLS => ['snphost', 'sevctl', 'snpguest'],
+    # ucode-amd provides CPU microcode required by snphost ok verification
+    SNP_HOST_TOOLS => ['snphost', 'sevctl', 'snpguest', 'ucode-amd'],
     SNP_GUEST_TOOLS => ['snpguest'],
     SNP_MIN_KERNEL_VER => '5.19.0',
 
@@ -162,10 +163,8 @@ sub check_sev_snp_on_host {
     # Activate Confidential Computing module if needed
     $self->activate_coco_module();
 
-    # Configure SEV-SNP kernel parameters
-    $self->configure_sev_snp_kernel_parameters();
-
-    # Install and verify required packages
+    # Install packages before kernel parameter configuration so the reboot also loads new microcode
+    # (configure_sev_snp_kernel_parameters triggers a reboot when parameters are missing)
     record_info('Installing SNP packages', "Installing SEV-SNP packages: " . join(', ', @{+SNP_HOST_TOOLS}));
     install_package(join(' ', @{+SNP_HOST_TOOLS}));
 
@@ -180,6 +179,9 @@ sub check_sev_snp_on_host {
         my $installed_pkgs_info = script_output("rpm -q " . join(' ', @{+SNP_HOST_TOOLS}) . " 2>/dev/null || echo 'Some packages not found'", proceed_on_failure => 1);
         record_info('Installed SEV-SNP Packages', $installed_pkgs_info);
     }
+
+    # Configure SEV-SNP kernel parameters (reboots if needed, also loads newly installed ucode-amd)
+    $self->configure_sev_snp_kernel_parameters();
 
     # Check kernel version
     my $kernel_ver = script_output('uname -r');
@@ -419,7 +421,7 @@ sub configure_sev_snp_kernel_parameters {
 
     # Wait for boot completion - increased timeout for IPMI/SOL console where GRUB can take >180s
     $self->wait_boot(textmode => 1, bootloader_time => 100, ready_time => 200);
-    select_serial_terminal;
+    select_console 'root-console';
 
     # Verify parameters after reboot
     my $new_cmdline = script_output("cat /proc/cmdline");
@@ -524,7 +526,7 @@ sub check_sev_snp_on_guest {
     # For SEV-SNP guests, perform additional verification
     if ($guest_type eq 'sev-snp') {
         # Wait for guest to be online before further checks
-        virt_autotest::utils::wait_guest_online($guest_name, 50, 1);
+        wait_guest_online($guest_name, 50, 1);
 
         # Install required packages on guest
         record_info('Package Installation', "Installing required SEV-SNP packages on guest $guest_name");
@@ -757,7 +759,7 @@ EOL
 
     # Wait for the VM to boot
     record_info('VM Boot', "Waiting for guest to become available...");
-    virt_autotest::utils::wait_guest_online($guest_name, 60, 1);
+    wait_guest_online($guest_name, 60, 1);
 
     return 1;
 }
@@ -885,7 +887,11 @@ sub verify_guest_attestation {
     record_info('Guest Attestation', "Verifying guest attestation for $guest_name");
 
     # Make sure guest is online
-    virt_autotest::utils::wait_guest_online($guest_name, 50, 1);
+    wait_guest_online($guest_name, 50, 1);
+
+    my $snpguest_version = $self->_get_snpguest_version($guest_name);
+    my $processor_model = $self->_get_snpguest_processor_model();
+    record_info('SNPGuest Version', "snpguest $snpguest_version on $guest_name (processor: $processor_model)");
 
     # Create a temporary directory for attestation artifacts
     my $temp_dir = LOG_DIR . "/sev_snp_attestation_" . time();
@@ -931,17 +937,8 @@ sub verify_guest_attestation {
     );
 
     # Fetch AMD CA certificates
-    record_info('CA Certificates', "Fetching AMD CA certificates on guest $guest_name");
-
-    # Adapt command format based on SLES version due to snphost version changes
-    my $ca_cmd;
-    if (is_sle('>=16')) {
-        # SLES 16+ uses newer snpguest command format
-        $ca_cmd = "snpguest fetch ca der $temp_dir/certs-kds milan";
-    } else {
-        # SLES 15-SP7 uses older snpguest command format
-        $ca_cmd = "snpguest fetch ca der milan $temp_dir/certs-kds";
-    }
+    my $ca_cmd = $self->_get_snpguest_fetch_ca_cmd($snpguest_version, $temp_dir, $processor_model);
+    record_info('CA Certificates', "Fetching AMD CA certificates on guest $guest_name: $ca_cmd");
 
     my $ca_ret = execute_over_ssh(
         address => $guest_name,
@@ -952,23 +949,14 @@ sub verify_guest_attestation {
     save_screenshot;
 
     if ($ca_ret != 0) {
-        record_info('CA Fetch', "Failed to fetch CA certificates on guest $guest_name", result => 'softfail');
+        record_info('CA Fetch', "Failed to fetch CA certificates on guest $guest_name", result => 'fail');
         $self->_cleanup_attestation_dir($guest_name, $temp_dir);
         return;
     }
 
     # Fetch VCEK certificate
-    record_info('VCEK Certificate', "Fetching VCEK certificate on guest $guest_name");
-
-    # Adapt command format based on SLES version due to snphost version changes
-    my $vcek_cmd;
-    if (is_sle('>=16')) {
-        # SLES 16+ uses newer snpguest command format
-        $vcek_cmd = "snpguest fetch vcek der $temp_dir/certs-kds $temp_dir/attestation-report.bin";
-    } else {
-        # SLES 15-SP7 uses older snpguest command format
-        $vcek_cmd = "snpguest fetch vcek der milan $temp_dir/certs-kds $temp_dir/attestation-report.bin";
-    }
+    my $vcek_cmd = $self->_get_snpguest_fetch_vcek_cmd($snpguest_version, $temp_dir, $processor_model);
+    record_info('VCEK Certificate', "Fetching VCEK certificate on guest $guest_name: $vcek_cmd");
 
     my $vcek_ret = execute_over_ssh(
         address => $guest_name,
@@ -985,14 +973,12 @@ sub verify_guest_attestation {
     }
 
     # Verify attestation report
-    record_info('Verify Report', "Verifying attestation report on guest $guest_name");
-    my $verify_output = script_output("ssh root\@$guest_name \"snpguest verify attestation $temp_dir/certs-kds $temp_dir/attestation-report.bin\"", proceed_on_failure => 1);
+    my $verify_cmd = $self->_get_snpguest_verify_cmd($temp_dir);
+    record_info('Verify Report', "Verifying attestation report on guest $guest_name: $verify_cmd");
+    my $verify_output = script_output("ssh root\@$guest_name \"$verify_cmd\"", proceed_on_failure => 1);
     save_screenshot;
 
-    # Check if verification was successful - accept both VEK and VCEK signature verification
-    # VEK (Versioned Endorsement Key) is standard verification path
-    # VCEK (Versioned Chip Endorsement Key) is chip-specific verification path
-    # Both are valid for confirming successful SEV-SNP attestation
+    # Check if verification was successful - both VEK and VCEK are valid attestation paths.
     my $is_verified = $verify_output =~ /(?:VEK|VCEK) signed the Attestation Report/;
 
     if ($is_verified) {
@@ -1017,6 +1003,58 @@ sub verify_guest_attestation {
     $self->_cleanup_attestation_dir($guest_name, $temp_dir);
 
     return;
+}
+
+# Returns snpguest version string from guest, or "0.0.0" when absent.
+sub _get_snpguest_version {
+    my ($self, $guest_name) = @_;
+    my $ver = script_output("ssh root\@$guest_name 'snpguest --version'", timeout => 30);
+    $ver =~ s/^\s+|\s+$//g;
+    return $ver;
+}
+
+# Returns milan/genoa/turin from host /proc/cpuinfo (family 26=>turin; family 25 model>=16=>genoa; else=>milan).
+sub _get_snpguest_processor_model {
+    my $self = shift;
+    my $out = script_output("awk '/^cpu family/{f=\$NF} /^model[[:space:]]/{m=\$NF} f&&m{print f,m; exit}' /proc/cpuinfo");
+    my ($family, $model) = split(' ', $out);
+    return $family == 26 ? 'turin' : ($family == 25 && $model >= 16 ? 'genoa' : 'milan');
+}
+
+# Returns 1 for snpguest >= v0.9.0 (new CLI), 0 for <= v0.8.3 (old CLI).
+sub _is_snpguest_new_cli {
+    my ($self, $version_str) = @_;
+    my ($major, $minor) = ($version_str =~ /(\d+)\.(\d+)/);
+    return 0 unless defined $major;
+    return ($major > 0 || $minor >= 9) ? 1 : 0;
+}
+
+# Pure command builders: no I/O, all inputs passed explicitly.
+#
+# fetch ca:   <= v0.8.3: der <model> <certs_dir>
+#             >= v0.9.0: der <certs_dir> <model>
+sub _get_snpguest_fetch_ca_cmd {
+    my ($self, $version, $temp_dir, $model) = @_;
+    my $certs = "$temp_dir/certs-kds";
+    return $self->_is_snpguest_new_cli($version)
+      ? "snpguest fetch ca der $certs $model"
+      : "snpguest fetch ca der $model $certs";
+}
+
+# fetch vcek: <= v0.8.3: der <model> <certs_dir> <report>
+#             >= v0.9.0: der <certs_dir> <report> [--processor-model <model>]
+sub _get_snpguest_fetch_vcek_cmd {
+    my ($self, $version, $temp_dir, $model) = @_;
+    my $certs = "$temp_dir/certs-kds";
+    my $report = "$temp_dir/attestation-report.bin";
+    return $self->_is_snpguest_new_cli($version)
+      ? "snpguest fetch vcek der $certs $report --processor-model $model"
+      : "snpguest fetch vcek der $model $certs $report";
+}
+
+sub _get_snpguest_verify_cmd {
+    my ($self, $temp_dir) = @_;
+    return "snpguest verify attestation $temp_dir/certs-kds $temp_dir/attestation-report.bin";
 }
 
 # Helper function to clean up attestation directory

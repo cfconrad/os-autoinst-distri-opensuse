@@ -6,7 +6,7 @@
 # Summary: Install SUSE or openSUSE WSL images from the MS Store directly
 # Maintainer: qa-c  <qa-c@suse.de>
 
-use Mojo::Base "windowsbasetest";
+use Mojo::Base 'windowsbasetest';
 use testapi;
 use version_utils;
 use Utils::Architectures 'is_aarch64';
@@ -41,6 +41,11 @@ sub run {
         timeout => 30
     ) unless (get_var('WSL2'));
 
+    # Raise timeouts on sloooow software emulation
+    $self->run_in_powershell(
+        cmd => 'echo "[wsl2]`nvmIdleTimeout=-1`ninstanceIdleTimeout=-1`ndistributionStartTimeout=600000`nkernelBootTimeout=300000" | Out-File -Append -FilePath ~/.wslconfig -Encoding utf8'
+    ) if check_var('QEMU_NO_KVM', '1');
+
     my $WSL_version = '';
     if (is_sle('<=15-sp4')) {
         $WSL_version = "SUSE-Linux-Enterprise-Server-" . get_required_var("VERSION");
@@ -62,7 +67,7 @@ sub run {
           unless ($wsl_image_ext =~ /^(appx|xz)$/);
         # Enable the 'developer mode' in Windows
         $self->run_in_powershell(
-            cmd => 'New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" -Name AllowDevelopmentWithoutDevLicense -PropertyType DWORD -Value 1'
+            cmd => 'Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" -Name AllowDevelopmentWithoutDevLicense -Type DWORD -Value 1'
         );
 
         $self->install_certificates;
@@ -89,6 +94,7 @@ sub run {
         assert_and_click 'wsl-suse-startup-search';
         if (check_var('DISTRI', 'sle') || is_aarch64) {
             assert_and_click("welcome_to_wsl", timeout => 120);
+            assert_screen("welcome_to_wsl-window");
             send_key "alt-f4";
         }
     } elsif ($install_from eq 'msstore') {
@@ -115,6 +121,7 @@ sub run {
         }
         if (check_var('DISTRI', 'sle')) {
             assert_and_click("welcome_to_wsl", timeout => 120);
+            assert_screen("welcome_to_wsl-window");
             send_key "alt-f4";
         }
 

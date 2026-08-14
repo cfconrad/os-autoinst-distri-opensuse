@@ -29,6 +29,7 @@ our @EXPORT = qw(
   process_reboot
   check_reboot_changes
   check_target_version
+  check_reboot_strategy_and_reboot
   rpmver
   trup_call
   trup_install
@@ -39,6 +40,7 @@ our @EXPORT = qw(
   exit_trup_shell_and_reboot
   reboot_on_changes
   record_kernel_audit_messages
+  trup_apply
 );
 
 # Download files needed for transactional update tests
@@ -76,11 +78,32 @@ sub handle_first_grub {
     }
 }
 
+# Soft reboot only triggers a full reboot when installing a new kernel
+# update of the bootloader or any command like rollback, grub.cfg, bootloader, run or shell
+sub check_reboot_strategy_and_reboot {
+    my @reboot_args;
+
+    # as this will likely grow, it is better to have single line checks to give room to more
+    # complex expressions
+    my $has_soft_reboot = 1;
+    $has_soft_reboot = 0 if (is_sle_micro || is_sle('<16.1'));
+
+    if ($has_soft_reboot) {
+        my $regex = qr/Minimally required reboot level:\s([a-zA-Z-]+)/;
+        my $output = wait_serial($regex, timeout => 300) or die "Could not capture reboot type";
+        if ($output =~ $regex) {
+            @reboot_args = (expected_grub => 0) if $1 eq 'soft-reboot';
+            record_info("Reboot strategy", "$1");
+        }
+    }
+    process_reboot(@reboot_args);
+}
+
 sub process_reboot {
     my (%args) = @_;
     $args{trigger} //= 0;
     $args{automated_rollback} //= 0;
-    $args{expected_grub} //= (is_sle_micro && is_vmware) ? 0 : 1;
+    $args{expected_grub} //= (is_transactional && is_vmware) ? 0 : 1;
     $args{expected_passphrase} //= 0;
 
     if (is_public_cloud) {
@@ -91,12 +114,12 @@ sub process_reboot {
 
     # Switch to root-console as we need VNC to check for grub and for login prompt
     my $prev_console = current_console();
-    select_console 'root-console', await_console => 0;
+    select_console 'root-console', await_console => 0 unless ($prev_console eq 'root-console');
 
     handle_first_grub if ($args{automated_rollback});
 
     if (!is_s390x && (is_microos || is_sle_micro('<6.0'))) {
-        microos_reboot $args{trigger};
+        microos_reboot($args{trigger}, $args{expected_grub});
         record_kernel_audit_messages();
     } elsif (is_backend_s390x) {
         prepare_system_shutdown;
@@ -123,8 +146,13 @@ sub process_reboot {
             }
             assert_screen 'grub2', 300;
             wait_screen_change { send_key 'ret' };
+            assert_screen 'linux-login', 400;
         }
-        assert_screen 'linux-login', 200;
+        else {
+            #Need to wait 3s to start tty6 service refer bsc#1269251
+            assert_screen 'linux-login', 400;
+            wait_still_screen(3);
+        }
 
         # Login & clear login needle
         select_console 'root-console';
@@ -133,7 +161,11 @@ sub process_reboot {
     }
 
     # Switch to the previous console
-    select_console $prev_console;
+    # Skip if already on root-console: after a soft reboot select_console 'root-console' was
+    # already called above (line 158) and calling it again triggers a race condition on aarch64
+    # where the tty is not yet fully initialised, causing a "no candidate needle" failure.
+    # See https://github.com/os-autoinst/os-autoinst-distri-opensuse/pull/25771 and poo#202980.
+    select_console $prev_console unless ($prev_console eq 'root-console');
 }
 
 # Reboot if there's a diff between the current FS and the new snapshot
@@ -151,6 +183,9 @@ sub check_reboot_changes {
     # If changes are expected check that default subvolume changed
     die "Error during diff" if $change_happened > 1;
     die "Change expected: $change_expected, happened: $change_happened" if $change_expected != $change_happened;
+
+    # https://progress.opensuse.org/issues/204552
+    assert_script_run 'time sync' if check_var('ENCRYPTED_IMAGE', 1);
 
     # Reboot into new snapshot
     process_reboot(trigger => 1) if $change_happened;
@@ -392,6 +427,36 @@ sub reboot_on_changes {
     else {
         record_info("No reboot needed", "Reboot saved because there are no changes happened and no new snapshot generated");
     }
+}
+
+=head2 trup_apply
+
+  trup_apply([timeout => $seconds])
+
+Apply pending changes from the new snapshot without rebooting using
+C<transactional-update apply>.
+
+B<Warning>: Do not use this for kernel packages or system libraries that
+require a reboot to take effect. Applying those without a reboot may leave
+the system in an inconsistent state. This function is intended only for
+end user applications and server services.
+
+=over
+
+=item C<timeout>
+
+Timeout in seconds (default: 30).
+
+=back
+
+=cut
+
+sub trup_apply {
+    my (%args) = @_;
+    $args{timeout} //= 30;
+
+    record_info("Apply pending changes", "Applying pending changes without reboot into new snapshot");
+    trup_call('apply', timeout => $args{timeout});
 }
 
 1;

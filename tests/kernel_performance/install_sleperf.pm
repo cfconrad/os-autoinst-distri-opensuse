@@ -7,7 +7,7 @@
 # Maintainer: Qi Wang <qi.wang@suse.de>
 
 package install_sleperf;
-use base 'y2_installbase';
+use Mojo::Base 'y2_installbase';
 use power_action_utils 'power_action';
 use utils;
 use testapi;
@@ -23,8 +23,10 @@ sub install_pkg {
     if (is_sle('<16')) {
         $deploy = lc($VERSION);
         $deploy =~ s/-//g;
-    } elsif (is_sle('16+')) {
+    } elsif (is_sle('=16.0')) {
         $deploy = '16';
+    } elsif (is_sle('=16.1')) {
+        $deploy = '16.1';
     }
     assert_script_run("curl $repo >>sleperf_deploy.sh");
     assert_script_run("sh sleperf_deploy.sh -t sles$deploy");

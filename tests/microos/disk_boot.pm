@@ -6,8 +6,9 @@
 # Summary: Boot from disk and login into MicroOS
 # Maintainer: Panagiotis Georgiadis <pgeorgiadis@suse.com>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
+use main_micro_alp;
 use version_utils qw(is_sle_micro);
 use Utils::Architectures qw(is_aarch64);
 use microos "microos_login";

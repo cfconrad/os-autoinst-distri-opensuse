@@ -6,7 +6,7 @@
 # Summary: run upstream libica testsuite (build time) on s390x with enabled FIPS mode
 # Maintainer: QE Security <none@suse.de>
 
-use Mojo::Base qw(consoletest);
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -18,7 +18,7 @@ sub run {
     return unless is_s390x();
     select_serial_terminal;
 
-    my $repo_url = "http://download.suse.de/ibs/SUSE:/SLFO:/Main:/Build/standard/";
+    my $repo_url = "http://download.suse.de/ibs/SUSE:/SLFO:/Main/standard/";
     if (is_sle('<16')) {
         add_suseconnect_product('sle-module-desktop-applications');
         add_suseconnect_product('sle-module-development-tools');

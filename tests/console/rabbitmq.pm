@@ -7,15 +7,16 @@
 #
 # Maintainer: QE Core <qe-core@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use version_utils qw(is_sle);
+use package_utils 'install_package';
 use serial_terminal qw(select_serial_terminal);
 
 sub run {
     select_serial_terminal;
-    zypper_call 'in rabbitmq-server go curl';
+    install_package('rabbitmq-server go curl', trup_reboot => 1);
     systemctl 'start rabbitmq-server';
     systemctl 'status rabbitmq-server';
     my $curl_opts = "--retry 1 --retry-max-time 60 -D - -O";
@@ -61,6 +62,15 @@ EOF
         wait_serial(".*Received.*Hello World.*");
         systemctl 'stop rabbitmq-server';
     }
+}
+
+sub post_fail_hook {
+    my ($self) = @_;
+    $self->SUPER::post_fail_hook;
+    script_run 'rabbitmq-diagnostics &> /var/log/rabbitmq/rabbitmq-diagnostics.log';
+    script_run 'tar -zcvf rabbitmq.tar.gz /var/log/rabbitmq';
+    upload_logs 'rabbitmq.tar.gz';
+    upload_logs '/var/lib/rabbitmq/erl_crash.dump';
 }
 
 1;

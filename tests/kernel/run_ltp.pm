@@ -8,7 +8,7 @@
 # More documentation is at the bottom
 
 use 5.018;
-use base 'opensusebasetest';
+use Mojo::Base 'opensusebasetest';
 use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal 'select_serial_terminal';
 use power_action_utils 'power_action';
@@ -19,7 +19,7 @@ use Utils::Backends qw(is_backend_s390x is_pvm);
 use serial_terminal;
 use Mojo::File 'path';
 use Mojo::JSON;
-use LTP::utils 'prepare_ltp_env';
+use LTP::utils qw(prepare_ltp_env unmask_serial_failures);
 use LTP::WhiteList;
 require bmwqemu;
 
@@ -306,17 +306,6 @@ sub save_crashdump {
     upload_logs('/root/crashdump.tar.xz');
 }
 
-sub dump_tasktrace {
-    my $old_console = current_console();
-
-    select_console('root-console', await_console => 0);
-    send_key('alt-sysrq-t');
-    send_key('alt-sysrq-w');
-    wait_serial(qr/sysrq: .*Show Blocked State/, timeout => 300);
-    send_key('ret');
-    select_console($old_console, await_console => 0);
-}
-
 sub upload_tcpdump {
     my $self = shift;
     my $pid = $self->{tcpdump_pid};
@@ -374,21 +363,11 @@ sub upload_oprofile {
 
 sub pre_run_hook {
     my ($self) = @_;
-    my @pattern_list;
 
     # Kernel error messages should be treated as soft-fail in boot_ltp,
     # install_ltp and shutdown_ltp so that at least some testing can be done.
-    # But change them to hard fail in this test module.
-    for my $pattern (@{$self->{serial_failures}}) {
-        my %tmp = %$pattern;
-
-        # don't switch to hard fail when test is expected to produce kernel warning
-        $tmp{type} = $tmp{post_boot_type} if defined($tmp{post_boot_type}) && !($tmp{soft_on_expect_warn} && get_var('LTP_WARN_EXPECTED'));
-
-        push @pattern_list, \%tmp;
-    }
-
-    $self->{serial_failures} = \@pattern_list;
+    # But change them to hard fail in this module.
+    $self->{serial_failures} = unmask_serial_failures($self->{serial_failures});
     $self->SUPER::pre_run_hook;
 }
 
@@ -466,7 +445,7 @@ sub run_post_fail {
 
     $self->upload_oprofile() if defined($self->{oprofile_pid});
     $self->upload_tcpdump() if defined($self->{tcpdump_pid});
-    $self->dump_tasktrace() if check_var_array('LTP_DEBUG', 'tasktrace');
+    dump_tasktrace() if check_var_array('LTP_DEBUG', 'tasktrace');
     $self->save_crashdump()
       if $self->{timed_out} && check_var_array('LTP_DEBUG', 'crashdump');
 
@@ -561,6 +540,11 @@ Comma separated list of debug features to enable during test run.
 - C<tasktrace>: Print backtrace of all processes and show blocked tasks
 - C<tcpdump>: Capture all packets sent or received during each test.
 - C<supportconfig>: Run supportconfig after boot and before shutdown.
+
+=head2 LTP_MIN_UPTIME
+
+Minimum uptime in seconds before LTP tests start. It applies only to the
+native openQA runner, not to tests run by kirk.
 
 =head2 LTP_REBOOT_AFTER_TEST
 

@@ -1,11 +1,11 @@
-# Copyright 2025 SUSE LLC
+# Copyright 2025-2026 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Initialize mutexes and barriers for multi-machine synchronization.
 #
 # Maintainer: unified-core@suse.com, ldevulder@suse.com
 
-use base qw(opensusebasetest);
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use lockapi;
 use mmapi;
@@ -37,7 +37,7 @@ sub run {
 }
 
 sub test_flags {
-    return {fatal => 1, milestone => 0};
+    return {fatal => 1, milestone => 1};
 }
 
 1;

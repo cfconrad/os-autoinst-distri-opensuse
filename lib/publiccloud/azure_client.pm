@@ -12,6 +12,7 @@ use Mojo::Base -base;
 use testapi;
 use utils;
 use publiccloud::utils;
+use version_utils qw(is_sle);
 
 has subscription => sub { get_var('PUBLIC_CLOUD_AZURE_SUBSCRIPTION_ID') };
 has region => sub { get_required_var('PUBLIC_CLOUD_REGION') };
@@ -41,13 +42,17 @@ sub init {
           . '"galleryEndpointUrl": "https://gallery.azure.com/", ' . $/
           . '"managementEndpointUrl": "https://management.core.windows.net/" ' . $/
           . '}');
+    script_run("PILOT_DEBUG=1 az %silent --help") if is_sle(">=16");
+
     $self->az_login();
     assert_script_run("az account set --subscription \$ARM_SUBSCRIPTION_ID");
 }
 
 sub az_login {
     my ($self) = @_;
-    my $login_cmd = "while ! az login --service-principal -u \$ARM_CLIENT_ID -p \$ARM_CLIENT_SECRET -t \$ARM_TENANT_ID; do sleep 10; done";
+    # Remove survey and telemetry messages which can mangle JSON outputs.
+    assert_script_run('az config set core.survey_message=false core.collect_telemetry=no --only-show-errors --output json', timeout => 240);
+    my $login_cmd = "while ! az login --service-principal -u \$ARM_CLIENT_ID -p \$ARM_CLIENT_SECRET -t \$ARM_TENANT_ID -o none 1>/dev/null 2>&1; do sleep 10; done";
 
     assert_script_run($login_cmd, timeout => 5 * 60);
 }

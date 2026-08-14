@@ -18,6 +18,20 @@ use utils qw(zypper_call);
 use JSON;
 use XML::LibXML;
 use Data::Dumper;
+use publiccloud::utils qw(calculate_custodian_ttl);
+
+
+sub is_cleaned_up {
+    my ($stdout, $rc) = @_;
+
+    return ($rc == 1) && ($stdout =~ /ResourceNotFound/);
+}
+
+sub is_bad_gateway {
+    my ($stdout, $rc) = @_;
+
+    return ($rc == 1) && ($stdout =~ /BadGatewayConnection|ResourceReadFailed|Bad Gateway/);
+}
 
 sub run {
     my ($self, $args) = @_;
@@ -32,28 +46,49 @@ sub run {
     my $resource_group = "openqa-aitl-$job_id";
     my $subscription_id = $provider->provider_client->subscription;
 
-    my $aitl_client_version = get_required_var("PUBLIC_CLOUD_AZURE_AITL_VER");
     my $aitl_image_gallery = "test_image_gallery";
     my $aitl_image_version = "latest";
+    if (get_var("FLAVOR") =~ /Maintenance/) {
+        $aitl_image_version = $provider->get_image_version();
+        $aitl_image_version =~ s/.*\/versions\///;
+        record_info("AITL image version:", $aitl_image_version);
+    }
     my $aitl_job_name = "openqa-aitl-$job_id";
     my $aitl_manifest = "custom.json";
     my $aitl_image_name = $provider->generate_azure_image_definition();
 
     my $aitl_get_options = "-s $subscription_id -r $resource_group -n $aitl_job_name";
 
+    my $openqa_ttl = get_var('MAX_JOB_TIME', 7200) +
+      get_var('PUBLIC_CLOUD_TTL_OFFSET', 300);
+    my $custodian_ttl = calculate_custodian_ttl($openqa_ttl);
+
     my $openqa_url = get_var('OPENQA_URL', get_var('OPENQA_HOSTNAME'));
     my $created_by = "$openqa_url/t$job_id";
-    my $tags = "openqa-aitl=$job_id openqa_created_by=$created_by openqa_var_server=$openqa_url";
+    my $tags = "openqa-aitl=$job_id openqa_created_by=$created_by openqa_var_server=$openqa_url openqa_ttl=$openqa_ttl custodian_ttl=$custodian_ttl";
 
     my $timeout //= get_var('PUBLIC_CLOUD_AITL_TIMEOUT', 3600 * 1.5);
-    my $aitl_job = "python3.11 /tmp/aitl.py job";
+
+    my $aitl_image = get_var(
+        'PUBLIC_CLOUD_AZURE_AITL_IMAGE',
+        'registry.opensuse.org/devel/opensuse/qa/qac/containers/15.6/aitl-lisa:leap'
+    );
+
+    assert_script_run("podman pull $aitl_image");
+
+    my $aitl_job = "podman run --rm " .
+      "-v /root/.azure:/root/.azure " .
+      "-v /tmp:/tmp " .
+      "$aitl_image " .
+      " job";
+
     my $monitoring = "{RUNNING:length([?@=='RUNNING']),QUEUED:length([?@=='QUEUED']),ASSIGNED:length([?@=='ASSIGNED']),FAILED:length([?@=='FAILED'])}";
 
-    # Get the AITL script
-    assert_script_run("curl https://raw.githubusercontent.com/microsoft/lisa/refs/tags/$aitl_client_version/microsoft/utils/aitl/aitl.py -o /tmp/aitl.py");
+    # Sanity check the container can execute AITL
+    assert_script_run("$aitl_job --help");
 
     # Create Resource group in $region
-    assert_script_run("az group create -n $resource_group -l $region --tags '$tags'");
+    assert_script_run("az group create -n $resource_group -l $region --tags $tags");
 
     # Get manifest from data folder
     assert_script_run("curl " . data_url("publiccloud/aitl/$aitl_manifest") . " -o /tmp/$aitl_manifest");
@@ -74,19 +109,46 @@ sub run {
     # Wait a few seconds to give Azure time to create the jobs
     sleep(10);
 
+    # Need to save results to a variable
+    my $results;
+
     # Get AITL job status
     # AITL Jobs run in parallel so it's possible to have Jobs in all kind of states.
     # The goal of the loop is to check there are no Jobs Queued or currently Running.
     my $status_data;
     while (1) {
-        # Get the current job status
-        my $status = script_output(qq($aitl_job get $aitl_get_options -q "properties.results[].status|$monitoring"));
+        # # poo#200979: If the AITL resource was already deleted by Azure don't overwrite last known results
+        my $results_rc = script_run("$aitl_job get $aitl_get_options -q 'properties.results[]' > /tmp/aitl_results.out 2>&1", timeout => 300);
+        my $results_current = script_output("cat /tmp/aitl_results.out");
+        $results = $results_current if $results_rc == 0;
 
-        if ($status =~ /no result returned/ig) {
+        # Get the current job status
+        my $status_rc = script_run(qq($aitl_job get $aitl_get_options -q "properties.results[].status|$monitoring" > /tmp/aitl_status.out 2>&1), timeout => 300);
+        my $status = script_output("cat /tmp/aitl_status.out");
+
+        # poo#200979: If the AITL resource was already deleted by Azure, we can consider the AITL job as finished and break the loop
+        if (is_cleaned_up($status, $status_rc) || is_cleaned_up($results_current, $results_rc)) {
+            record_info('AITL cleanup', 'AITL resource was already deleted by Azure');
+            last;
+        }
+
+        if (
+            $status =~ /no result returned/i ||
+            is_bad_gateway($status, $status_rc) ||
+            is_bad_gateway($results_current, $results_rc)
+        ) {
+            my $warn = "";
+            $warn .= "no status: $status\n" if ($status =~ /no result returned/i);
+            $warn .= "no status (Bad Gateway): $status\n" if (is_bad_gateway($status, $status_rc));
+            $warn .= "no result (Bad Gateway): $results_current\n" if (is_bad_gateway($results_current, $results_rc));
+            record_info("WARN:", $warn);
+
             sleep(60);
-            record_info("WARN:", "no results:\n" . $status);
             next;
         }
+
+        die "Unexpected status: $status" unless $status_rc == 0;
+        die "Unexpected results: $results_current" unless $results_rc == 0;
 
         # Remove the first two/3 non-JSON lines from the status JSON
         $status =~ s/^(?:.*\n){1,3}//;
@@ -94,8 +156,9 @@ sub run {
         # Decode the status JSON
         eval { $status_data = decode_json($status); };
 
+        die "Failed to decode AITL status JSON:\n$status" if $@;
         # Check if there are still jobs in RUNNING, QUEUED, or ASSIGNED state
-        if ($@ || $status_data->{RUNNING} == 0 && $status_data->{QUEUED} == 0 && $status_data->{ASSIGNED} == 0) {
+        if ($status_data->{RUNNING} == 0 && $status_data->{QUEUED} == 0 && $status_data->{ASSIGNED} == 0) {
             last;    # Exit the loop if no jobs are in these states
         }
 
@@ -105,9 +168,6 @@ sub run {
         # Wait before checking again
         sleep(65);
     }
-
-    # Need to save results to a variable
-    my $results = script_output("$aitl_job get $aitl_get_options -q 'properties.results[]'");
 
     # Remove the first two non-JSON lines from the results JSON.
     $results =~ s/^(?:.*\n){1,3}//;

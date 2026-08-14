@@ -20,7 +20,7 @@
 # Maintainer: Pavel Dostál <pdostal@suse.cz>
 # Tags: poo#65375, poo#68200, poo#104415
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal 'select_serial_terminal';
 use utils qw(systemctl exec_and_insert_password zypper_call random_string clear_console);
@@ -50,12 +50,6 @@ sub run {
     # Restart sshd and check it's status
     my $ret = systemctl('restart sshd', ignore_failure => 1);
     my $fips_enabled = script_output('cat /proc/sys/crypto/fips_enabled', proceed_on_failure => 1) eq '1';
-
-    # If restarting sshd service is not successful and fips is enabled, we have encountered bsc#1189534
-    if (($ret != 0) && $fips_enabled && is_sle("=15-SP2")) {
-        record_soft_failure("bsc#1189534");
-        return;
-    }
 
     systemctl 'status sshd';
     services::sshd::ssh_basic_check();
@@ -90,8 +84,9 @@ sub test_cryptographic_policies {
     }
 
     record_info("Restart sshd", "Restart sshd.service");
+    assert_script_run("cp /etc/ssh/sshd_config /tmp/sshd_config");
     # Bsc#1239976 Curl is not installed by default in minimal system role on aarch64
-    upload_logs("/etc/ssh/sshd_config") if (script_run("which curl") == 0);
+    upload_logs("/tmp/sshd_config") if (script_run("which curl") == 0);
     systemctl("restart sshd");
 
     # Add all the ssh public key hashes as known hosts
@@ -133,8 +128,12 @@ sub post_fail_hook {
 sub cleanup() {
     my $self = shift;
     systemctl('start ' . $self->firewall) if $reenable_firewall;
-    # Show debug log contents
-    script_run('cat /tmp/ssh_log*');
+    # eval guards against a wedged console timing out the upload/cat below.
+    eval { upload_logs('/tmp/ssh_log0', failok => 1) };
+    record_info('sshd cleanup', "upload of /tmp/ssh_log0 failed: $@") if $@;
+    # ssh_log0 is uploaded above already, so it's excluded here to avoid duplication.
+    eval { script_run('cat /tmp/ssh_log[12]', timeout => 30) };
+    record_info('sshd cleanup', "cat /tmp/ssh_log[12] failed: $@") if $@;
     script_run('rm -f /tmp/ssh_log*');
     check_journal();
 }

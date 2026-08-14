@@ -18,7 +18,7 @@
 #    - for each of the plugging/unplugging step above, check domain network status and host&guest status.
 # Maintainer: Julie CAO <JCao@suse.com>, qe-virt@suse.de
 
-use base "virt_feature_test_base";
+use Mojo::Base 'virt_feature_test_base';
 use utils;
 use testapi;
 use virt_autotest::common;
@@ -53,7 +53,7 @@ sub run_test {
     # Back up /etc/resolv.conf as it will refresh by creating VFs
     assert_script_run("cp /etc/resolv.conf /etc/resolv_before_enable_vf.conf");
 
-    record_info("Before enable VF", script_output("ip a"));
+    record_info("Before enabling VF", script_output("ip a"));
     script_run("ip r");
     script_run("nmcli con");
 
@@ -65,7 +65,7 @@ sub run_test {
         reset_consoles;
         select_console('root-ssh');
     }
-    script_run("ip a");
+    record_info("After enabling VF", script_output("ip a", proceed_on_failure => 1));
     script_run("nmcli con");
 
     # Restore /etc/resolv.conf after VFs are created
@@ -77,8 +77,11 @@ sub run_test {
             record_info("Skip SR-IOV test on $guest", "SEV/SEV-ES guest $guest does not support SR-IOV");
             next;
         }
+        if (is_pv_guest($guest)) {
+            record_soft_failure("bsc#1262599 - SR-IOV PCI passthrough is not supported on Xen PV guest $guest, skipping.");
+            next;
+        }
         record_info("Test $guest");
-        check_guest_health($guest);
         prepare_guest_for_sriov_passthrough($guest);
         save_network_device_status_logs($guest, "1-initial");
 
@@ -115,7 +118,7 @@ sub run_test {
         save_network_device_status_logs($guest, "2-after_hotplug_$vfs[0]->{host_id}");
         #check the networking of the plugged interface
         #use br123 as ssh connection
-        test_network_interface($guest, gateway => $gateway, mac => $vfs[0]->{vm_mac}, net => 'br123');
+        test_network_interface($guest, gateway => $gateway, mac => $vfs[0]->{vm_mac});
 
         #unplug the first vf from vm
         unplug_vf_from_vm($guest, $vfs[0]);
@@ -128,7 +131,7 @@ sub run_test {
         #test network after reboot as dhcp lease spends time
         for (my $i = 1; $i < $passthru_vf_count; $i++) {
             plugin_vf_device($guest, $vfs[$i]);
-            test_network_interface($guest, gateway => $gateway, mac => $vfs[$i]->{vm_mac}, net => 'br123') if $i == 1;
+            test_network_interface($guest, gateway => $gateway, mac => $vfs[$i]->{vm_mac}) if $i == 1;
             save_network_device_status_logs($guest, $i + 3 . "-after_hotplug_$vfs[$i]->{host_id}");
         }
 
@@ -140,7 +143,7 @@ sub run_test {
 
         #check the remaining vf(s) inside vm
         for (my $i = 1; $i < $passthru_vf_count; $i++) {
-            test_network_interface($guest, gateway => $gateway, mac => $vfs[$i]->{vm_mac}, net => 'br123');
+            test_network_interface($guest, gateway => $gateway, mac => $vfs[$i]->{vm_mac});
         }
 
         #unplug the remaining vf(s) from vm
@@ -290,7 +293,8 @@ sub prepare_guest_for_sriov_passthrough {
     }
 
     #passwordless access to guest
-    save_guest_ip($vm, name => "br123");    #get the guest ip via key words in 'virsh domiflist'
+    save_guest_ip($vm);
+    check_guest_health($vm);
 
     # Enable udev debug logs
     my $udev_conf_file = "/etc/udev/udev.conf";

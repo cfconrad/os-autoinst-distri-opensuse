@@ -9,7 +9,7 @@
 # - setting up systemd resolved locally, switch /etc/resolv.conf to it
 # Maintainer: qe-core <qe-core@suse.com>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -60,9 +60,9 @@ sub run {
     script_run 'cat /etc/systemd/resolved.conf.d/dns_over_tls.conf';
     systemctl 'restart systemd-resolved', timeout => 30;
     # Validate systemd-resolved with DNSSEC
-    validate_script_output("resolvectl query go.dnscheck.tools", sub { m/Data is authenticated: yes/ });
+    validate_script_output("resolvectl query dnscheck.tools", sub { m/Data is authenticated: yes/ });
     # Validate systemd-resolved with DNSOverTLS
-    validate_script_output("resolvectl query go.dnscheck.tools", sub { m/Data was acquired via local or encrypted transport: yes/ });
+    validate_script_output("resolvectl query dnscheck.tools", sub { m/Data was acquired via local or encrypted transport: yes/ });
     validate_script_output("resolvectl query www.suse.com", sub { m/\d+\.\d+\.\d+\.\d+/ });
 }
 

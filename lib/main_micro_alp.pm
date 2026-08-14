@@ -29,7 +29,7 @@ sub is_image {
 }
 
 sub is_dvd {
-    return get_required_var('FLAVOR') =~ /dvd/i;
+    return get_required_var('FLAVOR') =~ /dvd|^agama-install$/i;
 }
 
 sub is_regproxy_required {
@@ -39,7 +39,19 @@ sub is_regproxy_required {
 }
 
 sub load_config_tests {
-    loadtest 'transactional/tdup' if get_var('TDUP');
+    if (get_var('TDUP')) {
+        if (get_var("CONTAINER_RUNTIMES")) {
+            my $run_args = OpenQA::Test::RunArgs->new();
+            $run_args->{phase} = "pre";
+            loadtest 'containers/upgrade', run_args => $run_args, name => "upgrade_" . $run_args->{phase};
+        }
+        loadtest 'transactional/tdup';
+        if (get_var("CONTAINER_RUNTIMES")) {
+            my $run_args = OpenQA::Test::RunArgs->new();
+            $run_args->{phase} = "post";
+            loadtest 'containers/upgrade', run_args => $run_args, name => "upgrade_" . $run_args->{phase};
+        }
+    }
     loadtest 'rt/rt_is_realtime' if is_rt;
     loadtest 'transactional/enable_selinux' if (get_var('ENABLE_SELINUX') && is_image);
     loadtest 'console/suseconnect_scc' if (get_var('SCC_REGISTER') && !is_dvd);
@@ -143,6 +155,28 @@ sub load_installation_tests {
     replace_opensuse_repos_tests if is_repo_replacement_required;
 }
 
+sub load_agama_installation_tests {
+    loadtest 'installation/agama';
+    loadtest 'installation/agama_reboot';
+    loadtest 'microos/disk_boot';
+    loadtest 'console/textinfo';
+    replace_opensuse_repos_tests if is_repo_replacement_required;
+}
+
+sub load_yast_installation_tests {
+    if (check_var('HDDSIZEGB', '10')) {
+        load_10GB_installation_tests;
+        return 1;    # in 10G-disk tests, we don't run more tests
+    }
+    load_installation_tests;
+    # Stop here if we are testing only scc extensions (live, phub, ...) activation
+    my $is_phub = get_var('SCC_ADDONS');
+    if (defined($is_phub) && $is_phub =~ /phub/) {
+        loadtest 'transactional/check_phub';
+        return 1;
+    }
+}
+
 sub load_autoyast_installation_tests {
     loadtest 'autoyast/prepare_profile' if get_var('AUTOYAST_PREPARE_PROFILE');
     loadtest 'installation/bootloader_start';
@@ -211,13 +245,15 @@ sub load_common_tests {
     # Staging has no access to repos and the MicroOS-DVD does not contain ansible
     # Ansible test needs Packagehub in SLE and it can't be enabled in SLEM
     loadtest 'console/ansible' unless (is_staging || is_sle_micro || is_leap_micro);
-    loadtest 'console/salt' unless (is_staging || is_sle_micro);
+    loadtest 'console/salt' unless (is_staging || is_sle_micro || (is_jeos && is_transactional));
     # On s390x zvm setups we need more time to wait for system to boot up.
     # Skip this test with sd-boot. The reason is not what you'd think though:
     # With sd-boot, host_config does not perform a reboot and a snapshot is made while the serial terminal
     # is logged in. year_2038_detection does a forced rollback to this snapshot and triggers poo#109929,
     # breaking most later modules.
-    loadtest 'console/year_2038_detection' unless (is_s390x || is_sle_micro || is_leap_micro || is_bootloader_sdboot);
+    # Skip the test if setups don't support snapshot rollback due to bsc#1266277
+    loadtest 'console/year_2038_detection' unless (is_s390x || is_bootloader_sdboot || get_var('QEMU_DISABLE_SNAPSHOTS'));
+    loadtest 'console/synce4l_gpsd' if (is_sle_micro('>=6.2'));
 }
 
 
@@ -288,14 +324,14 @@ sub load_selinux_tests {
 sub load_rcshell_tests {
     # Tests before the YaST installation
     loadtest 'microos/rcshell_start';
-    loadtest 'microos/libzypp_config';
     loadtest 'microos/one_line_checks';
 }
 
 sub load_journal_check_tests {
     # Enclosing test cases
     loadtest 'console/journal_check';
-    loadtest 'console/coredump_collect';
+    # systemd-coredump is not available on SLEM 5.x
+    loadtest 'console/coredump_collect' unless (is_sle_micro("<6.0"));
     loadtest 'shutdown/shutdown';
 }
 
@@ -312,21 +348,25 @@ sub load_slem_on_pc_tests {
         # SLEM basic test
         loadtest("boot/boot_to_desktop");
         loadtest("publiccloud/prepare_instance", run_args => $args);
-        loadtest("publiccloud/registration", run_args => $args) unless (get_var('PUBLIC_CLOUD_IGNORE_UNREGISTERED'));
+        loadtest("publiccloud/registration", run_args => $args) unless (check_var('PUBLIC_CLOUD_IGNORE_UNREGISTERED', 1));
+        loadtest("publiccloud/network_test", run_args => $args);
+        loadtest("publiccloud/check_boottime", run_args => $args);
+        loadtest("publiccloud/kdump", run_args => $args);
+        loadtest("publiccloud/check_cloudinit", run_args => $args);
         # 2 next modules of pubcloud needed for sle-micro incidents/repos verification
         if (get_var('PUBLIC_CLOUD_QAM', 0)) {
             loadtest("publiccloud/transfer_repos", run_args => $args) unless (check_var('PUBLIC_CLOUD_SKIP_MU', 1));
             loadtest("publiccloud/patch_and_reboot", run_args => $args);
+            loadtest("publiccloud/check_cloudinit", run_args => $args);
         }
         if (get_var('PUBLIC_CLOUD_LTP', 0)) {
-            loadtest("publiccloud/run_ltp", run_args => $args);
+            loadtest 'publiccloud/run_ltp', run_args => $args;
         } elsif (get_var('PUBLIC_CLOUD_AISTACK')) {
             # AISTACK test verification
             loadtest("publiccloud/ssh_interactive_start", run_args => $args);
             loadtest("publiccloud/create_aistack_env", run_args => $args);
             loadtest("publiccloud/aistack_rbac_run", run_args => $args);
             loadtest("publiccloud/aistack_sanity_run", run_args => $args);
-            loadtest("publiccloud/ssh_interactive_end", run_args => $args);
         } elsif (is_container_test) {
             loadtest("publiccloud/ssh_interactive_start", run_args => $args);
             loadtest("publiccloud/instance_overview", run_args => $args);
@@ -337,12 +377,19 @@ sub load_slem_on_pc_tests {
                 $run_args->{runtime} = $_;
                 load_container_engine_test($run_args);
             }
-            loadtest("publiccloud/ssh_interactive_end", run_args => $args);
         } else {
             loadtest "publiccloud/check_services", run_args => $args;
             loadtest("publiccloud/slem_upgrade_next", run_args => $args) if (get_var('PUBLIC_CLOUD_MIGRATE_SLEM'));
-            loadtest("publiccloud/slem_basic", run_args => $args);
+            if (get_var('PUBLIC_CLOUD_IMG_PROOF_TESTS')) {
+                loadtest("publiccloud/img_proof", run_args => $args);
+            } else {
+                loadtest("publiccloud/slem_basic", run_args => $args);
+                loadtest "publiccloud/ssh_interactive_start", run_args => $args;
+                loadtest "publiccloud/instance_overview", run_args => $args;
+                loadtest "publiccloud/systemd_detect_virt", run_args => $args;
+            }
         }
+        loadtest("publiccloud/destroy", run_args => $args);
     }
 }
 
@@ -417,16 +464,10 @@ sub load_tests {
         return 1;
     } elsif (is_dvd) {
         load_boot_from_dvd_tests;
-        if (check_var('HDDSIZEGB', '10')) {
-            load_10GB_installation_tests;
-            return;    # in 10G-disk tests, we don't run more tests
-        }
-        load_installation_tests;
-        # Stop here if we are testing only scc extensions (live, phub, ...) activation
-        my $is_phub = get_var('SCC_ADDONS');
-        if (defined($is_phub) && $is_phub =~ /phub/) {
-            loadtest 'transactional/check_phub';
-            return;
+        if (is_agama) {
+            load_agama_installation_tests;
+        } else {
+            return if load_yast_installation_tests;
         }
     }
 

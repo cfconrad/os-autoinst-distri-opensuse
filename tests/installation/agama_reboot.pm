@@ -18,7 +18,7 @@
 #    we need to access to live root system to monitor installation process
 # Maintainer: Lubos Kocman <lubos.kocman@suse.com>,
 
-use base "installbasetest";
+use Mojo::Base 'installbasetest';
 use testapi;
 use version_utils qw(is_leap is_sle);
 use utils;
@@ -42,8 +42,9 @@ sub verify_agama_auto_install_done_cmdline {
     # so we need to make sure the installation has completed from command line.
     my $timeout = get_var('AGAMA_INSTALL_TIMEOUT', '480');
     while ($timeout > 0) {
-        if (script_run("journalctl -u agama | grep 'Install phase done'") == 0) {
-            record_info("agama install phase done");
+        my $check_install_finish = is_sle('<16.1') ? "journalctl -u agama -u agama-web-server.service | grep -E 'Install phase done|Installation finished'" : "agama status --format json | jq '.installation' | grep succeeded";
+        if (script_run("$check_install_finish", timeout => 60) == 0) {
+            record_info("agama install phase done", script_output('agama config show'));
             return;
         }
         sleep 20;
@@ -51,7 +52,7 @@ sub verify_agama_auto_install_done_cmdline {
     }
     # Add some debug info for quick check for tester before investigating full agama logs
     # See https://progress.opensuse.org/issues/182258
-    record_info('debug info', script_output('journalctl --no-pager -u agama -n 100'));
+    record_info('debug info', script_output('journalctl --no-pager -u agama -n 100;agama config show'));
     die "Install phase is not done, please check agama logs";
 }
 
@@ -101,6 +102,7 @@ sub post_fail_hook {
     return if (get_var('NOLOGS'));
 
     select_console("install-shell");
+    record_info('Disk devices', script_output('ls -l /dev/disk/by-id/'));
     export_healthcheck_basic();
     upload_agama_logs();
 }

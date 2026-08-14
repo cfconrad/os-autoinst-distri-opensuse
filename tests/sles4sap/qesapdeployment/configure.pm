@@ -132,14 +132,6 @@ The fencing mechanism to use (e.g., 'sbd', 'native'). Defaults to 'sbd'.
 
 (Azure-specific) The configuration for the native fence agent ('msi' or 'spn').
 
-=item B<QESAPDEPLOY_AZURE_SPN_APPLICATION_ID> or B<_SECRET_AZURE_SPN_APPLICATION_ID>
-
-(Azure-specific) The application ID for the Service Principal Name used for fencing.
-
-=item B<QESAPDEPLOY_AZURE_SPN_APP_PASSWORD> or B<_SECRET_AZURE_SPN_APP_PASSWORD>
-
-(Azure-specific) The password for the Service Principal Name used for fencing.
-
 =item B<QESAPDEPLOY_HANA_INSTALL_MODE>
 
 The installation mode for HANA. Defaults to 'standard'.
@@ -174,12 +166,13 @@ QE-SAP <qe-sap@suse.de>
 
 use Mojo::Base 'publiccloud::basetest';
 use publiccloud::azure_client;
-use publiccloud::utils qw(get_ssh_private_key_path detect_worker_ip);
+use publiccloud::utils qw(get_ssh_private_key_path detect_worker_ip get_credentials);
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use registration qw(get_addon_fullname scc_version %ADDONS_REGCODE);
 use qam 'get_test_repos';
 use sles4sap::qesap::qesapdeployment;
+use sles4sap::publiccloud;
 use sles4sap::ibsm;
 
 sub run {
@@ -197,7 +190,7 @@ sub run {
     }
 
     my %variables;
-    $variables{TERRAFORM_RUNNER} = get_var('QESAPDEPLOY_TERRAFORM_RUNNER', 'terraform');
+    $variables{TERRAFORM_RUNNER} = get_var('QESAPDEPLOY_TERRAFORM_RUNNER', 'tofu');
     script_run(join(' ',
             'which', $variables{TERRAFORM_RUNNER}, '&&',
             $variables{TERRAFORM_RUNNER}, '--version', '||',
@@ -277,8 +270,9 @@ sub run {
         if ($variables{FENCING} eq 'native') {
             $variables{AZURE_NATIVE_FENCING_AIM} = get_var('QESAPDEPLOY_AZURE_FENCE_AGENT_CONFIGURATION', 'msi');
             if ($variables{AZURE_NATIVE_FENCING_AIM} eq 'spn') {
-                $variables{AZURE_NATIVE_FENCING_APP_ID} = get_var('QESAPDEPLOY_AZURE_SPN_APPLICATION_ID', get_required_var('_SECRET_AZURE_SPN_APPLICATION_ID'));
-                $variables{AZURE_NATIVE_FENCING_APP_PASSWORD} = get_var('QESAPDEPLOY_AZURE_SPN_APP_PASSWORD', get_required_var('_SECRET_AZURE_SPN_APP_PASSWORD'));
+                my $data = get_credentials(url_suffix => 'azure.json');
+                save_tmp_file('spn_secret.yaml', "spn_application_id: $data->{fencing_client_id}\nspn_application_password: $data->{fencing_client_secret}");
+                assert_script_run('curl ' . autoinst_url . '/files/spn_secret.yaml -o ~/spn_secret.yaml');
             }
         }
     }

@@ -11,6 +11,7 @@ use Mojo::Base 'containers::basetest';
 use testapi;
 use serial_terminal qw(select_serial_terminal);
 use version_utils;
+use version;
 use Utils::Architectures;
 use containers::bats;
 
@@ -19,9 +20,25 @@ sub run_tests {
     my $rootless = $params{rootless};
 
     my %env = (
-        RUNC_USE_SYSTEMD => "1",
         RUNC => "/usr/bin/runc",
     );
+    # systemd cgroups manager only works on cgroup v2
+    $env{RUNC_USE_SYSTEMD} = "1" if (script_run("test -f /sys/fs/cgroup/cgroup.controllers") == 0);
+
+    if ($rootless && !is_sle("<15-SP6")) {
+        # /etc/subgid is keyed by user, not group
+        my ($gid_start, $gid_len) = split / /, script_output(
+            q(awk -F: -v user="$(id -un)" '$1 == user { print $2, $3; exit }' /etc/subgid)
+        );
+        my ($uid_start, $uid_len) = split / /, script_output(
+            q(awk -F: -v user="$(id -un)" '$1 == user { print $2, $3; exit }' /etc/subuid)
+        );
+        $env{ROOTLESS_FEATURES} = "idmap";
+        $env{ROOTLESS_GIDMAP_START} = $gid_start;
+        $env{ROOTLESS_GIDMAP_LENGTH} = $gid_len;
+        $env{ROOTLESS_UIDMAP_START} = $uid_start;
+        $env{ROOTLESS_UIDMAP_LENGTH} = $uid_len;
+    }
 
     my $log_file = "runc-" . ($rootless ? "user" : "root");
 
@@ -33,14 +50,14 @@ sub run_tests {
         "userns.bats::userns join other container userns",
     ) if (is_sle("<16") && $rootless);
 
-    return bats_tests($log_file, \%env, \@xfails, 2000);
+    return bats_tests($log_file, \%env, \@xfails, 3000);
 }
 
 sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    my @pkgs = qw(glibc-devel-static go1.24 libseccomp-devel make runc);
+    my @pkgs = qw(glibc-devel-static go1.26 libseccomp-devel make runc);
     push @pkgs, "criu" if is_tumbleweed;
 
     $self->setup_pkgs(@pkgs);
@@ -59,13 +76,6 @@ sub run {
     my $helpers = script_output "find contrib/cmd tests/cmd -mindepth 1 -maxdepth 1 -type d ! -name _bin -printf '%f ' || true";
     record_info("helpers", $helpers);
     run_command "make $helpers || true";
-
-    unless (get_var("RUN_TESTS")) {
-        # Skip this test due to https://bugzilla.suse.com/show_bug.cgi?id=1247568
-        run_command "rm -f tests/integration/no_pivot.bats" if is_ppc64le;
-        # Skip this test due to https://bugzilla.suse.com/show_bug.cgi?id=1247567
-        run_command "rm -f tests/integration/seccomp.bats" if is_s390x;
-    }
 
     my $errors = 0;
     $errors += run_tests(rootless => 1) unless check_var('BATS_IGNORE_USER', 'all');

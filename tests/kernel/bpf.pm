@@ -1,15 +1,16 @@
-# Copyright 2025 SUSE LLC
+# Copyright 2025-2026 SUSE LLC
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # Package: bpf
 # Summary: Compile and load a BPF sample program from Linux mainline
 # Maintainer: kernel-qa@suse.de
 
-use Mojo::Base qw(opensusebasetest);
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use utils;
+use package_utils 'install_package';
 use version_utils qw(is_sle);
-use registration qw(add_suseconnect_product get_addon_fullname);
+use registration qw(add_suseconnect_product get_addon_fullname is_phub_ready);
 use serial_terminal qw(select_serial_terminal);
 
 sub run {
@@ -18,8 +19,15 @@ sub run {
     select_serial_terminal;
     record_info('KERNEL VERSION', script_output('uname -a'));
 
-    add_suseconnect_product(get_addon_fullname('phub')) if is_sle;    # For clang
-    zypper_call("in clang bpftool libbpf-devel");
+    if (is_sle) {
+        unless (is_phub_ready) {
+            record_soft_failure("poo#194023 PackageHub not available - skipping BPF test");
+            return;
+        }
+        add_suseconnect_product(get_addon_fullname('phub'));    # For clang
+        zypper_call("--gpg-auto-import-keys ref");
+    }
+    install_package('clang bpftool libbpf-devel', trup_apply => 1);
 
     # Build the BPF program
     assert_script_run('curl -sO ' . data_url('kernel/trace_output.bpf.c'));

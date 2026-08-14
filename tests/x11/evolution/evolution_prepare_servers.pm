@@ -14,7 +14,7 @@
 # - Create 2 test users: admin and nimda
 # Maintainer: Petr Cervinka <pcervinka@suse.com>
 
-use base "opensusebasetest";
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -40,7 +40,7 @@ sub run() {
             zypper_call("in --force-resolution postfix", exitcode => [0, 102, 103]);
             systemctl 'start postfix';
         }
-        zypper_call("in dovecot 'openssl(cli)'", exitcode => [0, 102, 103]);
+        zypper_call("in dovecot 'openssl(cli)' postfix", exitcode => [0, 102, 103]);
         zypper_call("in --force-resolution postfix", exitcode => [0, 102, 103]) if is_jeos;
     }
 

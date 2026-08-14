@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     aws = {
-      version = "= 5.98.0"
+      version = "= 6.38.0"
       source  = "hashicorp/aws"
     }
     random = {
@@ -88,6 +88,14 @@ variable "ssh_public_key" {
   default = "/root/.ssh/id_ed25519.pub"
 }
 
+variable "nitro_enclave" {
+  default = false
+}
+
+data "aws_iam_instance_profile" "ec2_cloudwatch" {
+  name       = "OpenQAEC2CloudWatchLogsRole" 
+}
+
 resource "random_id" "service" {
   count = var.instance_count
   keepers = {
@@ -111,6 +119,8 @@ resource "aws_instance" "openqa" {
   subnet_id              = var.subnet_id
   ipv6_address_count     = var.ipv6_address_count
 
+  iam_instance_profile = data.aws_iam_instance_profile.ec2_cloudwatch.name
+
   tags = merge({
     openqa_created_by   = var.name
     openqa_created_date = timestamp()
@@ -131,6 +141,11 @@ resource "aws_instance" "openqa" {
     content {
       amd_sev_snp = var.enable_confidential_vm
     }
+  }
+
+  # AWS Nitro Enclave
+  enclave_options {
+    enabled = var.nitro_enclave
   }
 
   user_data = var.cloud_init != "" ? file(var.cloud_init) : null

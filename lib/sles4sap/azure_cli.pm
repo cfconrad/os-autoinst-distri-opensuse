@@ -25,7 +25,6 @@ Library to compose and run Azure cli commands
 
 our @EXPORT = qw(
   az_version
-  az_account_show
   az_group_create
   az_group_name_get
   az_group_delete
@@ -74,6 +73,7 @@ our @EXPORT = qw(
   az_disk_create
   az_resource_delete
   az_resource_list
+  az_resource_tag
   az_validate_uuid_pattern
   az_keyvault_list
   az_keyvault_secret_list
@@ -90,6 +90,79 @@ our @EXPORT = qw(
   az_role_definition_list
 );
 
+# Workaround for bsc#1261229 - az-cli-cmd 'Launching flake' message breaks JSON output format
+our $SDAF_Azure_podman_flake_filter = (get_var('SDAF_GIT_AUTOMATION_BRANCH', '') =~ /feature\/sles16/)
+  ? "2> >(grep -Ev 'FutureWarning|Launching flake|self.' >&2)"
+  : '';
+
+=head2 az
+
+    az(az_args => 'group list' [, query => '[].name']);
+
+Executes az cli command specified. Commands are executed with `-o json`
+Returns perl data structure containing return code, command output, errors.
+
+Example:
+{
+    rc => '0',
+    output => ['group_name_a', 'group_name_b'],
+    error => ''
+}
+
+=over
+
+=item B<az_args> - Specify arguments passed to `az cli`
+
+=item B<query> - specify `--query`
+
+=item B<quiet> - pass B<quiet> to azure cli commands
+
+=item B<timeout> - override default bmwqemu timeout for `az cli` command
+
+=back
+=cut
+
+sub az(%args) {
+    $args{timeout} //= $bmwqemu::default_timeout;
+    croak 'Command `az` is not needed in $args{az_args}'
+      if $args{az_args} =~ /az/;
+    croak 'Missing mandatory argument: <az_args>' unless $args{az_args};
+    croak 'Jmespath query "--query" must be specified using $args{query}'
+      if $args{az_args} =~ /--query/;
+    croak 'Argument "--only-show-errors" is used by default and not needed.'
+      if $args{az_args} =~ /--only-show-errors/;
+    croak 'Argument "--output" is not supported.'
+      if $args{az_args} =~ /--output/;
+
+    my %result;
+    # Create unique temporary files (inside /tmp by default)
+    my $err_file = script_output('mktemp --suffix _az.err', quiet => '1');
+    my $out_file = script_output('mktemp --suffix _az.json', quiet => '1');
+
+    my @az_cmd = ('az', $args{az_args});
+    push @az_cmd, '--only-show-errors';
+    push @az_cmd, "--query \"$args{query}\"" if $args{query};
+    push @az_cmd, '--output json';
+    # Remove lines which should not be considered as error.
+    my $grep_filter = 'FutureWarning|self.|Launching flake';
+    # This should be at the end of whole command !
+    push @az_cmd, "> $out_file 2> >(grep -Ev \"$grep_filter\" |tee $err_file >&2)";
+
+    $result{rc} = script_run(join(' ', @az_cmd),
+        quiet => $args{quiet}, timeout => $args{timeout});
+    $result{output} = decode_json(script_output("cat $out_file",
+            quiet => $args{quiet}));
+    $result{error} = script_output("cat $err_file",
+        quiet => $args{quiet});
+
+    die "Error messages present during az cli execution:\n$result{error}\n"
+      if $result{error};
+    die "AZ CLI returned non zero value:$result{rc}\n" if $result{error};
+
+    # Delete unique temporary files
+    assert_script_run("rm $err_file $out_file", quiet => '1');
+    return \%result;
+}
 
 =head2 az_version
 
@@ -101,7 +174,6 @@ Print the version of the az cli available on system
 sub az_version {
     assert_script_run('az --version');
 }
-
 
 =head2 az_group_create
 
@@ -136,7 +208,9 @@ sub az_group_create(%args) {
 
 Get the name of all existing Resource Group in the current subscription.
 By default the output is an array of strings.
-Output can be modified using B<$args{query}>.
+Output is always an hash with `data` and `err` keys:
+`data` is the decode_json of the stdout. The internal data structure can change accordingly to what is provided via B<query>
+`err` is the stderr string, key is always present but it could have empty value.
 
 =over
 
@@ -147,11 +221,18 @@ Output can be modified using B<$args{query}>.
 
 sub az_group_name_get(%args) {
     $args{query} //= '[].name';
+    my $err_file = '/tmp/az_cli.err';
     my $az_cmd = join(' ',
         'az group list',
         "--query \"$args{query}\"",
-        '-o json');
-    return decode_json(script_output($az_cmd));
+        '-o json',
+        "2> $err_file"
+    );
+    my $data = decode_json(script_output($az_cmd));
+    # Prepare return hash
+    my $result = {data => $data};
+    $result->{err} = script_output("cat $err_file 2>/dev/null || echo -n ''");
+    return $result;
 }
 
 =head2 az_group_delete
@@ -182,9 +263,7 @@ sub az_group_delete(%args) {
 
     az_group_exists(name => 'resource group name' [, quiet=>'pssst!']);
 
-Check if specified resource group exists.
-Returns whatever 'az group exist' is returning
-that usually is string B<true> or B<false>.
+Returns non-empty value if resource group exists, otherwise B<undef>
 
 =over
 
@@ -197,7 +276,11 @@ that usually is string B<true> or B<false>.
 
 sub az_group_exists(%args) {
     croak "Missing mandatory argument: 'name'" unless $args{name};
-    return script_output("az group exists --resource-group $args{name}", quiet => $args{quiet});
+    my $out = az(az_args => "group exists --resource-group $args{name}",
+        quiet => $args{quiet});
+    die "Command failed.\nCommand didn't return a boolean value: $out->{output}"
+      unless JSON::PP::is_bool($out->{output});
+    return $out->{output};
 }
 
 =head2 az_network_vnet_create
@@ -329,7 +412,8 @@ sub az_network_vnet_get(%args) {
     my $az_cmd = join(' ', 'az network vnet list',
         '-g', $args{resource_group},
         "--query \"$args{query}\"",
-        '-o json');
+        '-o json',
+        $SDAF_Azure_podman_flake_filter);
     return decode_json(script_output($az_cmd));
 }
 
@@ -749,6 +833,9 @@ sub az_vm_as_show(%args) {
         '--name', $args{name},
         '-o table');
     assert_script_run($az_cmd);
+
+    # Debug code for TEAM-11039
+    assert_script_run("az provider show --namespace Microsoft.Compute --query \"resourceTypes[?resourceType=='availabilitySets'].apiVersions\"");
 }
 
 =head2 az_img_from_vhd_create
@@ -831,6 +918,8 @@ Create a virtual machine
 
 =item B<tags> - reference to a list of tags to apply to the VM
 
+=item B<debug> - if not zero add --debug
+
 =back
 =cut
 
@@ -842,6 +931,7 @@ sub az_vm_create(%args) {
     croak("At least one between argument < image > or < attach_os_disk > are needed") unless ($args{image} || $args{attach_os_disk});
 
     my @vm_create = ('az vm create');
+    push @vm_create, '--debug' if $args{debug};
     push @vm_create, '--resource-group', $args{resource_group};
     push @vm_create, '-n', $args{name};
     push @vm_create, '--image', $args{image} if $args{image};
@@ -890,12 +980,9 @@ sub az_vm_list(%args) {
     croak("Argument < resource_group > missing") unless $args{resource_group};
     $args{query} //= '[].name';
 
-    my $az_cmd = join(' ',
-        'az vm list',
-        "-g $args{resource_group}",
-        "--query \"$args{query}\"",
-        '-o json');
-    return decode_json(script_output($az_cmd));
+    my $az_args = "vm list -g $args{resource_group}";
+    my $result = az(az_args => $az_args, query => $args{query});
+    return $result->{output};
 }
 
 
@@ -1174,7 +1261,8 @@ sub az_nic_create(%args) {
             '--subnet', $args{subnet},
             '--network-security-group', $args{nsg},
             '--private-ip-address-version IPv4',
-            '--public-ip-address', $args{pubip_name}));
+            '--public-ip-address', $args{pubip_name},
+            $SDAF_Azure_podman_flake_filter));
 }
 
 =head2 az_nic_get
@@ -1421,19 +1509,39 @@ Return a list of diagnostic file paths on the JumpHost
 
 =item B<resource_group> - existing resource group where to search for a specific VM
 
+=item B<timeout> - max expected execution time for a single az command - default 240sec
+
+=item B<verbose> - use tee to print the output also on the terminal while redirecting to file. Default 0
+
 =back
 =cut
 
 sub az_vm_diagnostic_log_get(%args) {
     croak("Argument < resource_group > missing") unless $args{resource_group};
 
+    my $timeout = $args{timeout} // 240;
     my @diagnostic_log_files;
     my $vm_data = az_vm_list(resource_group => $args{resource_group}, query => '[].{id:id,name:name}');
     my $az_get_logs_cmd = 'az vm boot-diagnostics get-boot-log --ids';
+    my $ret;
+    my $err;
+    my $redirect = $args{verbose} ? '|& tee' : '&>';
+    my $boot_diagnostics_log;
     foreach (@{$vm_data}) {
-        my $boot_diagnostics_log = '/tmp/boot-diagnostics_' . $_->{name} . '.txt';
-        push @diagnostic_log_files, $boot_diagnostics_log unless
-          script_run(join(' ', $az_get_logs_cmd, $_->{id}, '|&', 'tee', $boot_diagnostics_log));
+        $boot_diagnostics_log = '/tmp/boot-diagnostics_' . $_->{name} . '.txt';
+        eval {
+            $ret = script_run(
+                join(' ', $az_get_logs_cmd, $_->{id}, $redirect, $boot_diagnostics_log),
+                timeout => $timeout);
+        };
+        $err = $@;
+        if ($err || !defined $ret || $ret != 0) {
+            my $detail = ($err && $err =~ /\S/) ? "$err" : "Exit code: $ret";
+            my $fail_msg = "Failed to get boot diagnostics for $_->{name}: $detail";
+            record_info('Diag Warn', $fail_msg, result => 'fail');
+            next;
+        }
+        push(@diagnostic_log_files, $boot_diagnostics_log);
     }
     return @diagnostic_log_files;
 }
@@ -1581,7 +1689,9 @@ sub az_network_peering_list(%args) {
         '--resource-group', $args{resource_group},
         '--vnet-name', $args{vnet},
         "--query \"$args{query}\"",
-        '-o json');
+        '-o json',
+        $SDAF_Azure_podman_flake_filter
+    );
     return decode_json(script_output($az_cmd));
 }
 
@@ -1740,7 +1850,7 @@ sub az_resource_delete(%args) {
 
 Lists existing az resources based on arguments provided. Calling function without any argument returns full information
 from all existing resource groups.
-Returns decoded json structure if json format is requested, otherwise whole output is a string.
+Returns data structure returned from az cli json output.
 
 =over
 
@@ -1752,12 +1862,45 @@ Returns decoded json structure if json format is requested, otherwise whole outp
 =cut
 
 sub az_resource_list(%args) {
-    my @az_command = ('az resource list');
+    $args{query} //= undef;
+    my @az_command = ('resource list');
     push(@az_command, "--resource-group $args{resource_group}") if $args{resource_group};
-    push(@az_command, "--query \"$args{query}\"") if $args{query};
+    my $az_out = az(az_args => join(' ', @az_command), query => $args{query});
+    return $az_out->{output};
+}
+
+=head2 az_resource_tag
+
+    az_resource_tag(resource_ids=>['/id/a', '/id/b'], tags=>['pcw_ignore=1']);
+
+Tags list of resource IDs with list of tags
+
+=over
+
+=item B<resource_ids> List of existing resource id that will be tagged
+
+=item B<tags> List of tags
+
+=back
+=cut
+
+sub az_resource_tag(%args) {
+
+    for my $argument ('resource_ids', 'tags') {
+        croak "Mandatory argument '$argument' missing" unless $args{$argument};
+        croak "Argument '$argument' must be an array reference" unless
+          (ref($args{$argument}) eq 'ARRAY');
+    }
+
+    my $resources = join(' ', map("\"$_\"", @{$args{resource_ids}}));
+    my $tags = join(' ', map("\"$_\"", @{$args{tags}}));
+
+    my @az_command = ('az resource tag');
+    push(@az_command, "--ids $resources");
+    push(@az_command, "--tags $tags");
     push(@az_command, '--output json');
 
-    return (decode_json(script_output(join(' ', @az_command))));
+    return (assert_script_run(join(' ', @az_command)));
 }
 
 =head2 az_validate_uuid_pattern
@@ -1803,7 +1946,7 @@ sub az_validate_uuid_pattern(%args) {
     az_storage_blob_upload(
         container_name=>'somecontainer',
         storage_account_name=>'storageaccount',
-        file=>'somefilename' [, timeout=>42]);
+        file=>'somefilename' [, timeout=>42, name=>'blob_name.txt']);
 
 Uploads file to a storage container.
 
@@ -1814,6 +1957,8 @@ Uploads file to a storage container.
 =item B<storage_account_name> Storage account name.
 
 =item B<file> File to upload.
+
+=item B<name> Target blob filename. (Optional)
 
 =item B<timeout> Timeout for az command. Default: 90s
 
@@ -1826,14 +1971,14 @@ sub az_storage_blob_upload(%args) {
     }
     $args{timeout} //= '90';
 
-    my $az_cmd = join(' ',
-        'az storage blob upload',
+    my @az_cmd = ('az storage blob upload',
         '--only-show-errors',
         "--container-name $args{container_name}",
         "--account-name $args{storage_account_name}",
         "--file $args{file}"
     );
-    assert_script_run(join(' ', $az_cmd), timeout => $args{timeout});
+    push @az_cmd, "--name $args{name}" if $args{name};
+    assert_script_run(join(' ', @az_cmd), timeout => $args{timeout});
 }
 
 =head2 az_storage_blob_lease_acquire
@@ -1842,7 +1987,8 @@ sub az_storage_blob_upload(%args) {
         container_name       => 'somecontainer',
         storage_account_name => 'storageaccount',
         blob_name            => 'somefilename',
-        lease_duration       => 60
+        lease_duration       => 60,
+        timeout => 120
     );
 
 Acquire a lease for a storage blob.
@@ -1871,6 +2017,8 @@ B<Return value:>
 
 =item B<blob_name> Blob name to acquire lease for.
 
+=item B<timeout> az command timeout: default of `wait_serial` https://open.qa/api/testapi/#script_output
+
 =item B<lease_duration> Specifies the duration of the lease in seconds. A non-infinite
                         lease can be between 15 and 60 seconds. A value of -1 indicates an infinite
                         lease. Default: -1 (infinite).
@@ -1891,12 +2039,14 @@ sub az_storage_blob_lease_acquire(%args) {
         "--account-name $args{storage_account_name}",
         "--blob-name $args{blob_name}",
         "--lease-duration $args{lease_duration}",
-        '--output tsv'    # Json output won't work here.
-                          # If it is not possible to acquire lease command will return a message which is not in json format.
-                          # decode_json() would cause function to fail instead of just returning
+        '--output tsv',
+        # Json output won't work here.
+        # If it is not possible to acquire lease command will return a message which is not in json format.
+        # decode_json() would cause function to fail instead of just returning
+        $SDAF_Azure_podman_flake_filter
     );
 
-    my $lease_id = script_output($az_cmd, proceed_on_failure => 1);
+    my $lease_id = script_output($az_cmd, $args{timeout}, proceed_on_failure => 1, timeout => 180);
     record_info('AZ CLI out', "AZ CLI returned output:\n $lease_id");
     # Return a string if az_validate_uuid_pattern return "true"
     # otherwise return undef, thanks to Perl's implicit return that get value from the if statement.
@@ -1907,7 +2057,8 @@ sub az_storage_blob_lease_acquire(%args) {
 
     az_storage_blob_list(
         container_name=>'somecontainer',
-        storage_account_name=>'storageaccount' [, query=>'[].name']
+        storage_account_name=>'storageaccount' [, query=>'[].name'],
+        timeout => 120
     );
 
 List information about storage blob(s) specified by B<storage_account_name>, B<container_name> and B<query>.
@@ -1920,6 +2071,8 @@ List information about storage blob(s) specified by B<storage_account_name>, B<c
 
 =item B<query> Query in jmespath format
 
+=item B<timeout> az command timeout: default of `wait_serial` https://open.qa/api/testapi/#script_output
+
 =back
 =cut
 
@@ -1928,17 +2081,16 @@ sub az_storage_blob_list(%args) {
         croak "Missing mandatory argument: '$_'" unless $args{$_};
     }
     $args{query} //= '[].name';
+    $args{timeout} //= $bmwqemu::default_timeout;
 
     my $az_cmd = join(' ',
-        'az storage blob list',
-        '--only-show-errors',
+        'storage blob list',
         "--container-name $args{container_name}",
-        "--account-name $args{storage_account_name}",
-        "--query \"$args{query}\"",
-        '--output json'
+        "--account-name $args{storage_account_name}"
     );
-
-    return decode_json(script_output($az_cmd));
+    my $out =
+      az(az_args => $az_cmd, timeout => $args{timeout}, query => $args{query});
+    return $out->{output};
 }
 
 =head2 az_storage_blob_update
@@ -1970,11 +2122,12 @@ sub az_storage_blob_update(%args) {
         '--container-name', $args{container_name},
         '--account-name', $args{account_name},
         '--name', $args{name},
-        '--output json'
+        '--output json',
+        $SDAF_Azure_podman_flake_filter
     );
     push(@az_cmd, "--lease-id $args{lease_id}") if $args{lease_id};
 
-    return script_run(join(' ', @az_cmd));
+    return script_run(join(' ', @az_cmd), timeout => 180);
 }
 
 =head2 az_keyvault_list
@@ -2001,7 +2154,8 @@ sub az_keyvault_list(%args) {
         '--only-show-errors',
         '--resource-group', $args{resource_group},
         '--query', "$args{query}",
-        '--output json'
+        '--output json',
+        $SDAF_Azure_podman_flake_filter
     );
 
     return decode_json(script_output(join(' ', @az_cmd)));
@@ -2031,7 +2185,8 @@ sub az_keyvault_secret_list(%args) {
         '--only-show-errors',
         '--vault-name', $args{vault_name},
         '--query', "$args{query}",
-        '--output json'
+        '--output json',
+        $SDAF_Azure_podman_flake_filter
     );
 
     return decode_json(script_output(join(' ', @az_cmd)));
@@ -2112,7 +2267,11 @@ sub az_network_vnet_show {
     foreach (@mandatory_args) {
         croak "Missing mandatory argument: '$_'" unless $args{$_};
     }
-    my @cmd = ('az network vnet show', "--resource-group $args{resource_group}", "--name $args{name}");
+    my @cmd = ('az network vnet show',
+        "--resource-group $args{resource_group}",
+        "--name $args{name}",
+        $SDAF_Azure_podman_flake_filter
+    );
     push @cmd, "--query \"$args{query}\"" if $args{query};
 
     return decode_json(script_output(join(' ', @cmd)));
@@ -2136,7 +2295,11 @@ Creates private DNS zone within specified B<resource_group>.
 sub az_network_dns_zone_create {
     my (%args) = @_;
     foreach ('resource_group', 'name') { croak "Missing mandatory argument: '$_'" unless $args{$_}; }
-    my @cmd = ('az network private-dns zone create', "--resource-group $args{resource_group}", "--name $args{name}");
+    my @cmd = ('az network private-dns zone create',
+        "--resource-group $args{resource_group}",
+        "--name $args{name}",
+        $SDAF_Azure_podman_flake_filter
+    );
 
     return assert_script_run(join(' ', @cmd));
 }
@@ -2162,7 +2325,9 @@ sub az_network_dns_zone_delete {
     my @cmd = ('az network private-dns zone delete',
         "--resource-group $args{resource_group}",
         "--name $args{zone_name}",
-        '--yes');
+        '--yes',
+        $SDAF_Azure_podman_flake_filter
+    );
 
     return assert_script_run(join(' ', @cmd));
 }
@@ -2187,7 +2352,7 @@ sub az_network_dns_zone_list {
     croak "Missing mandatory argument: 'resource_group'" unless $args{resource_group};
     $args{query} //= '[].name';
     return decode_json(
-        script_output("az network private-dns zone list --resource-group $args{resource_group} --query \"$args{query}\"")
+        script_output("az network private-dns zone list --resource-group $args{resource_group} --query \"$args{query}\" $SDAF_Azure_podman_flake_filter")
     );
 }
 
@@ -2224,7 +2389,8 @@ sub az_network_dns_add_record {
         "--resource-group $args{resource_group}",
         "--zone-name $args{zone_name}",
         "--record-set-name $args{record_name}",
-        "--ipv4-address $args{ip_addr}"
+        "--ipv4-address $args{ip_addr}",
+        $SDAF_Azure_podman_flake_filter
     );
 
     return assert_script_run(join(' ', @cmd));
@@ -2240,6 +2406,9 @@ sub az_network_dns_add_record {
     );
 
 Creates private DNS zone link between VNET and DNS zone.
+Argument '--registration-enabled' controls whether the VNet's virtual machines automatically
+register their own DNS records in that private zone.
+Setting it to false (Common Use Cases) means Auto-Registration is disabled.
 
 =over
 
@@ -2264,7 +2433,8 @@ sub az_network_dns_link_create {
         "--zone-name $args{zone_name}",
         "--virtual-network $args{vnet}",
         "--name $args{name}",
-        '--registration-enabled true'    # This updates all VMs A records immediately
+        '--registration-enabled false',
+        $SDAF_Azure_podman_flake_filter    # This updates all VMs A records immediately
     );
 
     return assert_script_run(join(' ', @cmd));
@@ -2300,7 +2470,8 @@ sub az_network_dns_link_delete {
         "--resource-group $args{resource_group}",
         "--zone-name $args{zone_name}",
         "--name $args{link_name}",
-        '--yes'    # autoconfirm
+        '--yes',
+        $SDAF_Azure_podman_flake_filter
     );
 
     return assert_script_run(join(' ', @cmd));
@@ -2332,7 +2503,8 @@ sub az_network_dns_link_list {
         'az network private-dns link vnet list',
         "--resource-group $args{resource_group}",
         "--zone-name $args{zone_name}",
-        "--query \"$args{query}\""
+        "--query \"$args{query}\"",
+        $SDAF_Azure_podman_flake_filter
     );
 
     return decode_json(script_output(join(' ', @cmd)));
@@ -2388,29 +2560,7 @@ sub az_network_dns_zones_cleanup {
     }
 }
 
-=head2 az_account_show
-
-
-Get account informations, by default the ID. By default the output is an strings.
-Output can be modified using B<$args{query}>.
-
-=over
-
-=item B<query> - Modify output filter using jmespath query. Default: 'id'
-
-=back
-=cut
-
-sub az_account_show {
-    my (%args) = @_;
-    $args{query} //= 'id';
-    my $az_cmd = join(' ', 'az account show',
-        "--query '$args{query}'",
-        '-o json');
-    return decode_json(script_output($az_cmd));
-}
-
-=head2
+=head2 az_role_definition_list
 
 List and return id about named role
 

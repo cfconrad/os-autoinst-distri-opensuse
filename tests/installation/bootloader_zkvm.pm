@@ -7,6 +7,8 @@
 # Summary: Interface with the zKVM bootloader based on test settings
 # Maintainer: Matthias Grießmeier <mgriessmeier@suse.de>
 
+## no os-autoinst style
+
 package bootloader_zkvm;
 
 use base "installbasetest";
@@ -17,7 +19,7 @@ use registration;
 use testapi;
 use utils qw(OPENQA_FTP_URL type_line_svirt save_svirt_pty);
 use ntlm_auth;
-use version_utils qw(is_agama);
+use version_utils qw(is_agama is_sle);
 use autoyast qw(expand_agama_profile parse_dud_parameter);
 use Yam::Agama::LiveIso qw(read_live_iso);
 
@@ -30,7 +32,7 @@ sub set_svirt_domain_elements {
         my $name = $svirt->name;
 
         my $ntlm_p = get_var('NTLM_AUTH_INSTALL') ? $ntlm_auth::ntlm_proxy : '';
-        my $cmdline = get_var('VIRSH_CMDLINE') . $ntlm_p . " ";
+        my $cmdline = get_var('VIRSH_CMDLINE') . " " . $ntlm_p . " ";
         if (is_agama) {
             my $mirror_http = get_required_var('MIRROR_HTTP');
             $cmdline .= " root=live:$mirror_http/LiveOS/squashfs.img live.password=$testapi::password";
@@ -54,7 +56,7 @@ sub set_svirt_domain_elements {
         $cmdline .= ' ' . get_var("EXTRABOOTPARAMS") if get_var("EXTRABOOTPARAMS");
         # inst.auto and inst.install_url are defined in 'specific_bootmenu_params'
         $cmdline .= specific_bootmenu_params;
-        if (!(is_agama && check_var('FLAVOR', 'Full'))) {
+        if (check_var('AGAMA_FORCE_REGISTER', '1') || !(is_agama && check_var('FLAVOR', 'Full'))) {
             $cmdline .= registration_bootloader_cmdline if check_var('SCC_REGISTER', 'installation') && !get_var('NTLM_AUTH_INSTALL');
         }
 
@@ -63,9 +65,11 @@ sub set_svirt_domain_elements {
         $svirt->change_domain_element(os => cmdline => $cmdline);
 
         # show this on screen and make sure that kernel and initrd are actually saved
-        enter_cmd "wget $repo/boot/s390x/initrd -O $zkvm_img_path/$name.initrd";
+        my $boot_path = "$repo/boot/s390x";
+        $boot_path .= "/loader" if (is_sle('16.1+'));
+        enter_cmd "wget $boot_path/initrd -O $zkvm_img_path/$name.initrd";
         assert_screen("initrd-saved", timeout => 300);
-        enter_cmd "wget $repo/boot/s390x/linux -O $zkvm_img_path/$name.kernel";
+        enter_cmd "wget $boot_path/linux -O $zkvm_img_path/$name.kernel";
         assert_screen("kernel-saved", timeout => 300);
     }
     # after installation we need to redefine the domain, so just shutdown
@@ -86,11 +90,12 @@ sub run {
     record_info('virsh freecell --all', $svirt->get_cmd_output('virsh freecell --all'));
     record_info('virsh domstats', $svirt->get_cmd_output('virsh domstats'));
     set_svirt_domain_elements $svirt;
+    $svirt->stop_vm;
     zkvm_add_disk $svirt;
     zkvm_add_pty $svirt;
     zkvm_add_interface $svirt;
 
-    $svirt->define_and_start;
+    $svirt->define_and_start(pre_cleanup => 0);
     record_info('SUT hostname', get_var('VIRSH_HOSTNAME'));
     record_info('VM instance', get_var('VIRSH_INSTANCE'));
     record_info('Guest ip', get_var('VIRSH_GUEST'));

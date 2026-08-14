@@ -6,14 +6,15 @@
 # Summary: Validate TPM FDE.
 # Testing for the presence of a TPM.
 
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 
 sub run {
     select_console 'root-console';
+    zypper_call("mr -e SLES") if (check_var('FLAVOR', 'Full'));
     zypper_call("in tpm2.0-tools");
     assert_script_run("fdectl tpm-present");
 }

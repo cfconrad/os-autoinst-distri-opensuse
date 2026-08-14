@@ -8,13 +8,14 @@
 # Test wireguard with nmcli
 # Maintainer: qe-core <qe-core@suse.com>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
 use registration;
 use lockapi;
 use mmapi 'wait_for_children';
+use package_utils 'install_package';
 
 sub run {
     if (get_var('IS_MM_SERVER')) {
@@ -39,7 +40,7 @@ sub run {
         $vpn_local = '192.168.2.2';
         $vpn_remote = '192.168.2.1';
     }
-    zypper_call 'in wireguard-tools';
+    install_package('wireguard-tools', trup_reboot => 1);
     ## Test wireguard with NetworkManager
     assert_script_run('cd /etc/wireguard');
     if (get_var('IS_MM_SERVER')) {

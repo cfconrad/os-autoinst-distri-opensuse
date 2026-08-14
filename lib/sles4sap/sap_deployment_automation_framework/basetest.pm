@@ -19,8 +19,9 @@ use sles4sap::sap_deployment_automation_framework::naming_conventions;
 use sles4sap::sap_deployment_automation_framework::inventory_tools;
 use sles4sap::console_redirection;
 use sles4sap::azure_cli;
+use sles4sap::ibsm qw(ibsm_network_peering_azure_delete);
 
-our @EXPORT = qw(full_cleanup $serial_regexp_playbook ibsm_data_collect _sdaf_ibsm_teardown);
+our @EXPORT = qw(full_cleanup $serial_regexp_playbook sdaf_ibsm_data_collect sdaf_ibsm_teardown);
 our $serial_regexp_playbook = 0;
 
 =head1 SYNOPSIS
@@ -49,11 +50,6 @@ unnecessary cleanup commands. Cleanup is done in following order:
 =cut
 
 sub full_cleanup {
-    if (get_var('SDAF_RETAIN_DEPLOYMENT')) {
-        record_info('Cleanup OFF', 'OpenQA variable "SDAF_RETAIN_DEPLOYMENT" is active, skipping cleanup.');
-        return;
-    }
-
     # Disable any stray redirection being active. This resets the console to the worker VM.
     disconnect_target_from_serial if check_serial_redirection();
     az_login();
@@ -83,7 +79,12 @@ sub full_cleanup {
     if ($redirection_works) {
         load_os_env_variables();
         az_login();
-        _sdaf_ibsm_teardown() if get_var('IS_MAINTENANCE');
+        sdaf_ibsm_teardown() if get_var('IS_MAINTENANCE');
+        # IBSm teardown must happen even with reused deployment.
+        if (get_var('SDAF_RETAIN_DEPLOYMENT')) {
+            record_info('Cleanup OFF', 'OpenQA variable "SDAF_RETAIN_DEPLOYMENT" is active, skipping cleanup.');
+            return;
+        }
         %cleanup_results = %{sdaf_cleanup()};
         disconnect_target_from_serial();    # Exist Deployer console since we are about to destroy it
     }
@@ -111,69 +112,61 @@ sub full_cleanup {
     }
 }
 
-=head2 _sdaf_ibsm_teardown
+=head2 sdaf_ibsm_teardown
 
 
-    _sdaf_ibsm_teardown();
+    sdaf_ibsm_teardown();
 
 All existing peerings are deleted in 3 attempts. Function does not croak/die. Only reports about failure and
 lets other cleanup procedures to continue.
 
 =cut
 
-sub _sdaf_ibsm_teardown {
-    my $peerings = ibsm_data_collect();
-    for my $peering_type (keys %{$peerings}) {
-        my $peering_data = $peerings->{$peering_type};
-        my $attempt = 1;
+sub sdaf_ibsm_teardown {
+    my $attempt = 1;
+    my $peering_data = sdaf_ibsm_data_collect();
+    my $id = find_deployment_id();
 
+    while ($peering_data->{workload_peering}{exists} || $peering_data->{ibsm_peering}{exists}) {
+        # Delete two way network peering
+        record_info("Attempt #$attempt");
+        ibsm_network_peering_azure_delete(
+            sut_rg => $peering_data->{workload_peering}{source_resource_group},
+            sut_vnet => $peering_data->{workload_peering}{source_vnet},
+            ibsm_rg => $peering_data->{ibsm_peering}{source_resource_group},
+            name_prefix => 'SDAF');
 
-        record_info('PEERING DEL', <<"record_info"
-Following network peering will be deleted:
-Peering: $peering_data->{peering_name}
-Resource group: $peering_data->{source_resource_group}
-record_info
-        );
+        # Sleep 5 seconds between API calls
+        sleep 5;
+        # Check if peering was deleted
+        $peering_data = sdaf_ibsm_data_collect();
+        if ($peering_data->{workload_peering}{exists} || $peering_data->{ibsm_peering}{exists}) {
+            # Check again as previous 'sleep 5' is not engough sometime
+            record_info('Note', "workload_peering=$peering_data->{workload_peering}{exists}; ibsm_peering=$peering_data->{ibsm_peering}{exists}");
+            sleep 30;
+            $peering_data = sdaf_ibsm_data_collect();
+        }
 
-        while ($peering_data->{exists}) {
-            record_info("Attempt #$attempt");
-            az_network_peering_delete(
-                name => $peering_data->{peering_name},
-                resource_group => $peering_data->{source_resource_group},
-                vnet => $peering_data->{source_vnet},
-                timeout => '120'
-            );
-            # 5 seconds between API calls
-            sleep 5;
-            # Check if peering was deleted
-            $peering_data->{exists} = az_network_peering_exists(
-                resource_group => $peering_data->{source_resource_group},
-                vnet => $peering_data->{source_vnet},
-                name => $peering_data->{peering_name}
-            );
-            # exit loop after 3rd attempt
-            last if $attempt == 3;
-            $attempt++;
-        }
-        if ($peering_data->{exists}) {
-            # only set `record_info` to fail, let the rest of cleanup continue.
-            record_info(
-                'DELETE FAIL', "Deleting peering '$peering_data->{peering_name}' failed after $attempt attempts",
-                result => 'fail'
-            );
-        }
-        else {
-            record_info('DELETE PASS', "Deleting peering '$peering_data->{peering_name}' successful");
-        }
+        # Exit loop after 3rd attempt
+        last if $attempt == 3;
+        $attempt++;
     }
-    my $workload_resource_group = get_workload_resource_group(deployment_id => find_deployment_id());
+    if ($peering_data->{workload_peering}{exists} || $peering_data->{ibsm_peering}{exists}) {
+        # Only set `record_info` to fail, let the rest of cleanup continue.
+        record_info('DELETE FAIL', "Deleting peerings failed after $attempt attempts", result => 'fail');
+    }
+    else {
+        record_info('DELETE PASS', 'Deleting peerings successful');
+    }
+
+    my $workload_resource_group = get_sdaf_resource_group(deployment_id => find_deployment_id(), resource_group_type => 'workload_zone');
     az_network_dns_links_cleanup(resource_group => $workload_resource_group);
     az_network_dns_zones_cleanup(resource_group => $workload_resource_group);
 }
 
-=head2 ibsm_data_collect
+=head2 sdaf_ibsm_data_collect
 
-    ibsm_data_collect();
+    sdaf_ibsm_data_collect();
 
 
 Collects information about existing network peerings between B<IBSM mirror VNET> and B<test workload zone VNET>.
@@ -191,10 +184,10 @@ Returns B<HASHREF> with all data collected in following format:
 
 =cut
 
-sub ibsm_data_collect {
+sub sdaf_ibsm_data_collect {
     my $ibsm_rg = get_required_var('IBSM_RG');
     my $ibsm_vnet_name = ${az_network_vnet_get(resource_group => $ibsm_rg)}[0];
-    my $workload_resource_group = get_workload_resource_group(deployment_id => find_deployment_id());
+    my $workload_resource_group = get_sdaf_resource_group(deployment_id => find_deployment_id(), resource_group_type => 'workload_zone');
     my $workload_vnet_name = ${az_network_vnet_get(resource_group => $workload_resource_group)}[0];
     my $ibsm_peering_name = get_ibsm_peering_name(source_vnet => $ibsm_vnet_name, target_vnet => $workload_vnet_name);
     my $workload_peering_name = get_ibsm_peering_name(source_vnet => $workload_vnet_name, target_vnet => $ibsm_vnet_name);
@@ -291,7 +284,7 @@ sub post_fail_hook {
         # Prepare redirection data, reset $run_args in case of post_fail_hook being invoked before $run_args is set
         my $inventory_path = get_sdaf_inventory_path(sap_sid => $sap_sid, config_root_path => $config_root_path);
         my $inventory_data = read_inventory_file($inventory_path);
-        my $private_key_src_path = get_sut_sshkey_path(config_root_path => $config_root_path);
+        my $private_key_src_path = get_sut_sshkey_path(sut => 'sid', config_root_path => $config_root_path);
         $run_args->{sdaf_inventory} = $inventory_data;
         $run_args->{redirection_data} = create_redirection_data(inventory_data => $inventory_data);
         my %redirection_data = %{$run_args->{redirection_data}};
@@ -300,8 +293,12 @@ sub post_fail_hook {
         # Prepare ssh config, download ssh private key for accessing SUTs
         my $jump_host_user = get_required_var('REDIRECT_DESTINATION_USER');
         my $jump_host_ip = get_required_var('REDIRECT_DESTINATION_IP');
-        my $scp_cmd = join(' ', 'scp ', "$jump_host_user\@$jump_host_ip:$private_key_src_path", $sut_private_key_path);
+        my $scp_cmd = join(' ', 'scp ', "$jump_host_user\@$jump_host_ip:$private_key_src_path", $sut_sid_private_key_path);
         assert_script_run($scp_cmd);
+        if (get_required_var('SDAF_FENCING_MECHANISM') eq 'sbd') {
+            $scp_cmd = join(' ', 'scp', "$jump_host_user\@$jump_host_ip:$private_key_src_path", $sut_iscsi_private_key_path);
+            assert_script_run($scp_cmd);
+        }
         prepare_ssh_config(
             inventory_data => $inventory_data,
             jump_host_ip => $jump_host_ip,
@@ -310,7 +307,7 @@ sub post_fail_hook {
 
         # Upload SUTs logs
         for my $instance_type (keys(%redirection_data)) {
-            next() unless grep /$instance_type/, qw(db_hana nw_ers nw_ascs);
+            next() unless grep /$instance_type/, qw(db_hana nw_ers nw_ascs nw_iscsi nw_pas nw_aas);
             for my $hostname (keys(%{$redirection_data{$instance_type}})) {
                 my %host_data = %{$redirection_data{$instance_type}{$hostname}};
                 connect_target_to_serial(

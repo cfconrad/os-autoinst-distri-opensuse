@@ -7,7 +7,7 @@
 # Summary: Test ctdb resource agent
 # Maintainer: QE-SAP <qe-sap@suse.de>
 
-use base 'haclusterbasetest';
+use Mojo::Base 'haclusterbasetest';
 use testapi;
 use lockapi;
 use hacluster;
@@ -42,7 +42,7 @@ sub run {
             my $node_ip = get_ip(choose_node($node));
             push @node_list, $node_ip;
         }
-        assert_script_run 'echo -e "' . join("\n", @node_list) . '" > /etc/ctdb/nodes';
+        assert_script_run 'echo -e "' . join("\\n", @node_list) . '" > /etc/ctdb/nodes';
 
         # Make sure samba is installed
         zypper_call 'in samba';

@@ -1,12 +1,7 @@
 # SUSE's openQA tests
 #
-# Copyright 2022-2023 SUSE LLC
+# Copyright SUSE LLC
 # SPDX-License-Identifier: FSFAP
-#
-# Copying and distribution of this file, with or without modification,
-# are permitted in any medium without royalty provided the copyright
-# notice and this notice are preserved.  This file is offered as-is,
-# without any warranty.
 
 # Summary: bci-tests runner
 #   SUSE Linux Enterprise Base Container Images (SLE BCI)
@@ -19,7 +14,7 @@
 #   repository defined by BCI_TESTS_REPO.
 # Maintainer: QE-C team <qa-c@suse.de>
 
-use Mojo::Base qw(consoletest);
+use Mojo::Base 'consoletest';
 use XML::LibXML;
 use utils qw(zypper_call script_retry systemctl);
 use version_utils qw(get_os_release is_sle);
@@ -83,6 +78,7 @@ sub prepare_virtual_env {
             script_retry("SUSEConnect -p PackageHub/12.5/$arch", delay => 60, retry => 3, timeout => $scc_timeout);
             zypper_call("ar -f http://download.suse.de/ibs/SUSE:/SLE-12:/Update:/Products:/SaltBundle:/Update/standard/ saltbundle");
             zypper_call("rm python3-pip");
+            zypper_call("al python3-pip");
             # venv-salt-minion-3006.0-3.76.2 has .../bin/activate, for the time being, fix to this version
             # lock the package in case system update
             zypper_call("in saltbundlepy-base 'venv-salt-minion<3006.0-3.81.1'");
@@ -134,33 +130,6 @@ sub update_test_repos {
     assert_script_run("git clone $branch -q --depth 1 $bci_tests_repo /root/BCI-tests");
 }
 
-sub check_container_signature {
-    my $engines = get_required_var('CONTAINER_RUNTIMES');
-    my $engine;
-    if ($engines =~ /podman|k3s/) {
-        $engine = 'podman';
-    } elsif ($engines =~ /docker/) {
-        $engine = 'docker';
-    } else {
-        die('No valid container engines defined in CONTAINER_RUNTIMES variable!');
-    }
-
-    my $image = get_required_var('CONTAINER_IMAGE_TO_TEST');
-    record_info('Image signature', "Checking signature of $image");
-
-    my $cosign_image = "registry.suse.com/suse/cosign";
-
-    my $engine_options = "-v /usr/share/pki/trust/anchors/SUSE_Trust_Root.crt.pem:/SUSE_Trust_Root.crt.pem:ro";
-    my $options = "--key /usr/share/pki/containers/suse-container-key.pem";
-    if ($image =~ "registry.suse.de") {
-        $options .= " --registry-cacert=/SUSE_Trust_Root.crt.pem";    # include SUSE CA for registry.suse.de
-        $options .= " --insecure-ignore-tlog=true";    # ignore missing transparency log entries for registry.suse.de
-    }
-
-    script_retry("$engine pull -q $image", timeout => 300, delay => 60, retry => 2);
-    assert_script_run("$engine run --rm -q $engine_options $cosign_image verify $options $image", timeout => 300);
-}
-
 sub run {
     select_serial_terminal;
     my ($version, $sp, $host_distri) = get_os_release;
@@ -180,15 +149,12 @@ sub run {
     install_buildah_when_needed($host_distri) if ($engines =~ /podman/ && $host_distri !~ /micro/i);
 
     my $host_version = get_var("HOST_VERSION", get_required_var("VERSION"));    # VERSION is the version of the container, not the host.
-    check_container_signature()
-      if (get_var('CONTAINER_IMAGE_TO_TEST')
-        && get_var("CONTAINERS_SKIP_SIGNATURE", "0") != 1
-        && $host_version =~ "15-SP7|16\..*|slem-6\.1"
-      );
 }
 
+sub post_run_hook { }
+
 sub test_flags {
-    return {fatal => 1, milestone => 1};
+    return {fatal => 1, milestone => 0};
 }
 
 1;

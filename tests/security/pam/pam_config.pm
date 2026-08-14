@@ -6,7 +6,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#70345, poo#108096, tc#1767580
 
-use base 'opensusebasetest';
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils 'zypper_call';
@@ -61,10 +61,6 @@ sub run {
         script_run("journalctl --no-pager -o short-precise > /tmp/full_journal.log");
         upload_logs "/tmp/full_journal.log";
     }
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 sub post_fail_hook {

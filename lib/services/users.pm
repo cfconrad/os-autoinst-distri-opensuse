@@ -11,7 +11,7 @@
 #   3.Restore current user's password to ensure won't be block by later test.
 # After migration:
 #   4.Switch Bernhard and new user.
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
 package services::users;
 use base "x11test";
@@ -57,14 +57,14 @@ sub change_pwd {
     assert_and_click "users-password";
     assert_and_click "current-password";
     type_password;
-    wait_still_screen;
+    wait_still_screen(1, 2);
     assert_and_click "new-password";
-    wait_still_screen;
-    type_string $newpwd;
-    wait_still_screen;
+    wait_still_screen(1, 2);
+    type_password $newpwd;
+    wait_still_screen(1, 2);
     assert_and_click "confirm-new-password";
-    wait_still_screen;
-    type_string $newpwd;
+    wait_still_screen(1, 2);
+    type_password $newpwd;
     assert_and_click "actived-change-password";
     assert_screen "users-settings", 60;
 }
@@ -131,6 +131,7 @@ sub restore_passwd {
     assert_screen "pwd4user-confirm-terminal";
     type_password "$password\n";
     assert_screen "password-changed-terminal";
+    close_gui_terminal;
 }
 
 # remove test user
@@ -162,6 +163,7 @@ sub full_users_check {
     if ($stage eq 'before') {
         # change pwd for current user and add new user for switch scenario
         x11test::unlock_user_settings;
+        wait_still_screen(1, 2);
         change_pwd;
         add_user;
         # verify changed password work well in the following scenario:

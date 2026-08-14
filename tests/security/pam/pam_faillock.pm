@@ -7,9 +7,8 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#102990 tc#1769824
 
-use base 'opensusebasetest';
+use Mojo::Base qw(opensusebasetest consoletest);
 use testapi;
-use base 'consoletest';
 use utils qw(zypper_call enter_cmd_slow);
 use version_utils 'is_sle';
 use Utils::Architectures qw(is_aarch64);
@@ -96,10 +95,6 @@ EOF
     assert_script_run('mv /etc/pam.d/common-auth.back /etc/pam.d/common-auth');
     assert_script_run('mv /etc/pam.d/common-password.back /etc/pam.d/common-password');
     assert_script_run("userdel -r -f $user_name");
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

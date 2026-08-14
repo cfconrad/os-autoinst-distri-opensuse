@@ -9,6 +9,7 @@ use List::MoreUtils qw(uniq);
 use List::Util qw(any none);
 use Data::Dumper;
 use testapi;
+use JSON::PP;
 use sles4sap::sap_deployment_automation_framework::deployment;
 
 sub undef_variables {
@@ -20,6 +21,8 @@ sub undef_variables {
       SDAF_GIT_AUTOMATION_REPO
       SDAF_GIT_TEMPLATES_REPO
       SDAF_DEPLOYMENT_ID
+      SDAF_ENV_CODE
+      PUBLIC_CLOUD_NAMESPACE
     );
     set_var($_, '') foreach @openqa_variables;
 }
@@ -55,12 +58,12 @@ subtest '[prepare_sdaf_project]' => sub {
 
     prepare_sdaf_project(%arguments);
 
+    undef_variables();
     # Check correct vnet codes
     is $vnet_checks{library}, '', 'Return library without vnet code';
     is $vnet_checks{deployer}, $arguments{deployer_vnet_code}, 'Return correct vnet code for deployer';
     is $vnet_checks{workload_zone}, $arguments{workload_vnet_code}, 'Return correct vnet code for workload zone';
     is $vnet_checks{sap_system}, $arguments{workload_vnet_code}, 'Return correct vnet code for sap SUT';
-    undef_variables();
 };
 
 subtest '[prepare_sdaf_project] Check directory creation' => sub {
@@ -89,10 +92,11 @@ subtest '[prepare_sdaf_project] Check directory creation' => sub {
     set_var('SDAF_GIT_AUTOMATION_BRANCH', 'latest');
 
     prepare_sdaf_project(%arguments);
+
+    undef_variables();
     is $mkdir_commands[0], 'mkdir -p /tmp/openqa_logs', 'Create logging directory';
     is $mkdir_commands[1], 'mkdir -p Azure_SAP_Automated_Deployment/WORKSPACES/DEPLOYER/LAB-SECE-DEP05-INFRASTRUCTURE',
       'Create workspace directory';
-    undef_variables;
 };
 
 subtest '[serial_console_diag_banner] ' => sub {
@@ -100,9 +104,12 @@ subtest '[serial_console_diag_banner] ' => sub {
     my @printed_lines;
     $ms_sdaf->noop(qw(wait_serial));
     $ms_sdaf->redefine(enter_cmd => sub { push(@printed_lines, $_[0]); return 1; });
+
     serial_console_diag_banner('Module: deploy_sdaf.pm');
+
     note("Banner:\n" . join("\n", @printed_lines));
     ok(grep(/Module: deploy_sdaf.pm/, @printed_lines), 'Banner must include message');
+
     dies_ok { serial_console_diag_banner() } 'Fail with missing test to be printed';
     dies_ok { serial_console_diag_banner('exeCuTing deploYment' x 6) } 'Fail with string exceeds max number of characters';
 };
@@ -158,13 +165,21 @@ subtest '[set_common_sdaf_os_env]' => sub {
 subtest '[az_login] Get credentials from server' => sub {
     my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
     my $env_variable_file_content;
-    my %credentrials = (client_id => 'Potato', client_secret => 'Patata', tenant_id => 'Zemiak', subscription_id => 'Batata');
+    my $credentrials = {
+        'sdaf' => {
+            'PRD' => {client_id => 'Potato', client_secret => 'Patata', tenant_id => 'Zemiak', subscription_id => 'Batata'}
+        }
+    };
 
     $ms_sdaf->noop(qw(record_info assert_script_run script_output));
-    $ms_sdaf->redefine(get_credentials => sub { return \%credentrials; });
+    $ms_sdaf->redefine(get_credentials => sub { return $credentrials; });
     $ms_sdaf->redefine(write_sut_file => sub { $env_variable_file_content = $_[1]; });
+    set_var('PUBLIC_CLOUD_NAMESPACE', 'sdaf');
+    set_var('SDAF_ENV_CODE', 'PRD');
 
     az_login();
+
+    undef_variables();
     ok($env_variable_file_content =~ /export ARM_SUBSCRIPTION_ID=Batata/, 'File contains subscription id');
     ok($env_variable_file_content =~ /export ARM_CLIENT_SECRET=Patata/, 'File contains client secret');
     ok($env_variable_file_content =~ /export ARM_TENANT_ID=Zemiak/, 'File contains tenant id');
@@ -183,32 +198,12 @@ subtest '[az_login] Get credentials from OpenQA settings' => sub {
     $ms_sdaf->redefine(write_sut_file => sub { $env_variable_file_content = $_[1]; });
 
     az_login();
+
+    undef_variables();
     ok($env_variable_file_content =~ /export ARM_SUBSCRIPTION_ID=Peruna/, 'File contains subscription id');
     ok($env_variable_file_content =~ /export ARM_CLIENT_SECRET=Patata/, 'File contains client secret');
     ok($env_variable_file_content =~ /export ARM_TENANT_ID=Zemiak/, 'File contains tenant id');
     ok($env_variable_file_content =~ /export ARM_CLIENT_ID=Potato/, 'File contains client id');
-
-    undef_variables;
-};
-
-subtest 'Check credentials' => sub {
-    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
-    my %credentrials = (client_id => 'Potato', client_secret => 'Patata', tenant_id => 'Zemiak', subscription_id => 'Batata');
-
-    $ms_sdaf->redefine(export_credentials => sub { return \%credentrials; });
-    $ms_sdaf->redefine(get_required_var => sub { return 'LAB'; });
-    $ms_sdaf->redefine(az_keyvault_secret_list => sub { return ['SecretList']; });
-    $ms_sdaf->redefine(az_keyvault_secret_show => sub { return 'SecretShow'; });
-    $ms_sdaf->redefine(define_secret_variable => sub { return 0; });
-    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', "$_[0]", ':', "$_[1]")); });
-
-    $ms_sdaf->redefine(script_run => sub { return 0; });
-    ok(check_credentials() == 0, 'Check credentials passed');
-
-    $ms_sdaf->redefine(script_run => sub { return 1; });
-    dies_ok { check_credentials() } 'Check credentials failed on purpose';
-
-    undef_variables;
 };
 
 subtest '[sdaf_cleanup] Test correct usage' => sub {
@@ -216,10 +211,11 @@ subtest '[sdaf_cleanup] Test correct usage' => sub {
     $ms_sdaf->noop(qw(record_info
           script_output
           deployment_dir
-          resource_group_exists));
+    ));
     $ms_sdaf->redefine(generate_resource_group_name => sub { return 'ResourceGroup'; });
     $ms_sdaf->redefine(sdaf_execute_remover => sub { return 0; });
     $ms_sdaf->redefine(script_run => sub { return 0; });
+    $ms_sdaf->redefine(az_group_exists => sub { return $JSON::PP::true; });
 
     my %cleanup_results = %{sdaf_cleanup()};
     ok(!$cleanup_results{remover_failed}, 'Remover passes with correct usage');
@@ -229,8 +225,8 @@ subtest '[sdaf_cleanup] Test correct usage' => sub {
 subtest '[sdaf_cleanup] Test remover script failures' => sub {
     my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
     my $force_group_delete;
-    $ms_sdaf->noop(qw( record_info script_output deployment_dir generate_resource_group_name ));
-    $ms_sdaf->redefine(resource_group_exists => sub { return 'yes'; });
+    $ms_sdaf->noop(qw(script_output deployment_dir generate_resource_group_name ));
+    $ms_sdaf->redefine(az_group_exists => sub { return $JSON::PP::true; });
     $ms_sdaf->redefine(sdaf_destroy_resources => sub { $force_group_delete = 1; });
     $ms_sdaf->redefine(sdaf_execute_remover => sub { return 1; });
     $ms_sdaf->redefine(script_run => sub { return 0; });
@@ -244,21 +240,23 @@ subtest '[sdaf_cleanup] Test remover script failures' => sub {
 
 subtest '[sdaf_execute_remover] Check command line arguments' => sub {
     # Tested indirectly via sdaf_cleanup()
-
     my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
     my @script_run_calls;
 
     $ms_sdaf->noop(qw(
-          record_info
           upload_logs
           assert_script_run
-          resource_group_exists
           log_dir
           deployment_dir
-          sdaf_scripts_dir
-          generate_resource_group_name)
+          sdaf_scripts_dir )
     );
-    $ms_sdaf->redefine(script_run => sub { push @script_run_calls, $_[0] if grep /remover/, $_[0]; return 0; });
+    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', join(' : ', @_))); });
+    $ms_sdaf->redefine(generate_resource_group_name => sub { return 'sap_system'; });
+    $ms_sdaf->redefine(az_group_exists => sub { return $JSON::PP::true if grep /sap_system/, @_; });
+    $ms_sdaf->redefine(script_run => sub {
+            push @script_run_calls, $_[0] if grep /remover/, $_[0];
+            return 0;
+    });
     $ms_sdaf->redefine(get_os_variable => sub {
             return '/some/path/LAB-SECE-SAP04-INFRASTRUCTURE-6453.tfvars' if $_[0] eq 'workload_zone_parameter_file';
             return '/some/path/LAB-SECE-SAP04-QES-6453.tfvars' if $_[0] eq 'sap_system_parameter_file';
@@ -279,7 +277,6 @@ subtest '[sdaf_execute_remover] Check command line arguments' => sub {
     $ms_sdaf->redefine(script_run => sub { return 1; });
     dies_ok { sdaf_cleanup() } 'Test failing remover script: retried 3 times and failed';
 };
-
 
 subtest '[sdaf_execute_deployment] Test expected failures' => sub {
     my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
@@ -312,6 +309,7 @@ subtest '[sdaf_execute_deployment] Test generated SDAF deployment command' => su
     $ms_sdaf->redefine(script_run => sub { return 0; });
     $ms_sdaf->redefine(sdaf_scripts_dir => sub { return '/tmp/deployment'; });
     $ms_sdaf->redefine(get_os_variable => sub { return '/some/path/LAB-SECE-SAP04-INFRASTRUCTURE-6453.tfvars' });
+    $ms_sdaf->redefine(get_required_var => sub { return 'swedencentral'; });
 
     # Capture command without logging part
     $ms_sdaf->redefine(log_command_output => sub { $sdaf_command_no_log = $_[1]; return; });
@@ -366,70 +364,6 @@ subtest '[sdaf_execute_deployment] Test "retry" functionality' => sub {
     ok sdaf_execute_deployment(deployment_type => 'workload_zone', retries => 3);
 };
 
-subtest '[sdaf_execute_playbook] Fail with missing mandatory arguments' => sub {
-    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
-    my $croak_message;
-    $ms_sdaf->redefine(croak => sub { $croak_message = $_[0]; die(); });
-
-    set_var('PUBLIC_CLOUD_REGION', 'swedencentral');
-    set_var('SAP_SID', 'QES');
-
-    dies_ok { sdaf_execute_playbook(sdaf_config_root_dir => '/love/and/peace') } 'Croak with missing mandatory argument "playbook_filename"';
-    ok $croak_message =~ m/playbook_filename/, 'Verify failure reason.';
-
-    dies_ok { sdaf_execute_playbook(playbook_filename => '00_world_domination.yaml') } 'Croak with missing mandatory argument "sdaf_config_root_dir"';
-    ok $croak_message =~ m/sdaf_config_root_dir/, 'Verify failure reason.';
-
-    undef_variables();
-};
-
-subtest '[sdaf_execute_playbook] Command execution' => sub {
-    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
-    my @calls;
-    $ms_sdaf->redefine(script_run => sub { push(@calls, $_[0]); return 0; });
-    $ms_sdaf->noop(qw(assert_script_run record_info log_dir upload_logs deployment_dir));
-    set_var('SAP_SID', 'QES');
-    set_var('SDAF_ANSIBLE_VERBOSITY_LEVEL', undef);
-
-    sdaf_execute_playbook(playbook_filename => 'playbook_01_os_base_config.yaml', sdaf_config_root_dir => '/tmp/SDAF/WORKSPACES/SYSTEM/LAB-SECE-SAP04-QAS');
-    note("\n  -->  " . join("\n  -->  ", @calls));
-    ok((any { /ansible-playbook/ } @calls), 'Execute main command');
-    ok((any { /--inventory-file="QES_hosts.yaml"/ } @calls), 'Command contains "--inventory-file" parameter');
-    ok((any { /--private-key=\/tmp\/SDAF\/WORKSPACES\/SYSTEM\/LAB-SECE-SAP04-QAS\/sshkey/ } @calls),
-        'Command contains "--private-key" parameter');
-    ok((any { /--extra-vars=\'_workspace_directory=\/tmp\/SDAF\/WORKSPACES\/SYSTEM\/LAB-SECE-SAP04-QAS\'/ } @calls),
-        'Command contains extra variable: "_workspace_directory"');
-    ok((any { /--extra-vars="\@sap-parameters.yaml"/ } @calls), 'Command contains extra variable with SDAF sap-parameters');
-    ok((any { /--ssh-common-args=/ } @calls), 'Command contains "--ssh-common-args" parameter');
-
-    undef_variables();
-};
-
-subtest '[sdaf_execute_playbook] Command verbosity' => sub {
-    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
-    my @calls;
-
-    $ms_sdaf->redefine(script_run => sub { return; });
-    $ms_sdaf->redefine(log_command_output => sub { push(@calls, $_[1]); return 0; });
-    $ms_sdaf->noop(qw(assert_script_run record_info log_dir upload_logs deployment_dir));
-    set_var('SAP_SID', 'QES');
-
-    my %verbosity_levels = (
-        '1' => '-v',
-        '2' => '-vv',
-        '6' => '-vvvvvv',
-        'somethingtrue' => '-vvvv'
-    );
-
-    for my $level (keys(%verbosity_levels)) {
-        set_var('SDAF_ANSIBLE_VERBOSITY_LEVEL', $level);
-        sdaf_execute_playbook(playbook_filename => 'playbook_01_os_base_config.yaml', sdaf_config_root_dir => '/tmp/SDAF/WORKSPACES/SYSTEM/LAB-SECE-SAP04-QAS');
-        ok(grep(/$verbosity_levels{$level}/, @calls), "Append '$verbosity_levels{$level}' with verbosity parameter: '$level'");
-    }
-
-    undef_variables();
-};
-
 subtest '[sdaf_ssh_key_from_keyvault] Test exceptions' => sub {
     my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
     my $croak_message;
@@ -461,6 +395,7 @@ subtest '[sdaf_ssh_key_from_keyvault] Verify executed commands' => sub {
     $ms_sdaf->noop(qw(homedir record_info az_keyvault_secret_show));
 
     sdaf_ssh_key_from_keyvault(key_vault => 'SCV-70 White Base');
+
     note("\n --> " . join("\n --> ", @assert_script_run));
     ok(grep(/mkdir -p/, @assert_script_run), 'Create ssh directory');
     ok(grep(/touch/, @assert_script_run), 'Create ssh file');
@@ -469,56 +404,6 @@ subtest '[sdaf_ssh_key_from_keyvault] Verify executed commands' => sub {
 
     note("\n --> " . join("\n --> ", @script_run));
     ok(grep(//, @assert_script_run), 'Validate ssh key');
-};
-
-subtest '[playbook_settings] Verify playbook order' => sub {
-    my @components = ('db_install', 'db_ha', 'nw_pas', 'nw_aas', 'nw_ensa');
-    my @playbook_list = map { $_->{playbook_filename} } @{playbook_settings(components => \@components)};
-
-    is $playbook_list[0], 'pb_get-sshkey.yaml', 'Playbook #1 must be: pb_get-sshkey.yaml';
-    is $playbook_list[1], 'playbook_00_validate_parameters.yaml', 'Playbook #2 must be: playbook_00_validate_parameters.yaml';
-    is $playbook_list[2], 'playbook_01_os_base_config.yaml', 'Playbook #3 must be: playbook_01_os_base_config.yaml';
-    is $playbook_list[3], 'playbook_02_os_sap_specific_config.yaml', 'Playbook #4 must be: playbook_02_os_sap_specific_config.yaml';
-    is $playbook_list[4], 'playbook_03_bom_processing.yaml', 'Playbook #5 must be: playbook_03_bom_processing.yaml';
-    is $playbook_list[5], 'playbook_04_00_00_db_install.yaml', 'Playbook #6 must be: playbook_04_00_00_db_install.yaml';
-    is $playbook_list[6], 'playbook_05_00_00_sap_scs_install.yaml', 'Playbook #7 must be: playbook_05_00_00_sap_scs_install.yaml';
-    is $playbook_list[7], 'playbook_05_01_sap_dbload.yaml', 'Playbook #8 must be: playbook_05_01_sap_dbload.yaml';
-    is $playbook_list[8], 'playbook_04_00_01_db_ha.yaml', 'Playbook #9 must be: playbook_04_00_01_db_ha.yaml';
-    is $playbook_list[9], 'playbook_05_02_sap_pas_install.yaml', 'Playbook #10 must be: playbook_05_02_sap_pas_install.yaml';
-    is $playbook_list[10], 'playbook_05_03_sap_app_install.yaml', 'Playbook #11 must be: playbook_05_03_sap_app_install.yaml';
-};
-
-subtest '[register_byos] Test exceptions' => sub {
-    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
-    $ms_sdaf->redefine(ansible_execute_command => sub { return; });
-    $ms_sdaf->redefine(assert_script_run => sub { return; });
-    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', $_[0], ':', $_[1])); });
-    $ms_sdaf->noop(qw(ansible_execute_command assert_script_run));
-
-    my %mandatory_args = (sdaf_config_root_dir => '/fun/', scc_reg_code => 'HAHA', sap_sid => 'LOL');
-
-    for my $arg (keys %mandatory_args) {
-        my $orig_value = $mandatory_args{$arg};
-        $mandatory_args{$arg} = undef;
-        dies_ok { sdaf_register_byos(%mandatory_args) } "Croak with missing \$args{$arg}";
-        $mandatory_args{$arg} = $orig_value;
-    }
-};
-
-subtest '[register_byos] Command check' => sub {
-    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
-    my @commands;
-    $ms_sdaf->redefine(ansible_execute_command => sub { @commands = @_; return; });
-    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
-    $ms_sdaf->noop(qw(assert_script_run));
-
-    my %mandatory_args = (sdaf_config_root_dir => '/fun/', scc_reg_code => 'HAHA', sap_sid => 'LOL');
-    sdaf_register_byos(%mandatory_args);
-
-    note('CMD: ' . join(' ', @commands));
-    ok(grep(/sudo/, @commands), 'Execute command under "sudo"');
-    ok(grep(/registercloudguest/, @commands), 'Execute command "registercloudguest"');
-    ok(grep(/-r HAHA/, @commands), 'Include regcode');
 };
 
 subtest '[sdaf_deployment_reused]' => sub {
@@ -535,6 +420,7 @@ subtest '[sdaf_deployment_reused]' => sub {
     $record_info_flag = undef;
     sdaf_deployment_reused(quiet => '1');
     ok(!$record_info_flag, 'Do not show "record_info" message with "quiet=>1"');
+    undef_variables();
 };
 
 subtest '[validate_components]' => sub {
@@ -597,22 +483,143 @@ subtest '[sdaf_upload_logs]' => sub {
     ok sdaf_upload_logs(hostname => $arguments{hostname}, sap_sid => $arguments{sap_sid});
 };
 
-subtest '[get_workload_resource_group]' => sub {
+subtest '[get_sdaf_resource_group]' => sub {
     my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
     $ms_sdaf->noop('record_info');
-    $ms_sdaf->redefine(az_group_name_get => sub { return ['Resource_group']; });
+    $ms_sdaf->redefine(az_group_name_get => sub { return {data => ['Resource_group']}; });
 
-    is get_workload_resource_group(deployment_id => '123'), 'Resource_group', 'Return exactly one RG';
+    is get_sdaf_resource_group(deployment_id => '123',
+        resource_group_type => 'workload_zone'), 'Resource_group', 'Return exactly one RG';
 };
 
-subtest '[get_workload_resource_group]' => sub {
+subtest '[get_sdaf_resource_group] errors' => sub {
+    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
+    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', $_[0], ':', $_[1])); });
+    $ms_sdaf->redefine(az_group_name_get => sub { return {data => ['Resource_group'], err => ''}; });
+
+    is get_sdaf_resource_group(deployment_id => '123',
+        resource_group_type => 'workload_zone'), 'Resource_group', 'Return exactly one RG';
+};
+
+subtest '[get_sdaf_resource_group] flake errors' => sub {
+    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
+    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', $_[0], ':', $_[1])); });
+    $ms_sdaf->redefine(az_group_name_get => sub {
+            return {
+                data => ['Resource_group'],
+                err => "✓ Launching flake
+✓ Launching flake
+✓ Launching flake
+✓ Launching flake
+FutureWarning: some random message
+"}; });
+
+    is get_sdaf_resource_group(deployment_id => '123',
+        resource_group_type => 'workload_zone'), 'Resource_group', 'Return exactly one RG';
+};
+
+subtest '[get_sdaf_resource_group] missing args' => sub {
     my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
     $ms_sdaf->noop('record_info');
-    $ms_sdaf->redefine(az_group_name_get => sub { return []; });
-    dies_ok { get_workload_resource_group(deployment_id => '123') } 'Fail with empty result';
+    $ms_sdaf->redefine(az_group_name_get => sub { return {data => []}; });
+    dies_ok { get_sdaf_resource_group(deployment_id => '123', resource_group_type => 'workload_zone') } 'Fail with empty result';
 
-    $ms_sdaf->redefine(az_group_name_get => sub { return ['First_result', 'Oh_no-second_one']; });
-    dies_ok { get_workload_resource_group(deployment_id => '123') } 'Fail with more than one results';
+    $ms_sdaf->redefine(az_group_name_get => sub { return {data => ['First_result', 'Oh_no-second_one']}; });
+    dies_ok { get_sdaf_resource_group(deployment_id => '123', resource_group_type => 'workload_zone') } 'Fail with more than one results';
+};
+
+subtest '[Check credentials] Long name regex ' => sub {
+    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
+    my %credentials = (client_id => 'Potato', client_secret => 'Patata', tenant_id => 'Zemiak', subscription_id => 'Batata');
+    set_var('SDAF_ENV_CODE', 'PRD');
+    set_var('SDAF_DEPLOYER_KEY_VAULT', 'prdseceasdf');
+    set_var('SDAF_DEPLOYER_VNET_CODE', 'DEP00');
+    set_var('PUBLIC_CLOUD_REGION', 'swedencentral');
+
+    my @expected_result = (
+        'https://fire/penguin/disco/panda/PRD-SECE-DEP00-client-secret',
+        'https://fire/penguin/disco/panda/PRD-SECE-DEP00-client-id',
+        'https://fire/penguin/disco/panda/PRD-SECE-DEP00-tenant-id',
+        'https://fire/penguin/disco/panda/PRD-SECE-DEP00-subscription-id'
+    );
+    my @secrets_found;
+    $ms_sdaf->redefine(export_credentials => sub { return \%credentials; });
+    $ms_sdaf->redefine(az_keyvault_secret_show => sub { my %arguments = @_; push(@secrets_found, $arguments{id});
+            return 'secret' });
+    $ms_sdaf->redefine(define_secret_variable => sub { return 0; });
+    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', "$_[0]", ':', "$_[1]")); });
+    $ms_sdaf->redefine(script_run => sub { return 0; });
+    $ms_sdaf->redefine(az_keyvault_secret_list => sub { return [
+                'https://fire/penguin/disco/panda/PRD-SECE-DEP00-client-secret',
+                'https://fire/penguin/disco/panda/PRD-SECE-DEP00-client-id',
+                'https://fire/penguin/disco/panda/PRD-SECE-DEP00-tenant-id',
+                'https://fire/penguin/disco/panda/PRD-SECE-DEP00-subscription-id',
+                'https://just/a/boring/whale-id'
+            ];
+    });
+
+    check_credentials();
+
+    undef_variables();
+    for my $secret (@secrets_found) {
+        ok(grep($secret, @expected_result), "Long secret '$secret' found in keyvault");
+    }
+    ok(!grep(/whale-id/, @secrets_found), 'Incorrect secret ID must be ommited');
+};
+
+subtest '[Check credentials] Short name regex ' => sub {
+    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
+    my %credentials = (client_id => 'Potato', client_secret => 'Patata', tenant_id => 'Zemiak', subscription_id => 'Batata');
+    set_var('SDAF_ENV_CODE', 'PRD');
+    set_var('SDAF_DEPLOYER_KEY_VAULT', 'prdseceasdf');
+    set_var('SDAF_DEPLOYER_VNET_CODE', 'DEP00');
+    set_var('PUBLIC_CLOUD_REGION', 'swedencentral');
+
+    my @expected_result = (
+        'https://fire/penguin/disco/panda/PRD-client-secret',
+        'https://fire/penguin/disco/panda/PRD-client-id',
+        'https://fire/penguin/disco/panda/PRD-tenant-id',
+        'https://fire/penguin/disco/panda/PRD-subscription-id'
+    );
+    my @secrets_found;
+    $ms_sdaf->redefine(export_credentials => sub { return \%credentials; });
+    $ms_sdaf->redefine(az_keyvault_secret_show => sub { my %arguments = @_; push(@secrets_found, $arguments{id});
+            return 'secret' });
+    $ms_sdaf->redefine(define_secret_variable => sub { return 0; });
+    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', "$_[0]", ':', "$_[1]")); });
+    $ms_sdaf->redefine(script_run => sub { return 0; });
+    $ms_sdaf->redefine(az_keyvault_secret_list => sub { return [
+                'https://fire/penguin/disco/panda/PRD-client-secret',
+                'https://fire/penguin/disco/panda/PRD-client-id',
+                'https://fire/penguin/disco/panda/PRD-tenant-id',
+                'https://fire/penguin/disco/panda/PRD-subscription-id',
+                'https://just/a/boring/whale-id'
+            ];
+    });
+
+    check_credentials();
+
+    undef_variables();
+    for my $secret (@secrets_found) {
+        ok(grep($secret, @expected_result), "Short secret '$secret' found in keyvault");
+    }
+};
+
+subtest '[apply_no_cleanup_tag]' => sub {
+    my $ms_sdaf = Test::MockModule->new('sles4sap::sap_deployment_automation_framework::deployment', no_auto => 1);
+    my $tag_called;
+    $ms_sdaf->redefine(az_resource_tag => sub { $tag_called = '1' });
+    $ms_sdaf->redefine(az_resource_list => sub { return []; });
+    $ms_sdaf->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)); });
+    set_var('SDAF_NO_CLEANUP_TAG', '1');
+    apply_no_cleanup_tag(resource_group => 'firepenguindiscopanda', no_cleanup_tag => 'justaboringwhale');
+    is $tag_called, undef, '"az_resource_tag" is not called if no resource is found';
+
+    $ms_sdaf->redefine(az_resource_list => sub { return ['fire', 'penguin', 'disco', 'panda']; });
+    apply_no_cleanup_tag(resource_group => 'firepenguindiscopanda', no_cleanup_tag => 'justaboringwhale');
+    is $tag_called, '1', '"az_resource_tag" is called if resource is found';
+
+    set_var('SDAF_NO_CLEANUP_TAG', undef);
 };
 
 done_testing;

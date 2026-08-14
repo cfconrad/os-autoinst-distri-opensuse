@@ -15,9 +15,11 @@ for the ipaddr2 test.
 Its behavior depends on whether cloud-init was used for the initial setup.
 
 If cloud-init is disabled (B<IPADDR2_CLOUDINIT> is 0), this module will:
-- Check the registration status
-- If the image is Not Registered: register the two SUT VMs
-  with the SUSE Customer Center (SCC) using the provided registration code.
+- Determine the billing model (PAYG, BYOS, or UNKNOWN) via instance-flavor-check
+- For PAYG images: wait for guestregister.service to complete (restart if needed)
+- For BYOS images: register with SCC using the provided registration code
+- For UNKNOWN (bsc#1267739): fall back to SUSEConnect -s to detect status,
+  then register if needed
 - Register any specified add-on products.
 
 After registration (or if cloud-init was enabled), it refreshes the software repositories
@@ -70,7 +72,8 @@ use sles4sap::ipaddr2 qw(
   ipaddr2_repo_list
   ipaddr2_bastion_pubip
   ipaddr2_cleanup
-  ipaddr2_logs_collect);
+  ipaddr2_logs_collect
+  ipaddr2_scc_registration_workaround_PAYG);
 
 sub run {
     my ($self) = @_;
@@ -85,20 +88,37 @@ sub run {
     if (check_var('IPADDR2_CLOUDINIT', 0)) {
         foreach (1 .. 2) {
             my $type = ipaddr2_billing_model_get(id => $_, bastion_ip => $bastion_ip);
-            # Check if somehow the image is already registered or not
-            my $is_registered = ipaddr2_scc_check(
-                bastion_ip => $bastion_ip,
-                id => $_);
-            record_info('REG INITIAL', "type:$type is_registered:$is_registered");
-            if (($is_registered ne 1) || ($type eq 'BYOS')) {
-                # Conditionally register the SLES for SAP instance.
-                # Registration is attempted only if the instance is not currently registered and a
-                # registration code ('SCC_REGCODE_SLES4SAP') is available.
+            record_info('BILLING', "VM$_ type:$type");
+
+            if ($type eq 'PAYG') {
+                # PAYG images are auto-registered by guestregister.service.
+                # Wait for it to complete; restart if it failed.
+                ipaddr2_scc_registration_workaround_PAYG(
+                    bastion_ip => $bastion_ip,
+                    id => $_);
+                next;
+            }
+
+            if ($type eq 'UNKNOWN') {
+                # bsc#1267739: instance-flavor-check failed.
+                # Fall back to SUSEConnect -s to determine registration status.
+                my $is_registered = ipaddr2_scc_check(
+                    bastion_ip => $bastion_ip,
+                    id => $_);
+                record_info('REG FALLBACK', "is_registered:$is_registered");
+                # If already registered, nothing more to do
+                next if $is_registered;
+                # Otherwise, needs registration like BYOS
+                $type = 'BYOS';
+            }
+
+            if ($type eq 'BYOS') {
                 my %reg_args = (
                     bastion_ip => $bastion_ip,
                     id => $_,
                     scc_code => get_required_var('SCC_REGCODE_SLES4SAP'));
-                $reg_args{scc_endpoint} = get_var('PUBLIC_CLOUD_SCC_ENDPOINT') if (get_var('PUBLIC_CLOUD_SCC_ENDPOINT'));
+                $reg_args{scc_endpoint} = get_var('PUBLIC_CLOUD_SCC_ENDPOINT')
+                  if (get_var('PUBLIC_CLOUD_SCC_ENDPOINT'));
                 ipaddr2_scc_register(%reg_args);
             }
         }
@@ -117,7 +137,7 @@ sub run {
 }
 
 sub test_flags {
-    return {fatal => 1, publiccloud_multi_module => 1};
+    return {fatal => 1};
 }
 
 sub post_fail_hook {
@@ -127,7 +147,6 @@ sub post_fail_hook {
         diagnostic => get_var('IPADDR2_DIAGNOSTIC', 0),
         cloudinit => get_var('IPADDR2_CLOUDINIT', 1),
         ibsm_rg => get_var('IBSM_RG'));
-    $self->SUPER::post_fail_hook;
 }
 
 1;

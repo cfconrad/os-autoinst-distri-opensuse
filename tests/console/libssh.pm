@@ -25,7 +25,7 @@
 # Maintainer: Tony Yuan <tyuan@suse.com>
 
 package libssh;
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi qw(is_serial_terminal :DEFAULT);
 use utils;
 use Utils::Systemd 'disable_and_stop_service';
@@ -152,9 +152,4 @@ EOF
     assert_script_run("docker stop libssh_container");
 }
 
-sub test_flags {
-    return {always_rollback => 1};
-}
-
 1;
-

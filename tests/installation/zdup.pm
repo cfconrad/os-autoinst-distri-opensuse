@@ -8,7 +8,7 @@
 #   `zypper dup`
 # Maintainer: QE LSG <qa-team@suse.de>
 
-use base "installbasetest";
+use Mojo::Base 'installbasetest';
 use testapi;
 use utils qw(OPENQA_FTP_URL zypper_call);
 use Utils::Backends 'is_pvm';
@@ -107,6 +107,8 @@ sub run {
             $r .= "/\\\$basearch";
         }
         zypper_call("--no-gpg-checks ar \"$r\" repo$nr");
+        # Workaround to make zypper behaviour more like if it was download.o.o
+        script_run("echo \"gpgkey=$r/repodata/repomd.xml.key\" >> /etc/zypp/repos.d/repo$nr.repo");
         $nr++;
     }
     zypper_call '--gpg-auto-import-keys ref';

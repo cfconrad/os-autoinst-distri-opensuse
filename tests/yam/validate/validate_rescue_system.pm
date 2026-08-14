@@ -4,9 +4,9 @@
 # Summary: Validate rescue system
 # - Reads test data with needed tools and masked services
 # - Validates that tools are available and services are masked
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use scheduler 'get_test_suite_data';
 
@@ -23,6 +23,15 @@ sub run {
         my $output = script_output("systemctl is-enabled $service", proceed_on_failure => 1);
         die "$service is not masked" unless $output =~ /masked/;
     }
+}
+
+# Overwrite post_run_hook due to no HOME defined in root TTY
+sub post_run_hook {
+    my ($self) = @_;
+
+    $self->record_avc_selinux_alerts();
+    # clear screen to make screen content ready for next test
+    $self->clear_and_verify_console;
 }
 
 1;

@@ -11,7 +11,7 @@
 # Maintainer: Wayne Chen <wchen@suse.com> qe-virt@suse.de
 package prepare_transactional_server;
 
-use base "opensusebasetest";
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use transactional;
 use utils;
@@ -20,6 +20,7 @@ use Utils::Systemd;
 use Utils::Backends qw(get_serial_console);
 use ipmi_backend_utils;
 use virt_autotest::utils;
+use virt_autotest::virtual_network_utils;
 
 sub run {
     my $self = shift;
@@ -41,9 +42,11 @@ sub prepare_in_trup_shell {
 sub prepare_on_active_system {
     my $self = shift;
 
+    show_all_disks;
     double_check_xen_role if (is_xen_host and is_sle('>=16.1') and is_disk_image);
     check_kvm_modules if (is_kvm_host and is_sle('>=16.1') and is_disk_image);
     $self->prepare_services;
+    $self->prepare_networks;
 }
 
 sub prepare_extensions {
@@ -87,6 +90,13 @@ sub prepare_services {
     #Disable rebootmgr service to prevent scheduled maitenance reboot.
     disable_and_stop_service('rebootmgr.service');
     systemctl('status rebootmgr.service', ignore_failure => 1);
+}
+
+sub prepare_networks {
+    my $self = shift;
+
+    # Skip br0 bridge creation if SKIP_HOST_BRIDGE_SETUP is set
+    get_var('SKIP_HOST_BRIDGE_SETUP') ? record_info("Host bridge br0 creating skipped") : virt_autotest::virtual_network_utils::create_host_bridge_nm;
 }
 
 sub test_flags {

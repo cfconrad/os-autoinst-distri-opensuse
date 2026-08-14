@@ -11,7 +11,7 @@
 # Tags: tc#1528909, poo#101575
 
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils 'zypper_call';
@@ -34,7 +34,7 @@ sub run {
     wait_still_screen;
 
     # Use cryptsetup to luksFormat and luksOpen volume
-    assert_script_run("echo -e $cryptpasswd | cryptsetup -q luksFormat /test.dm");
+    assert_script_run("echo -e $cryptpasswd | cryptsetup -q luksFormat /test.dm", timeout => 300);
     assert_script_run("echo -e $cryptpasswd | cryptsetup -q luksOpen /test.dm dmtest");
 
     # Format the dmtest and mount it with /test

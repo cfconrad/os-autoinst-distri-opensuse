@@ -9,7 +9,7 @@
 # - import SUSE CA certificates
 # Maintainer: QE-C team <qa-c@suse.de>
 
-use Mojo::Base qw(consoletest);
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use main_containers qw(is_suse_host);
@@ -21,8 +21,25 @@ use containers::k8s qw(install_k3s);
 use bootloader_setup qw(add_grub_cmdline_settings);
 use power_action_utils qw(power_action);
 use zypper qw(wait_quit_zypper);
-use containers::bats;
 use Utils::Architectures qw(is_x86_64 is_aarch64);
+
+# /tmp as tmpfs has multiple issues: it can't store SELinux labels, consumes RAM and doesn't have enough space
+# Bind-mount it to /var/tmp
+sub mount_tmp_vartmp {
+    my $override_conf = <<'EOF';
+[Unit]
+ConditionPathExists=/var/tmp
+
+[Mount]
+What=/var/tmp
+Where=/tmp
+Type=none
+Options=bind
+EOF
+
+    assert_script_run "mkdir -p /etc/systemd/system/tmp.mount.d/";
+    write_sut_file('/etc/systemd/system/tmp.mount.d/override.conf', $override_conf);
+}
 
 sub run {
     my ($self) = @_;
@@ -104,6 +121,8 @@ sub run {
     record_info("docker info", script_output("docker info")) if ($engine =~ 'docker');
     record_info("podman info", script_output("podman info")) if ($engine =~ 'podman');
 }
+
+sub post_run_hook { }
 
 sub test_flags {
     return {fatal => 1, milestone => 1};

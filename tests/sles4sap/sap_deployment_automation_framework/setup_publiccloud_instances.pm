@@ -5,7 +5,7 @@
 # Maintainer: QE-SAP <qe-sap@suse.de>
 # Summary: Prepares compatibility layer for using `lib/publiccloud/*` library with SDAF deployment
 
-use parent 'sles4sap::sap_deployment_automation_framework::basetest';
+use Mojo::Base 'sles4sap::sap_deployment_automation_framework::basetest';
 
 use testapi;
 use serial_terminal qw(select_serial_terminal);
@@ -50,7 +50,7 @@ sub run {
     $run_args->{instances} = $self->{instances} = $instances;
     publiccloud::instances::set_instances(@$instances);
 
-    # This is required for `lib/sles4sap_publiccloud.pm`
+    # This is required for `lib/sles4sap/publiccloud.pm`
     $run_args->{site_a} = $run_args->{instances}[0];
     $run_args->{site_b} = $run_args->{instances}[1];
 
@@ -70,8 +70,8 @@ sub run {
         # Check connected user and verify `ssh_script_run` working
         die 'Check if connected user is "azureadm"' if $instance->ssh_script_run(cmd => 'whoami | grep azureadm');
 
-        # Check system status and test 'run_ssh_command' function
-        $instance->run_ssh_command(cmd => 'systemctl is-system-running');
+        # Check system status and test 'ssh_script_run' function
+        $instance->ssh_assert_script_run(cmd => 'systemctl is-system-running');
 
         # Check NTP service and verify 'ssh_assert_script_run' function
         $instance->ssh_assert_script_run(cmd => 'systemctl is-active chronyd');

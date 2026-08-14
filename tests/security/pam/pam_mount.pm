@@ -6,11 +6,10 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#70345, tc#1767581
 
-use base 'opensusebasetest';
+use Mojo::Base qw(opensusebasetest consoletest);
 use testapi;
-use utils qw(zypper_call script_run_interactive enter_cmd_slow);
+use utils qw(zypper_call script_run_interactive enter_cmd_slow write_sut_file);
 use Utils::Architectures qw(is_aarch64);
-use base 'consoletest';
 use version_utils 'is_sle';
 
 sub run {
@@ -86,14 +85,13 @@ expect \"Enter passphrase for \/dev\/$loopdev: \"; send \"$key\\n\"; interact'"
     my $pam_mount_cfg_bak = '/etc/security/pam_mount.conf.xml.bak';
     assert_script_run "cp $pam_mount_cfg $pam_mount_cfg_bak";
     assert_script_run "sed -i '/<pam_mount>/,/<\\/pam_mount>/d' $pam_mount_cfg";
-    assert_script_run(
-        "echo \"\$(cat <<EOF
+    my $pam_mount_cfg_content = <<END;
 <pam_mount>
   <volume user=\"$user\" path=\"$loopdev\" mountpoint=\"~\" fstype=\"crypt\" fskeycipher=\"none\" fskeyhash=\"md5\" fskeypath=\"$key_dir/$key_file\" />
 </pam_mount>
-EOF
-        )\" >> $pam_mount_cfg"
-    );
+END
+    write_sut_file("/tmp/pam_mount_cfg_content", $pam_mount_cfg_content);
+    assert_script_run("cat /tmp/pam_mount_cfg_content >> $pam_mount_cfg");
 
     # Modify the pam common-session and common-auth files
     my $pam_session = '/etc/pam.d/common-session';
@@ -110,20 +108,21 @@ EOF
     upload_logs($pam_session);
     upload_logs($pam_mount_cfg);
 
-    # Test and make sure user's home directory can mount/unmount during login/logout
+    # Test and make sure user's home directory can mount/unmount during login/logout.
+    # The nested "su -" shell has no PROMPT_COMMAND hook, so pretty serial markers
+    # would never be emitted there, cf. poo#204471
+    my $marker_guard = $testapi::distri->pretty_serial_marker_guard(0);
+
     enter_cmd "su - $user";
     assert_script_run "df -k | grep /home/$user";
     enter_cmd "exit";
     validate_script_output "df -k | grep /home/$user || echo 'check pass'", sub { m/check pass/ };
+    undef $marker_guard;
 
     # Tear down, clear the pam configuration changes
     assert_script_run "mv $pam_session_bak $pam_session";
     assert_script_run "mv $pam_auth_bak $pam_auth";
     assert_script_run "mv $pam_mount_cfg_bak $pam_mount_cfg";
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 sub post_fail_hook {

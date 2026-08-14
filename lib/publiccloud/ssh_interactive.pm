@@ -26,7 +26,7 @@ sub establish_tunnel_console {
     # Note: Don't use script_run here! The serial terminal is set to /dev/sshserial, so every script_run will time out
     type_string("\n~.\n", max_interval => 1);    # ensure no previous ssh connection is present
     enter_cmd("clear");
-    enter_cmd('ssh -t sut');
+    enter_cmd('ssh -E /var/tmp/ssh_sut.log -t sut');
     # give the ssh connection some time to settle
     sleep 5;
 }
@@ -99,7 +99,6 @@ sub ssh_interactive_leave {
         last if ($test->());
         sleep 5;    # some cool down after a failed attempt
     }
-    die "tunnel-console is not functional" if ($retries <= 0);
 
     select_console($prev_console) if ($prev_console !~ /tunnel-console/);
     set_var('_SSH_TUNNELS_INITIALIZED', 0);    # set after the last select_console!

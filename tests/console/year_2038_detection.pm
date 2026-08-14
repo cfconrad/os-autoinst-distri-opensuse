@@ -14,7 +14,7 @@
 #
 # Maintainer: QE Core <qe-core@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use serial_terminal 'select_serial_terminal';
@@ -98,10 +98,6 @@ sub run {
         # Reboot the system then restore all default configuration
         $self->reboot_system;
     }
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

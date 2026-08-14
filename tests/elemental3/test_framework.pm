@@ -1,40 +1,45 @@
-# Copyright 2025 SUSE LLC
+# Copyright 2025-2026 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Test K8s distribution through ECM's distros-test-framework.
 #
 # Maintainer: unified-core@suse.com, ldevulder@suse.com
 
-use base qw(opensusebasetest);
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use lockapi;
 use network_utils qw(get_default_dns is_running_in_isolated_network set_resolv);
 use serial_terminal qw(select_serial_terminal);
+use package_utils qw(install_package);
 use transactional qw(trup_call);
-use Utils::Architectures qw(is_aarch64);
 use Utils::Git;
 
 sub run {
-    my $arch = get_required_var('ARCH');
+    my $timeout = 1200;
+
+    # Extract test framework to use and set default branch if none is provided
     my ($repo, $branch) = get_required_var('TEST_FRAMEWORK_REPO') =~ /(\S*)@(\S*)/;
+    $repo //= get_required_var('TEST_FRAMEWORK_REPO');
+    $branch //= 'main';
 
-    # Split the DNS strings into arrays only if the variable is defined and not empty
-    my @default_dns = split(/,/, get_default_dns);
-    set_resolv(nameservers => \@default_dns) if (is_running_in_isolated_network());
-
-    # Define timeouts based on the architecture
-    my $timeout = (is_aarch64) ? 960 : 480;
+    # This is a *dirty* workaround to fix this issue we encountered: https://bugzilla.suse.com/show_bug.cgi?id=1239721
+    # TODO: update the MicroOS image or - even better - try to use SLMicro instead (but Golang seems to be missing...)
+    trup_call('--no-selfupdate run zypper -n --gpg-auto-import-keys refresh --force');
 
     # Add git/go package(s)
-    trup_call('pkg install git go kubernetes-client-provider', timeout => $timeout);
-    trup_call('apply');
+    install_package(
+        'git go kubernetes-client-provider',
+        timeout => $timeout,
+        trup_apply => 1,
+        trup_continue => 1
+    );
 
     # Configure ssh options
     my $ssh_dir = '/root/.ssh';
     record_info('SSH config', 'Configure password-less SSH access');
     assert_script_run("mkdir -p $ssh_dir");
-    assert_script_run("curl -v -o $ssh_dir/config " . data_url('elemental3/config.ssh'));
-    assert_script_run("curl -v -o /tmp/id_ssh " . data_url('elemental3/id_ssh'));
+    assert_script_run("curl -sf -o $ssh_dir/config " . data_url('elemental3/config.ssh'));
+    assert_script_run("curl -sf -o /tmp/id_ssh " . data_url('elemental3/id_ssh'));
     assert_script_run("base64 -d /tmp/id_ssh > $ssh_dir/id_rsa");
     assert_script_run("chmod -R go-rwx $ssh_dir");
 
@@ -74,22 +79,19 @@ sub run {
     assert_script_run("cd $distro_dir");
     foreach my $test (split(/,/, get_required_var('TESTS_TO_RUN'))) {
         # Specific options are needed for some tests
+        my $go_cmd = "go test -timeout=45m -v -count=1 ./entrypoint/$test/...";
         my $opts;
 
         # Rancher Manager options
-        $opts = "-tags=$test \\
-                 -certManagerVersion $certmanager_version \\
-                 -chartsVersion $rancher_version \\
-                 -chartsRepoName rancher \\
-                 -chartsRepoUrl $rancher_url \\
-                 -chartsArgs $rancher_args" if ($test eq 'deployrancher');
+        $opts = "-tags=$test -certManagerVersion $certmanager_version -chartsVersion $rancher_version -chartsRepoName rancher -chartsRepoUrl $rancher_url -chartsArgs $rancher_args" if ($test eq 'deployrancher');
 
         # Add SELinux test in cluster validation
         # NOTE: disable for now, as ECM test framework needs to be adapted
         # $opts = "-selinux true" if ($test eq 'validatecluster');
 
-        record_info("$test", "Execute '$test' test with options '$opts'");
-        assert_script_run("go test -timeout=45m -v -count=1 ./entrypoint/$test/... $opts", 3600);
+        $go_cmd .= " $opts" if (defined($opts));
+        record_info("$test", "Execute '$test' test with: '$go_cmd'");
+        assert_script_run("$go_cmd", timeout => 3600);
     }
 
     # Tests done, sync with the nodes
@@ -108,7 +110,7 @@ sub run {
 }
 
 sub test_flags {
-    return {fatal => 1, milestone => 0};
+    return {fatal => 1, milestone => 1};
 }
 
 1;

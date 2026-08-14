@@ -9,7 +9,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#39071, poo#105591, poo#105999, poo#109133
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use bootloader_setup qw(add_grub_cmdline_settings change_grub_config);
 use power_action_utils 'power_action';
@@ -17,7 +17,7 @@ use transactional qw(trup_call process_reboot);
 use utils qw(zypper_call reconnect_mgmt_console);
 use serial_terminal 'select_serial_terminal';
 use Utils::Backends 'is_pvm';
-use Utils::Architectures qw(is_aarch64 is_ppc64le);
+use Utils::Architectures qw(is_aarch64 is_ppc64le is_s390x);
 use version_utils qw(is_jeos is_sle_micro is_sle is_tumbleweed is_transactional is_microos);
 use security::vendoraffirmation;
 use security::certification;
@@ -37,7 +37,7 @@ sub reboot_and_login {
 sub enable_fips {
     my $self = shift;
 
-    if (is_sle('>=15-SP4') || is_jeos || is_tumbleweed) {
+    if ((is_sle('>=15-SP4') || is_jeos || is_tumbleweed) && !is_transactional) {
         assert_script_run("fips-mode-setup --enable", timeout => 120);
         $self->reboot_and_login;
     } else {
@@ -45,22 +45,24 @@ sub enable_fips {
         if (is_sle_micro('<6.0')) {
             change_grub_config('=\"[^\"]*', '& fips=1 ', 'GRUB_CMDLINE_LINUX_DEFAULT');
             trup_call('--continue grub.cfg');
-        } else {
+        } elsif (!is_transactional) {
             add_grub_cmdline_settings('fips=1', update_grub => 1) unless (is_sle_micro || is_microos);
         }
         $self->reboot_and_login;
     }
-    return;
+}
+
+sub is_fips_enabled {
+    if (is_sle('>=15-SP4') || is_jeos || is_tumbleweed || is_microos) {
+        return script_output("fips-mode-setup --check", proceed_on_failure => 1) =~
+          m/FIPS mode is enabled\.\n.*\nThe current crypto policy \(FIPS\) is based on the FIPS policy\./;
+    }
+    return script_run(q(grep '^1$' /proc/sys/crypto/fips_enabled)) == 0
+      && script_run("grep '^GRUB_CMDLINE_LINUX_DEFAULT.*fips=1' /etc/default/grub") == 0;
 }
 
 sub ensure_fips_enabled {
-    if (is_sle('>=15-SP4') || is_jeos || is_tumbleweed || is_microos) {
-        validate_script_output("fips-mode-setup --check",
-            sub { m/FIPS mode is enabled\.\n.*\nThe current crypto policy \(FIPS\) is based on the FIPS policy\./ });
-    } else {
-        assert_script_run q(grep '^1$' /proc/sys/crypto/fips_enabled);
-        assert_script_run("grep '^GRUB_CMDLINE_LINUX_DEFAULT.*fips=1' /etc/default/grub");
-    }
+    die "FIPS is not properly enabled" unless is_fips_enabled();
     return;
 }
 
@@ -119,6 +121,8 @@ sub run {
 
         $self->reboot_and_login;
         record_info 'ENV Mode', 'FIPS environment mode (for single modules) configured!';
+    } elsif (is_fips_enabled()) {
+        record_info 'FIPS already enabled', 'Skipping FIPS setup';
     } else {
         install_fips;
         $self->enable_fips;
@@ -134,13 +138,13 @@ sub test_flags {
 # create a systemd config file for env vars
 sub env_systemd {
     my $cfg_file = '/etc/systemd/system.conf.d/enable-fips-mode.conf';
-    my $content = "[Manager]\n";
+    my $content = "[Manager]\\n";
     $content .= "DefaultEnvironment=";
     foreach my $var (@vars) {
         $content .= "\"$var=1\" ";
     }
-    $content .= "\n";
-    assert_script_run qq(echo "$content" > $cfg_file);
+    $content .= "\\n";
+    assert_script_run qq(echo -e "$content" > $cfg_file);
     return;
 }
 
@@ -148,9 +152,9 @@ sub env_systemd {
 sub env_bashrc {
     my $content = '';
     foreach my $var (@vars) {
-        $content .= "export $var=1\n";
+        $content .= "export $var=1\\n";
     }
-    assert_script_run qq(echo "$content" >> /etc/bash.bashrc);
+    assert_script_run qq(echo -e "$content" >> /etc/bash.bashrc);
     return;
 }
 

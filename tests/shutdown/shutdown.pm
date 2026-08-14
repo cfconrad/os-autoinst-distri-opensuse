@@ -5,14 +5,15 @@
 # - Poweroff system
 # Maintainer: Oleksandr Orlov <oorlov@suse.de>
 
-use base "opensusebasetest";
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use power_action_utils qw(power_action check_bsc1215132);
 use utils;
+use serial_terminal qw(select_serial_terminal);
 
 sub run {
     my $self = shift;
-    select_console('root-console');
+    select_console("root-console");
     systemctl 'list-timers --all';
     power_action('poweroff');
 }

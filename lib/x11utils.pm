@@ -10,6 +10,7 @@ use strict;
 use warnings;
 use testapi;
 use version_utils qw(is_sle is_leap is_plasma6);
+use Mojo::File qw(path);
 use utils qw(assert_and_click_until_screen_change type_string_slow);
 use Utils::Architectures;
 use Utils::Backends qw(is_pvm is_qemu);
@@ -18,6 +19,7 @@ our @EXPORT = qw(
   desktop_runner_hotkey
   ensure_unlocked_desktop
   ensure_fullscreen
+  update_x11_vt
   handle_additional_polkit_windows
   handle_login
   handle_logout
@@ -226,6 +228,27 @@ sub ensure_fullscreen {
     }
 }
 
+=head2 update_x11_vt
+
+  update_x11_vt()
+
+From a graphical session, read $XDG_VTNR to update the VT of the "x11"
+openQA console.
+
+=cut
+
+sub update_x11_vt {
+    x11_start_program_xterm();
+    # At this point, permissions for $serialdev may not be set up yet and switching
+    # to root-console won't work either, so (mis)use log upload.
+    enter_cmd('curl --form upload=$XDG_VTNR\;filename=x ' . autoinst_url('/uploadlog/xdgvtnr') . ' && exit');
+    assert_screen('generic-desktop');    # Waits until finished
+
+    my $tty = path('ulogs/xdgvtnr')->slurp;
+    record_info('XDG_VTNR', "Graphical session on VT $tty");
+    console('x11')->set_tty(int($tty));
+}
+
 sub handle_additional_polkit_windows {
     my $mypwd = shift // $testapi::password;
     if (match_has_tag('authentication-required-user-settings')) {
@@ -326,6 +349,9 @@ sub handle_login {
             send_key_until_needlematch [qw(generic-desktop opensuse-welcome)], 'esc', 5, 10;
         }
     }
+    # Need to update the VT the session runs on.
+    # In the opensuse-welcome case, that's handled afterwards.
+    update_x11_vt if (check_var('DESKTOP', 'kde') && match_has_tag('generic-desktop'));
 }
 
 =head2 handle_logout
@@ -410,10 +436,18 @@ Turns off the Plasma desktop screen energy saving.
 sub turn_off_plasma_screen_energysaver {
     my $kcmshell = is_plasma6 ? 'kcmshell6' : 'kcmshell5';
     x11_start_program("$kcmshell powerdevilprofilesconfig", target_match => [qw(kde-energysaver-enabled energysaver-disabled)]);
-    # Open dropdown menu if necessary
+    # Open dropdown menu if necessary ("Turn off screen")
     click_lastmatch if match_has_tag('kde-display-timeout-menu');
     assert_and_click 'kde-disable-energysaver' if match_has_tag('kde-energysaver-enabled');
     assert_screen 'kde-energysaver-disabled';
+    # Disable "Dim automatically" if necessary.
+    # That option is not available on X11, there 'kde-display-dim-disabled' should match absence of the option.
+    assert_screen [qw(kde-display-dim-enabled kde-display-dim-disabled)];
+    if (match_has_tag('kde-display-dim-enabled')) {
+        click_lastmatch;    # Open dropdown
+        assert_and_click 'kde-display-dim-disable';
+        assert_screen 'kde-display-dim-disabled';
+    }
     # Was 'alt-o' before, but does not work in Plasma 5.17 due to kde#411758
     send_key 'ctrl-ret';
     assert_screen 'generic-desktop';
@@ -677,8 +711,7 @@ sub close_gui_terminal {
         send_key_until_needlematch(\@tags, 'alt-f4', 5, 10);
         if (match_has_tag('terminal-close-window')) {
             click_lastmatch;
-            assert_screen 'generic-desktop';
-            last;
+            next;
         }
         if (match_has_tag("terminal-unfocused")) {
             click_lastmatch;

@@ -13,9 +13,8 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#104181 tc#1769990
 
-use base 'opensusebasetest';
+use Mojo::Base qw(opensusebasetest consoletest);
 use testapi;
-use base 'consoletest';
 use utils qw(zypper_call package_upgrade_check);
 
 sub run {
@@ -39,10 +38,6 @@ sub run {
     # 'pamu2fcfg' command test, we don't have available yubikey
     # However, we can still check this command can work
     validate_script_output('pamu2fcfg 2>&1 || true', sub { m/No .* found. Aborting/ });
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

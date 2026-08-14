@@ -7,7 +7,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#110218
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use serial_terminal 'select_serial_terminal';
@@ -60,10 +60,6 @@ sub run {
         assert_script_run("kill -15 $pid") if ($test_result eq 'no response');
     }
     $self->result($test_module_result);
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

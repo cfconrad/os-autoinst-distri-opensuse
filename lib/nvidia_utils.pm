@@ -13,7 +13,7 @@ use testapi;
 use strict;
 use warnings;
 use utils;
-use version_utils 'is_transactional';
+use version_utils qw(is_transactional);
 use transactional;
 use base 'opensusebasetest';
 use serial_terminal qw(select_serial_terminal);
@@ -23,17 +23,41 @@ our @EXPORT = qw(
   install
   validate
   validate_cuda
+  get_nvidia_driver
 );
+
+
+=head2 get_nvidia_driver
+
+ get_nvidia_driver(install([ variant => 'cuda' ]);
+
+Get NVIDIA driver name based on driver branch and variant.
+The default is G06 driver branch and non cuda variant.
+
+=cut
+
+sub get_nvidia_driver {
+    my %args = @_;
+    my $branch = get_var('NVIDIA_DRIVER_BRANCH', 'G06');
+    my $driver;
+
+    if ($args{variant} eq 'cuda') {
+        $driver = "nvidia-open-driver-${branch}-signed-cuda-kmp-default";
+    } else {
+        $driver = "nvidia-open-driver-${branch}-signed-kmp-default";
+    }
+    return $driver;
+}
 
 =head2 install
 
  install([ variant => 'cuda' ], [ reboot => 0 ]);
 
 Install the NVIDIA driver and the compute utils, making sure to remove
-any conflicting variant first. Also, it tries to add the relevant
-repositories to grab the packages from, defined by the job through
-NVIDIA_REPO and NVIDIA_CUDA_REPO. Make sure to reboot the SUT after
-calling this subroutine.
+any conflicting branch and variant first. Also, it tries to add the
+relevant repositories to grab the packages from, defined by the job
+through NVIDIA_REPO and NVIDIA_CUDA_REPO. Make sure to reboot the SUT
+after calling this subroutine.
 
 Options:
 
@@ -47,12 +71,21 @@ serial_terminal and opensusebasetest.
 sub install
 {
     my %args = @_;
-    my $variant_std = 'nvidia-open-driver-G06-signed-kmp-default';
-    my $variant_cuda = 'nvidia-open-driver-G06-signed-cuda-kmp-default';
+    my $variant_std = get_nvidia_driver;
+    my $variant_cuda = get_nvidia_driver(variant => 'cuda');
     my $variant;
     my $reboot = $args{reboot} // 0;
 
     enter_trup_shell if is_transactional;
+
+    my $branch = get_var('NVIDIA_DRIVER_BRANCH', 'G06');
+
+    my $installed = zypper_search('-i nvidia-open-driver');
+    my @conflicting = grep { $_ !~ m/nvidia-open-driver-$branch/ } map { $_->{name} } @$installed;
+    if (@conflicting) {
+        record_info('NVIDIA', "Removing conflicting Nvidia drivers: @conflicting");
+        zypper_call("remove --clean-deps @conflicting");
+    }
 
     if ($args{variant} eq 'cuda') {
         $variant = $variant_cuda;
@@ -76,7 +109,7 @@ sub install
         $workaround = "nvidia-persistenced == $version";
         record_soft_failure("bsc#1249098 - workaround for Nvidia driver dependency issue");
     }
-    zypper_call("install -l nvidia-compute-utils-G06 == $version $workaround");
+    zypper_call("install -l nvidia-compute-utils-$branch == $version $workaround");
 
     exit_trup_shell if is_transactional;
 
@@ -112,7 +145,10 @@ sub validate
 
 sub validate_cuda
 {
-    zypper_call('install -l cmake git cuda-toolkit vulkan-devel freeglut-devel Mesa-libEGL-devel', timeout => 1200);
+    my $gcc_ver = get_var('NVIDIA_CUDA_GCC_VERSION');
+    my $gcc_pkgs = $gcc_ver ? "gcc$gcc_ver gcc$gcc_ver-c++" : "";
+
+    zypper_call("install -l cmake git $gcc_pkgs cuda-toolkit vulkan-devel freeglut-devel Mesa-libEGL-devel", timeout => 1200);
 
     # Query the GPU capabilities
     my $query = script_output('nvidia-smi --query-gpu=compute_cap --format=csv');
@@ -122,15 +158,18 @@ sub validate_cuda
 
     # Compiler smoke test with a simple hello_world program
     assert_script_run('curl -s -o hello_world.cu ' . data_url('cuda/hello_world.cu'));
-    assert_script_run("/usr/local/cuda/bin/nvcc -rdc=true -arch=sm_$compute_cap -o hello_world hello_world.cu");
+    my $nvcc_ccbin = $gcc_ver ? "-ccbin g++-$gcc_ver" : "";
+    assert_script_run("/usr/local/cuda/bin/nvcc -rdc=true -arch=sm_$compute_cap $nvcc_ccbin -std=c++20 -o hello_world hello_world.cu");
     record_info('CUDA Sample', script_output('./hello_world'));
 
     # Build NVIDIA/cuda-samples
-    assert_script_run('git clone --depth 1 --single-branch --branch master https://github.com/NVIDIA/cuda-samples.git');
+    my $cuda_samples_branch = get_var('NVIDIA_CUDA_SAMPLES_BRANCH', 'v13.3');
+    assert_script_run("git clone --depth 1 --single-branch --branch $cuda_samples_branch https://github.com/NVIDIA/cuda-samples.git");
     assert_script_run('mkdir cuda-samples/build; cd $_');
-    assert_script_run("cmake .. -DCMAKE_CUDA_COMPILER_TOOLKIT_ROOT=/usr/local/cuda -DCMAKE_CUDA_ARCHITECTURES=$compute_cap -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc");
+    my $cmake_compiler_args = $gcc_ver ? "-DCMAKE_C_COMPILER=gcc-$gcc_ver -DCMAKE_CXX_COMPILER=g++-$gcc_ver -DCMAKE_CUDA_HOST_COMPILER=g++-$gcc_ver" : "";
+    assert_script_run("cmake .. -DCMAKE_CUDA_COMPILER_TOOLKIT_ROOT=/usr/local/cuda -DCMAKE_CUDA_ARCHITECTURES=$compute_cap -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc $cmake_compiler_args -DCMAKE_CXX_STANDARD=20 -DCMAKE_CUDA_STANDARD=20");
     assert_script_run('make -j$(nproc)', 3000);
-    record_info('CUDA Sample', script_output('./Samples/0_Introduction/clock/clock'));
+    record_info('CUDA Sample', script_output('./cpp/0_Introduction/clock/clock'));
 }
 
 1;

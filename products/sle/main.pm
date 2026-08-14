@@ -13,7 +13,7 @@ use registration;
 use utils;
 use mmapi 'get_parents';
 use version_utils
-  qw(is_vmware is_hyperv is_hyperv_in_gui is_installcheck is_rescuesystem is_desktop_installed is_jeos is_sle is_staging is_upgrade is_public_cloud is_openstack is_transactional);
+  qw(is_vmware is_hyperv is_hyperv_in_gui is_installcheck is_rescuesystem is_desktop_installed is_jeos is_sle is_staging is_upgrade is_public_cloud is_transactional);
 use File::Find;
 use File::Basename;
 use LWP::Simple 'head';
@@ -31,6 +31,7 @@ BEGIN {
 }
 use utils;
 use main_common;
+use main_micro_alp;
 use main_ltp_loader 'load_kernel_tests';
 use main_pods;
 use known_bugs;
@@ -672,16 +673,18 @@ if (load_yaml_schedule) {
 return load_wicked_create_hdd if (get_var('WICKED_CREATE_HDD'));
 
 if (is_jeos) {
-    if (is_openstack) {
-        load_jeos_openstack_tests();
+    if (is_transactional) {
+        main_micro_alp::load_tests;
         return 1;
+    } else {
+        load_jeos_tests();
     }
-    load_jeos_tests();
 }
 
 # load the tests in the right order
 if (is_kernel_test()) {
     load_kernel_tests();
+    return 1;
 }
 elsif (is_systemd_test()) {
     unless (is_jeos()) {
@@ -910,7 +913,7 @@ elsif (get_var("VIRT_AUTOTEST")) {
         # Skip reset_partition for s390x due to there just be 42Gib disk space for each s390x LPAR
         loadtest "virt_autotest/reset_partition" if is_x86_64 && get_var('VIRT_PRJ1_GUEST_INSTALL') && !get_var('LTSS');
         loadtest "virt_autotest/reboot_and_wait_up_normal" if !is_registered_sles && get_var('REPO_0_TO_INSTALL');
-        loadtest "virt_autotest/prepare_nvram_for_snapshot" if get_var("ENABLE_SNAPSHOT") && is_x86_64 && get_var("VIRT_UEFI_GUEST_INSTALL");
+        loadtest "virt_autotest/prepare_nvram_for_snapshot" if get_var("ENABLE_SNAPSHOT") && is_x86_64 && get_var("VIRT_UEFI_GUEST_INSTALL") && is_sle('<16.1');
         loadtest "virt_autotest/download_guest_assets" if get_var("SKIP_GUEST_INSTALL") && is_x86_64;
     }
     if (get_var("VIRT_PRJ1_GUEST_INSTALL")) {

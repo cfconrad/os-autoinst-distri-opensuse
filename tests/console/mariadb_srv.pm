@@ -12,10 +12,11 @@
 # - Check mariadb service status
 # Maintainer: QE Core <qe-core@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
+use package_utils 'install_package';
 use version_utils qw(is_sle is_jeos has_selinux is_public_cloud);
 use Utils::Architectures;
 
@@ -32,8 +33,8 @@ sub cleanup {
 sub run {
     select_serial_terminal;
 
-    zypper_call('in mariadb');
-    zypper_call("in policycoreutils-python-utils") if has_selinux();
+    install_package('mariadb', trup_continue => 1, trup_reboot => 1);
+    install_package("policycoreutils-python-utils", trup_continue => 1, trup_reboot => 1) if (has_selinux() && script_run('rpm -q policycoreutils-python-utils'));
 
     if (script_run("grep 'bindir=\"\$basedir/sbin\"' /usr/bin/${mariadb}_install_db") == 0) {
         record_soft_failure 'bsc#1142058';
@@ -62,9 +63,10 @@ sub run {
     # Test multiple instance configuration
     # It is not supported in sle12sp2 and sle12sp3
     if (!is_sle('<=12-SP3')) {
-        assert_script_run "touch /etc/mynode{1,2}.cnf";
-        assert_script_run "curl " . data_url('console/mariadb/mynode1.cnf') . " -o /etc/mynode1.cnf";
-        assert_script_run "curl " . data_url('console/mariadb/mynode2.cnf') . " -o /etc/mynode2.cnf";
+        assert_script_run "curl " . data_url('console/mariadb/mynode1.cnf') . " -o /tmp/mariadb_mynode1.cnf";
+        assert_script_run "curl " . data_url('console/mariadb/mynode2.cnf') . " -o /tmp/mariadb_mynode2.cnf";
+        assert_script_run "mv -Z /tmp/mariadb_mynode1.cnf /etc/mynode1.cnf";
+        assert_script_run "mv -Z /tmp/mariadb_mynode2.cnf /etc/mynode2.cnf";
         assert_script_run "mkdir -p /var/lib/mysql/node{1,2}";
         assert_script_run "chown mysql:root /var/lib/mysql/node{1,2}";
 

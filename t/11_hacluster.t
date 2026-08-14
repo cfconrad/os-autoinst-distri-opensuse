@@ -22,7 +22,6 @@ my %original_hacluster_sbd_delay_params = (
     corosync_consensus => $hacluster::corosync_consensus,
     sbd_watchdog_timeout => $hacluster::sbd_watchdog_timeout,
     sbd_delay_start => $hacluster::sbd_delay_start,
-    pcmk_delay_max => $hacluster::pcmk_delay_max
 );
 
 sub mock_hacluster_sbd_delay_parameters {
@@ -31,7 +30,6 @@ sub mock_hacluster_sbd_delay_parameters {
     $hacluster::corosync_consensus = $args{corosync_consensus} // 2;
     $hacluster::sbd_watchdog_timeout = $args{sbd_watchdog_timeout} // 3;
     $hacluster::sbd_delay_start = $args{sbd_delay_start} // 4;
-    $hacluster::pcmk_delay_max = $args{pcmk_delay_max} // 42;
 }
 
 sub reset_hacluster_sbd_delay_parameters {
@@ -39,7 +37,6 @@ sub reset_hacluster_sbd_delay_parameters {
     $hacluster::corosync_consensus = $original_hacluster_sbd_delay_params{corosync_consensus};
     $hacluster::sbd_watchdog_timeout = $original_hacluster_sbd_delay_params{sbd_watchdog_timeout};
     $hacluster::sbd_delay_start = $original_hacluster_sbd_delay_params{sbd_delay_start};
-    $hacluster::pcmk_delay_max = $original_hacluster_sbd_delay_params{pcmk_delay_max};
 }
 
 subtest '[calculate_sbd_start_delay] Check sbd_delay_start values' => sub {
@@ -103,6 +100,8 @@ subtest '[collect_sbd_delay_parameters] retry corosync-cmapctl' => sub {
     $hacluster->redefine(script_output => sub { return $_[0]; });
     my @retry_cmds = ();
     $hacluster->redefine(script_retry => sub { push @retry_cmds, @_; });
+    # collect_sbd_delay_parameters() uses pcmk_delay_max_cmd()
+    $hacluster->redefine(pcmk_delay_max_cmd => sub { return 42; });
 
     mock_hacluster_sbd_delay_parameters();
     collect_sbd_delay_parameters();
@@ -119,6 +118,8 @@ subtest '[collect_sbd_delay_parameters] SBD scenario' => sub {
     # Just returns whatever you put as command
     $hacluster->redefine(script_output => sub { return $_[0]; });
     $hacluster->redefine(script_retry => sub { return 0; });
+    # collect_sbd_delay_parameters() uses pcmk_delay_max_cmd()
+    $hacluster->redefine(pcmk_delay_max_cmd => sub { return 42; });
 
     mock_hacluster_sbd_delay_parameters();
     my %params = collect_sbd_delay_parameters();
@@ -137,6 +138,8 @@ subtest '[collect_sbd_delay_parameters] SBD scenario - undefined pcmk_delay_max'
     # Just returns whatever you put as command
     $hacluster->redefine(script_output => sub { return $_[0]; });
     $hacluster->redefine(script_retry => sub { return 0; });
+    # collect_sbd_delay_parameters() uses pcmk_delay_max_cmd()
+    $hacluster->redefine(pcmk_delay_max_cmd => sub { return 'asdf'; });
 
     mock_hacluster_sbd_delay_parameters(pcmk_delay_max => 'asdf');
     my %params = collect_sbd_delay_parameters();
@@ -462,6 +465,8 @@ subtest '[check_cluster_state]' => sub {
     my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
     my @calls;
     $hacluster->redefine(script_run => sub { push @calls, $_[0]; });
+    $hacluster->redefine(cmd_run => sub { push @calls, $_[0];
+            return 'cmd_run'; });
     $hacluster->redefine(assert_script_run => sub { push @calls, $_[0]; });
     $hacluster->redefine(check_online_nodes => sub { push @calls, 'check_online_nodes'; });
     $hacluster->redefine(script_output => sub { return 'crmshver=4.4.2'; });
@@ -477,15 +482,31 @@ subtest '[check_cluster_state]' => sub {
 subtest '[check_cluster_state] assert calls normally' => sub {
     my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
     my @calls;
-    $hacluster->redefine(script_run => sub { push @calls, 'script_run'; });
+    $hacluster->redefine(script_run => sub { push @calls, 'retry_script_run'; });
     $hacluster->redefine(assert_script_run => sub { push @calls, 'assert_script_run'; });
     $hacluster->redefine(check_online_nodes => sub { return; });
     $hacluster->redefine(script_output => sub { return 'crmshver=4.4.2'; });
+    $hacluster->redefine(cmd_run => sub { push @calls, 'cmd_run';
+            return 'all good' });
 
     check_cluster_state();
     note("\n  -->  " . join("\n  -->  ", @calls));
 
-    ok((all { /assert_script_run/ } @calls), 'check_cluster_state used assert_script_run');
+    ok((all { /(retry_script_run|assert_script_run|cmd_run)/ } @calls), 'check_cluster_state
+    used assert_script_run');
+};
+
+subtest '[check_cluster_state] Cluster state errors' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my @calls;
+    $hacluster->redefine(script_run => sub { push @calls, 'script_run'; });
+    $hacluster->redefine(assert_script_run => sub { push @calls, 'assert_script_run'; });
+    $hacluster->redefine(check_online_nodes => sub { return; });
+    $hacluster->redefine(script_output => sub { return 'crmshver=4.4.2'; });
+    $hacluster->redefine(cmd_run => sub { push @calls, 'cmd_run';
+            return (42, 'Cluster is not happy') });
+
+    dies_ok { check_cluster_state() } 'Fail with unhealthy cluster';
 };
 
 subtest '[check_cluster_state] proceed_on_failure' => sub {
@@ -495,11 +516,14 @@ subtest '[check_cluster_state] proceed_on_failure' => sub {
     $hacluster->redefine(assert_script_run => sub { push @calls, 'assert_script_run'; });
     $hacluster->redefine(check_online_nodes => sub { return; });
     $hacluster->redefine(script_output => sub { return 'crmshver=4.4.2'; });
+    $hacluster->redefine(cmd_run => sub { push @calls, 'cmd_run';
+            return (78, 'Warnings only') });
 
     check_cluster_state(proceed_on_failure => 1);
     note("\n  -->  " . join("\n  -->  ", @calls));
 
-    ok((all { /^script_run$/ } @calls), 'check_cluster_state used script_run');
+    ok((all { /^(script_run|cmd_run)$/ } @calls), 'check_cluster_state used
+    script_run');
 };
 
 subtest '[check_cluster_state] migration scenario' => sub {
@@ -514,8 +538,8 @@ subtest '[check_cluster_state] migration scenario' => sub {
     check_cluster_state();
     note("\n  -->  " . join("\n  -->  ", @calls));
 
-    ok((scalar(grep { /^script_run$/ } @calls)) == 1, 'One call with script_run');
-    ok((scalar(grep { /assert_script_run/ } @calls) == (scalar(@calls) - 1)), 'Remaining calls with assert_script_run');
+    ok((scalar(grep { /^script_run$/ } @calls)) == 11, 'Eleven calls with script_run');
+    ok((scalar(grep { /assert_script_run/ } @calls) == (scalar(@calls) - 11)), 'Remaining calls with assert_script_run');
     set_var('HDDVERSION', undef);
 };
 
@@ -526,6 +550,8 @@ subtest '[check_cluster_state] old crmsh' => sub {
     $hacluster->redefine(assert_script_run => sub { push @calls, $_[0]; });
     $hacluster->redefine(check_online_nodes => sub { push @calls, 'check_online_nodes'; });
     $hacluster->redefine(script_output => sub { return 'crmshver=3.6.0'; });
+    $hacluster->redefine(cmd_run => sub { push @calls, $_[0];
+            return (0, 'Cluster happy') });
 
     check_cluster_state();
     note("\n  -->  " . join("\n  -->  ", @calls));
@@ -788,6 +814,7 @@ subtest '[crm_list_options] invalid xml' => sub {
 END
     });
     $hacluster->redefine(record_info => sub { note(join(' ', "RECORD_INFO ( $this_test_ver )-->", @_)); });
+    $hacluster->redefine(diag => sub { note(join(' ', "DIAG ( $this_test_ver )-->", @_)); });
 
     $this_test_ver = '5.0.0';
     my $res = crm_list_options();
@@ -934,6 +961,168 @@ subtest '[get_fencing_type] ' => sub {
     my @tested_keys = keys(%tested_values);
     $hacluster->redefine(script_output => sub { return $tested_values{shift(@tested_keys)}; });
     is get_fencing_type, $_, "Return correct fencing type '$_'" foreach @tested_keys;
+};
+
+subtest '[generate_lun_list]' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my @results = ();
+    $hacluster->redefine(script_run => sub { push @results, $_[0]; });
+    my $tgt_ip_port = '10.0.0.2:3260';
+    $hacluster->redefine(script_output => sub { return $tgt_ip_port; });
+    my $iqn = 'iqn.2026-02.unit.test';
+    $hacluster->redefine(lio_show_iqn => sub { return $iqn; });
+    my $numluns = 3;
+    set_var('CLUSTER_INFOS', 'cluster:2:' . $numluns);
+    generate_lun_list();
+    set_var('CLUSTER_INFOS', undef);
+    note("\n --> " . join("\n --> ", @results));
+    ok(@results == $numluns, 'Correct number of LUNs');
+    foreach my $i (0 .. 2) { ok($results[$i] =~ /.+$tgt_ip_port.+$iqn-lun\-$i/, "Correct LUN path [$i]"); }
+};
+
+subtest '[sync_file] crm cluster copy' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my @results = ();
+    $hacluster->redefine(assert_script_run => sub { push @results, $_[0]; });
+    my $test_file = 'MEGATRON';
+    set_var('VERSION', '16.0');
+    set_var('DISTRI', 'sle');
+    sync_file($test_file);
+    set_var('VERSION', undef);
+    set_var('DISTRI', undef);
+    note("\n --> " . join("\n --> ", @results));
+    ok($results[0] eq "crm cluster copy $test_file", 'Using "crm cluster copy"');
+};
+
+subtest '[sync_file] csync2' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my @results = ();
+    $hacluster->redefine(assert_script_run => sub { push @results, $_[0]; });
+    my $test_file = 'UNICRON';
+    set_var('VERSION', '14');
+    set_var('DISTRI', 'sle');
+    sync_file($test_file);
+    set_var('VERSION', undef);
+    set_var('DISTRI', undef);
+    note("\n --> " . join("\n --> ", @results));
+    ok($results[0] =~ m|w./etc/csync2/csync2.cfg|, 'Checking csync2.cfg is writable');
+    ok($results[1] =~ /grep.+$test_file.+sed.+$test_file/, 'Checking file in csyn2.cfg and adding it');
+    ok($results[1] =~ m|/etc/csync2/csync2.cfg|, 'Adding file to csync2.cfg');
+    ok($results[2] eq 'csync2 -vxF ; sleep 2 ; csync2 -vxF', 'Using csyn2');
+};
+
+subtest '[sync_path] crm cluster copy' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my @results = ();
+    $hacluster->redefine(assert_script_run => sub { push @results, $_[0]; });
+    my $test_path = 'STARSCREAM/*';
+    set_var('VERSION', '16.0');
+    set_var('DISTRI', 'sle');
+    sync_path($test_path);
+    set_var('VERSION', undef);
+    set_var('DISTRI', undef);
+    note("\n --> " . join("\n --> ", @results));
+    ok($results[0] =~ m|for p in $test_path.+crm cluster copy|, 'Using "crm cluster copy"');
+};
+
+subtest '[sync_path] csync2' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my @results = ();
+    $hacluster->redefine(assert_script_run => sub { push @results, $_[0]; });
+    my $test_path = 'SOUNDWAVE/*';
+    set_var('VERSION', '14');
+    set_var('DISTRI', 'sle');
+    sync_path($test_path);
+    set_var('VERSION', undef);
+    set_var('DISTRI', undef);
+    note("\n --> " . join("\n --> ", @results));
+    ok($results[0] =~ m|w./etc/csync2/csync2.cfg|, 'Checking csync2.cfg is writable');
+    ok($results[1] =~ /grep.+$test_path.+sed.+$test_path/, 'Checking file in csyn2.cfg and adding it');
+    ok($results[1] =~ m|/etc/csync2/csync2.cfg|, 'Adding file to csync2.cfg');
+    is $results[2], 'csync2 -vxF ; sleep 2 ; csync2 -vxF', 'Using csyn2';
+};
+
+subtest '[get_crmsh_vesion]' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my $test_version = 'THIS_IS_MY_VERSION';
+    $hacluster->redefine(script_output => sub { return "crmshver=$test_version"; });
+    my $version = get_crmsh_version();
+    is $version, $test_version, 'Expected crmsh version match';
+    $test_version = '1.2.3.4';
+    $version = get_crmsh_version();
+    is $version, $test_version, 'Expected crmsh version match';
+};
+
+subtest '[get_fencing_ra_name] - expected config' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my @test_data = ("primitive stonith-sbd stonith:external/sbd \\\n\tparams pcmk_delay_max=30s",
+        "primitive stonith-sbd stonith:fence_sbd \\\n\tparams pcmk_delay_max=30s",
+        "primitive fencing-sbd stonith:external/sbd \\\n\tparams pcmk_delay_max=30s",
+        "primitive fencing-sbd stonith:fence_sbd \\\n\tparams pcmk_delay_max=30s");
+    my $fencing_ra = '';
+    foreach (1 .. 2) {
+        $fencing_ra = get_fencing_ra_name(shift(@test_data));
+        is $fencing_ra, 'stonith-sbd', 'Fencing RA correctly set to `stonith-sbd`';
+    }
+    foreach (1 .. 2) {
+        $fencing_ra = get_fencing_ra_name(shift(@test_data));
+        is $fencing_ra, 'fencing-sbd', 'Fencing RA correctly set to `stonith-sbd`';
+    }
+};
+
+subtest '[get_fencing_ra_name] - unexpected config' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    dies_ok { get_fencing_ra_name('unexpected output') } 'Test should die with unexpected config';
+};
+
+subtest '[pcmk_delay_max_cmd] provide fence_sbd primitive name' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    foreach (qw(fencing-sbd stonith-sbd MICKEY PLUTO GOOFY)) {
+        my $pcmk_delay_max_cmd = pcmk_delay_max_cmd($_);
+        ok($pcmk_delay_max_cmd =~ /^crm resource param $_ show pcmk_delay_max/, "Command to get pcmk_delay_max correct for [$_] input");
+    }
+};
+
+subtest '[pcmk_delay_max_cmd] calculate fence_sbd primitive name' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    $hacluster->redefine(script_output => sub { return $_[0]; });
+    my $orig_fence_sbd_var = $hacluster::crm_config_show_fence_sbd;
+    foreach (qw(fencing-sbd stonith-sbd MICKEY PLUTO GOOFY)) {
+        # Mock hacluster package variable for test
+        $hacluster::crm_config_show_fence_sbd = "primitive $_ stonith:fence_sbd";
+        my $pcmk_delay_max_cmd = pcmk_delay_max_cmd();
+        ok($pcmk_delay_max_cmd =~ /^crm resource param $_ show pcmk_delay_max/, "Calculated command to get pcmk_delay_max correct for [$_]");
+    }
+    # Set original value back
+    $hacluster::crm_config_show_fence_sbd = $orig_fence_sbd_var;
+};
+
+subtest '[get_bootstrap_properties]' => sub {
+    my $hacluster = Test::MockModule->new('hacluster', no_auto => 1);
+    my @test_data = ('property cib-bootstrap-options: \
+	dc-version="GENERATION_2" \
+	cluster-infrastructure=corosync \
+	have-watchdog=true \
+	cluster-name=k-tor-cluster \
+	stonith-enabled=true \
+	stonith-timeout=71 \
+	fencing-enabled=true \
+	fencing-timeout=71 \
+	priority-fencing-delay=60 \
+	last-lrm-refresh=1777299458', 'WRONGLY FORMATTED OUTPUT');
+    $hacluster->redefine(script_output => sub { return shift(@test_data); });
+    my $properties = get_bootstrap_properties();
+    is $properties->{'dc-version'}, '"GENERATION_2"', 'Correct dc-version';
+    is $properties->{'cluster-infrastructure'}, 'corosync', 'Correct cluster-infrastructure';
+    is $properties->{'have-watchdog'}, 'true', 'Correct have-watchdog value';
+    is $properties->{'cluster-name'}, 'k-tor-cluster', 'Correct cluster-name';
+    is $properties->{'stonith-enabled'}, 'true', 'Correct stonith-enabled value';
+    is $properties->{'stonith-timeout'}, 71, 'Correct stonith-timeout value';
+    is $properties->{'fencing-enabled'}, 'true', 'Correct fencing-enabled value';
+    is $properties->{'fencing-timeout'}, 71, 'Correct fencing-timeout value';
+    is $properties->{'priority-fencing-delay'}, 60, 'Correct priority-fencing-delay value';
+    is $properties->{'last-lrm-refresh'}, 1777299458, 'Correct last-lrm-refresh';
+    dies_ok { get_bootstrap_properties() } 'Test should die with unexpected output';
 };
 
 done_testing;

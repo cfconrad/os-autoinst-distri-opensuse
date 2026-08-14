@@ -8,7 +8,7 @@
 #    Works only with CDMODEL=ide-cd and QEMUCPU=host or core2duo (maybe other but not qemu64)
 # Maintainer: qa-c <qa-c@suse.de>
 
-use base "windowsbasetest";
+use Mojo::Base 'windowsbasetest';
 use testapi;
 
 sub run {
@@ -56,7 +56,16 @@ sub run {
             }
         }
     );
+    $self->run_in_powershell(
+        cmd => '$port.WriteLine($(Get-LocalUser | Where-Object { $_.Enabled } | Select Name,PasswordExpires))',
+        code => sub {
+            wait_serial("Name=Bernhard.*PasswordExpires=(?>)}") || die "Failed to disable max password age";
+        }
+    );
     $self->close_powershell;
 }
 
+sub test_flags {
+    return {fatal => 1};
+}
 1;

@@ -5,9 +5,9 @@
 
 # Package: SUSEConnect zypper
 # Summary: sle12 online migration testsuite
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "installbasetest";
+use Mojo::Base 'installbasetest';
 use testapi;
 use utils;
 use version_utils qw(is_desktop_installed is_sles4sap is_sle);

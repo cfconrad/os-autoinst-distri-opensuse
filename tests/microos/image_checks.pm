@@ -6,9 +6,9 @@
 # Summary: Run simple image specific checks
 # Maintainer: Fabian Vogt <fvogt@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
-use version_utils qw(is_microos is_sle_micro is_jeos is_leap_micro);
+use version_utils qw(is_microos is_sle_micro is_jeos is_leap_micro is_transactional);
 use Utils::Backends 'is_pvm';
 use Utils::Architectures qw(is_aarch64 is_ppc64le);
 
@@ -34,13 +34,14 @@ sub run {
     # Verify that there is no unpartitioned space left
     # 0 sectors is default and expected value in most of the images
     my $left_sectors = 0;
-    if ((is_sle_micro("6.2+") || is_leap_micro("6.2+")) && is_aarch64 && !(get_var('FLAVOR', '') =~ /qcow/i) && !check_var('FROM_VERSION', '6.1')) {
+    if ((is_sle_micro("6.2+") || is_leap_micro("6.2+") || (is_jeos && is_transactional)) && is_aarch64 && !(get_var('FLAVOR', '') =~ /kvm-and-xen|qcow/i) && !check_var('FROM_VERSION', '6.1')) {
         $left_sectors = 6144;
     } elsif ((is_sle_micro("=6.1") || is_leap_micro("=6.1") || check_var('FROM_VERSION', '6.1')) && is_aarch64 && (get_var('FLAVOR', '') =~ /selfinstall/i)) {
         $left_sectors = 4062;
     } elsif ((is_sle_micro("5.4+") || is_leap_micro("5.4+")) && is_aarch64 && get_var('FLAVOR', '') !~ m/qcow|SelfInstall/) {
         $left_sectors = 2048;
-    } elsif ((is_sle_micro("6.0+") && get_required_var('FLAVOR') =~ /ppc-4096/) || (is_sle_micro("6.2+") && is_ppc64le && (get_var('FLAVOR') =~ /qcow/)) || is_jeos && is_ppc64le) {
+    } elsif ((is_sle_micro("6.0+") && get_required_var('FLAVOR') =~ /ppc-4096/) || (is_sle_micro("6.2+") && is_ppc64le && (get_var('FLAVOR') =~ /qcow/)) ||
+        is_jeos && is_ppc64le && check_var('HDDSECTORSIZE_1', '4096')) {
         $left_sectors = 1792;
     }
 

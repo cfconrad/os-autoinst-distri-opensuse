@@ -122,7 +122,6 @@ our @EXPORT = qw(
   load_extra_tests_y2uitest_gui
   load_extra_tests_kernel
   load_wicked_create_hdd
-  load_jeos_openstack_tests
   load_upstream_systemd_tests
 );
 
@@ -135,6 +134,16 @@ sub init_main {
     if (is_qemu && data_integrity_is_applicable()) {
         my $errors = verify_checksum();
         set_var('CHECKSUM_FAILED', $errors) if $errors;
+    }
+    # allow scheduling jobs with e.g. `VERSION=16.0:git-1234` instead of just `VERSION=16.0`
+    # note: This is useful because then jobs for individual submissions are not wrongly considered
+    #       to be for consecutive builds and e.g. wrong bugref carry over is avoided.
+    if (my $version = get_var('VERSION')) {
+        my $simplified_version = $version =~ s/:(?:(git|smelt|PR)[-:])\d+$//rgi;
+        if ($version ne $simplified_version) {
+            set_var('VERSION_ORIGINAL', $version);
+            set_var('VERSION', $simplified_version);
+        }
     }
 }
 
@@ -179,7 +188,10 @@ sub setup_env {
         set_var('INSTLANG', 'en_US');
     }
 
-    set_var('LTP_KNOWN_ISSUES', 'https://raw.githubusercontent.com/openSUSE/kernel-qe/main/ltp_known_issues.yaml') if is_opensuse and !get_var('LTP_KNOWN_ISSUES');
+    my $kernel_qe_opensuse_repo_base = 'https://raw.githubusercontent.com/openSUSE/kernel-qe/main';
+    set_var('LTP_KNOWN_ISSUES', "$kernel_qe_opensuse_repo_base/ltp_known_issues.yaml") if is_opensuse and !get_var('LTP_KNOWN_ISSUES');
+    set_var('XFSTESTS_AI_KB', "$kernel_qe_opensuse_repo_base/ai_knowledge_base.yaml") if is_opensuse and get_var('XFSTESTS') and !get_var('XFSTESTS_AI_KB');
+    set_var('XFSTESTS_QE_KB', "$kernel_qe_opensuse_repo_base/qe_knowledge_base.yaml") if is_opensuse and get_var('XFSTESTS') and !get_var('XFSTESTS_QE_KB');
 
     # By default format DASD devices before installation
     if (is_backend_s390x) {
@@ -250,9 +262,8 @@ sub kdestep_is_applicable {
 
 sub opensuse_welcome_applicable {
     my $desktop = shift // get_var('DESKTOP', '');
-    # No libqt5-qtwebengine on ppc64/ppc64le and s390 on anything older than Tumbleweed
-    # Tumbleweed has switched to a gnome-tour/gtk based implementation
-    return 0 if !is_tumbleweed && get_var('ARCH', '') =~ /ppc64|s390/;
+    # Tumbleweed and Leap 16.1 has switched to a gnome-tour/gtk based implementation
+    return 0 if !is_tumbleweed && get_var('ARCH', '') =~ /s390/;
     # openSUSE-welcome is expected to show up on openSUSE Tumbleweed and Leap 15.2 XFCE only
     # starting with Leap 15.3 opensuse-welcome is enabled on supported DEs not just XFCE
     return 0 unless is_tumbleweed || is_leap(">=15.3");
@@ -309,7 +320,8 @@ sub replace_opensuse_repos_tests {
 sub is_updates_tests {
     my $flavor = get_var('FLAVOR');
     return 0 unless $flavor;
-    # Incidents might be also Incidents-Gnome or Incidents-Kernel or Online-Increments(for sle16)
+    return 0 if ($flavor =~ "BCI-Updates");    # BCI do not count as update tests
+                                               # Incidents might be also Incidents-Gnome or Incidents-Kernel or Online-Increments(for sle16)
     return $flavor =~ /-Updates|-Incidents|-Increments/;
 }
 
@@ -369,7 +381,6 @@ sub default_desktop {
 }
 
 sub load_shutdown_tests {
-    return if is_openstack;
     # Schedule cleanup before shutdown only in cases the HDD will be published
     loadtest("shutdown/cleanup_before_shutdown") if get_var('PUBLISH_HDD_1');
     loadtest "shutdown/shutdown";
@@ -591,51 +602,6 @@ sub load_system_role_tests {
     }
 }
 
-sub load_jeos_openstack_tests {
-    return unless is_openstack;
-    my $args = OpenQA::Test::RunArgs->new();
-    loadtest 'boot/boot_to_desktop';
-    if (get_var('JEOS_OPENSTACK_UPLOAD_IMG')) {
-        loadtest "publiccloud/upload_image";
-        return;
-    } else {
-        loadtest "jeos/prepare_openstack", run_args => $args;
-    }
-
-    if (get_var('LTP_COMMAND_FILE')) {
-        loadtest 'publiccloud/run_ltp';
-        return;
-    } else {
-        loadtest 'publiccloud/ssh_interactive_start', run_args => $args;
-    }
-
-    if (get_var('CI_VERIFICATION')) {
-        loadtest 'jeos/verify_cloudinit', run_args => $args;
-        loadtest("publiccloud/ssh_interactive_end", run_args => $args);
-        return;
-    }
-
-    loadtest "jeos/image_info";
-    loadtest "jeos/record_machine_id";
-    loadtest "console/system_prepare" if is_sle;
-    loadtest "console/force_scheduled_tasks";
-    loadtest "jeos/host_config";
-    loadtest "jeos/build_key";
-    loadtest "console/prjconf_excluded_rpms";
-    unless (get_var('CI_VERIFICATION')) {
-        loadtest "console/suseconnect_scc";
-    }
-    unless (get_var('CONTAINER_RUNTIMES')) {
-        loadtest "console/journal_check";
-        loadtest "microos/libzypp_config";
-    }
-
-    loadtest 'qa_automation/patch_and_reboot' if is_updates_tests;
-    replace_opensuse_repos_tests if is_repo_replacement_required;
-    main_containers::load_container_tests();
-    loadtest("publiccloud/ssh_interactive_end", run_args => $args);
-}
-
 sub load_jeos_tests {
     if (is_community_jeos()) {
         # Enable jeos-firstboot, due to boo#1020019
@@ -647,15 +613,21 @@ sub load_jeos_tests {
     if (check_var('FIRST_BOOT_CONFIG', 'combustion')) {
         if (get_var('LTP_COMMAND_FILE', '')) {
             loadtest "installation/first_boot";
+            loadtest "jeos/host_config" unless (is_bootloader_sdboot || is_bootloader_grub2_bls);
         } else {
             loadtest 'microos/verify_setup';
             loadtest 'microos/image_checks';
         }
     } elsif (check_var('FIRST_BOOT_CONFIG', 'cloud-init')) {
+        if (is_s390x) {
+            loadtest "boot/reconnect_mgmt_console";
+        }
         loadtest "installation/first_boot";
+        loadtest "jeos/host_config" unless (is_bootloader_sdboot || is_bootloader_grub2_bls);
         loadtest 'jeos/verify_cloudinit';
     } else {
         loadtest "jeos/firstrun";
+        loadtest "jeos/host_config" unless (is_bootloader_sdboot || is_bootloader_grub2_bls);
         if (get_var('POSTGRES_IP')) {
             loadtest "jeos/image_info";
         }
@@ -664,7 +636,6 @@ sub load_jeos_tests {
 
     loadtest "console/force_scheduled_tasks";
     # this test case also disables grub timeout
-    loadtest "jeos/host_config" unless (is_bootloader_sdboot || is_bootloader_grub2_bls);
     unless (get_var('INSTALL_LTP') || get_var('SYSTEMD_TESTSUITE') || get_var('CONTAINER_RUNTIMES')) {
         loadtest "jeos/record_machine_id";
         # jeos/diskusage as of now works only with BTRFS
@@ -1120,7 +1091,7 @@ sub load_inst_tests {
         # On Xen PV we don't have GRUB on VNC
         # SELinux relabel reboots on SLE <16 and Leap <16.0, so grub needs to timeout
         set_var('KEEP_GRUB_TIMEOUT', 1) if check_var('VIRSH_VMM_TYPE', 'linux') || (get_var('SELINUX') && (is_sle('<16') || is_leap('<16.0')));
-        loadtest 'installation/configure_bls' if (is_bootloader_sdboot || is_bootloader_grub2_bls);
+        loadtest 'installation/configure_bls' if ((is_bootloader_sdboot || is_bootloader_grub2_bls) || get_var('BOOTLOADER'));
         loadtest "installation/disable_grub_timeout" if is_bootloader_grub2 && !get_var('KEEP_GRUB_TIMEOUT');
         if (check_var('VIDEOMODE', 'text') && is_ipmi) {
             loadtest "installation/disable_grub_graphics";
@@ -1163,9 +1134,7 @@ sub load_console_server_tests {
     loadtest "console/apache";
     loadtest "console/dns_srv";
     loadtest "console/postgresql_server" unless (is_leap('<15.0'));
-    if (is_sle('12-SP1+')) {    # shibboleth-sp not available on SLES 12 GA
-        loadtest "console/shibboleth";
-    }
+    loadtest "console/shibboleth" if (is_sle && !is_jeos);
     if (!is_staging && (is_opensuse || get_var('ADDONS', '') =~ /wsm/ || get_var('SCC_ADDONS', '') =~ /wsm/)) {
         # TODO test on SLE https://progress.opensuse.org/issues/31972
         loadtest "console/mariadb_odbc" if is_opensuse;
@@ -1226,10 +1195,11 @@ sub load_consoletests {
         # zypper and sle12 doesn't do upgrade or installation snapshots
         # SLES4SAP default installation flow does not configure snapshots
         elsif (!get_var("ZDUP") and !check_var('VERSION', '12') and !is_sles4sap()) {
-            loadtest "console/installation_snapshots" unless get_var('FLAVOR') =~ /OpenStack-Cloud/;
+            loadtest "console/installation_snapshots";
         }
     }
-    loadtest "console/opensuse_repos" if is_opensuse && !(is_staging || is_updates_tests);
+    # This module only works if openQA supplies its own repos and thus openSUSE-repos is *not* used.
+    loadtest "console/opensuse_repos" if is_opensuse && get_var('REPO_0');
     loadtest "console/zypper_lr";
     # Enable installation repo from the usb, unless we boot from USB, but don't use it
     # for the installation, like in case of LiveCDs and when using http/smb/ftp mirror
@@ -2054,18 +2024,18 @@ sub load_x11_documentation {
 
 sub load_x11_gnome {
     return unless check_var('DESKTOP', 'gnome');
-    if (is_sle('12-SP2+')) {
+    if (is_sle('<16')) {
         loadtest "x11/gdm_session_switch";
+        loadtest "x11/gnomecase/gnome_classic_switch";
+    }
+    if (is_sle('<16') || is_tumbleweed) {
+        loadtest "x11/gnomecase/gnome_default_applications";
+        loadtest "x11/gnomecase/application_starts_on_login";
     }
     loadtest "x11/gnomecase/nautilus_cut_file";
     loadtest "x11/gnomecase/nautilus_permission";
     loadtest "x11/gnomecase/nautilus_open_ftp";
-    loadtest "x11/gnomecase/application_starts_on_login";
     loadtest "x11/gnomecase/login_test";
-    if (is_sle '12-SP1+') {
-        loadtest "x11/gnomecase/gnome_classic_switch";
-    }
-    loadtest "x11/gnomecase/gnome_default_applications";
     loadtest "x11/gnomecase/gnome_window_switcher";
     loadtest "x11/gnomecase/change_password";
 }
@@ -2465,6 +2435,9 @@ sub get_virt_features_definition {
         ENABLE_SEV_ES => {
             modules => ['virt_autotest/sev_es_guest_verification'],
         },
+        ENABLE_TDX => {
+            modules => ['virt_autotest/tdx_validation'],
+        },
     );
 }
 
@@ -2501,9 +2474,9 @@ sub load_host_installation_modules {
 }
 
 sub set_mu_virt_vars {
-    # Set UPDATE_PACKAGE based on BUILD(format example, BUILD=:33310:dtb-armv7l)
+    # Set UPDATE_PACKAGE based on BUILD(format example, BUILD=:33310:dtb-armv7l or BUILD=:smelt:33310:dtb-armv7l)
     my $BUILD = get_required_var('BUILD');
-    $BUILD =~ /^:(\d+):([^:]+)$/im;
+    $BUILD =~ /:(\d+):([^:]+)$/im;
 
     die "BUILD value is $BUILD, but does not match required format." if (!$2);
     my $_pkg = $2;
@@ -2511,10 +2484,12 @@ sub set_mu_virt_vars {
     # If $_pkg contains none, it is for ease of functional testing when no incidents are coming.
     if ($_pkg =~ /none/) {
         $_update_package = '';
-    } elsif ($_pkg =~ /qemu|xen|virt-manager|libguestfs|libslirp|open-vm-tools|dnsmasq|sevctl/) {
+    } elsif ($_pkg =~ /qemu|xen|virt-manager|libguestfs|open-vm-tools|dnsmasq|sevctl/) {
         $_update_package = $_pkg;
     } elsif ($_pkg =~ /libvirt/) {
         $_update_package = 'libvirt-client';
+    } elsif ($_pkg =~ /libslirp/) {
+        $_update_package = 'libslirp0';
     } else {
         $_update_package = 'kernel-default';
     }
@@ -2615,7 +2590,7 @@ sub set_sles16_mu_virt_vars {
     # Parse BUILD variable and set UPDATE_PACKAGE (format example: BUILD=:345:qemu)
     # This logic is the same as set_mu_virt_vars() to maintain consistency
     if (!get_var('UPDATE_PACKAGE') && (my $BUILD = get_var('BUILD'))) {
-        $BUILD =~ /^:(\d+):([^:]+)$/im;
+        $BUILD =~ /:(\d+):([^:]+)$/im;
         die "BUILD value is $BUILD, but does not match required format." unless $2;
 
         set_var('UPDATE_PACKAGE', $2);
@@ -2631,7 +2606,7 @@ sub set_sles16_mu_virt_vars {
         if ($_pkg =~ /none/) {
             # 'none' is for ease of functional testing when no package update is needed
             $_update_package = '';
-        } elsif ($_pkg =~ /qemu|virt-manager|libguestfs|libslirp|open-vm-tools|snphost|dnsmasq/) {
+        } elsif ($_pkg =~ /qemu|virt-manager|libguestfs|open-vm-tools|snphost|dnsmasq/) {
             # Direct package name usage (SLES16 currently supports KVM/QEMU only)
             $_update_package = $_pkg;
         } elsif ($_pkg =~ /snpguest/) {
@@ -2641,6 +2616,9 @@ sub set_sles16_mu_virt_vars {
         } elsif ($_pkg =~ /libvirt/) {
             # Special case: libvirt maps to libvirt-client
             $_update_package = 'libvirt-client';
+        } elsif ($_pkg =~ /libslirp/) {
+            # Special case: libslirp maps to libslirp0
+            $_update_package = 'libslirp0';
         } elsif ($_pkg =~ /xen/) {
             # Xen support will return in SLES16.2
             die "Xen testing is not supported in SLES16 (will return in SLES16.2)";
@@ -2726,6 +2704,10 @@ sub load_hypervisor_tests {
         if ($test eq 'ENABLE_SEV_SNP') {
             next unless (is_sle('>=15-sp7') || is_sle('>=16'));
         }
+        # Intel TDX tests are available from SLE16+
+        if ($test eq 'ENABLE_TDX') {
+            next unless (is_sle('>=16'));
+        }
         check_and_load_mu_virt_features($test, $modules, $hypervisor);
     }
     # Load ENABLE_SNAPSHOTS at the end
@@ -2761,7 +2743,7 @@ sub load_sles16_mu_virt_tests {
         loadtest "virtualization/universal/install_update_package";
 
         #Feature test specific preparation steps on host before vm installation
-        if (check_var('ENABLE_SNAPSHOTS', '1')) {
+        if (check_var('ENABLE_SNAPSHOTS', '1') && is_sle('=16.0')) {
             loadtest "virt_autotest/prepare_nvram_for_snapshot";
         }
     }
@@ -2818,6 +2800,11 @@ sub load_sles16_mu_virt_tests {
         # SEV-SNP tests are available from SLE15-SP7 onwards and SLE16+
         if ($test eq 'ENABLE_SEV_SNP') {
             next unless (is_sle('>=15-sp7') || is_sle('>=16'));
+        }
+
+        # TDX tests are available from SLE16+
+        if ($test eq 'ENABLE_TDX') {
+            next unless (is_sle('>=16'));
         }
 
         # Load the feature using existing function
@@ -2905,7 +2892,7 @@ sub load_common_opensuse_sle_tests {
     load_create_hdd_tests if (get_var("STORE_HDD_1") || get_var("PUBLISH_HDD_1")) && !is_public_cloud();
     loadtest 'console/network_hostname' if get_var('NETWORK_CONFIGURATION');
     load_installation_validation_tests if get_var('INSTALLATION_VALIDATION');
-    load_transactional_role_tests if is_transactional && (get_var('ARCH') !~ /ppc64|s390/) && !get_var('INSTALLONLY');
+    load_transactional_role_tests if get_var('TRANSACTIONAL_VALIDATION');
 }
 
 sub load_ssh_key_import_tests {

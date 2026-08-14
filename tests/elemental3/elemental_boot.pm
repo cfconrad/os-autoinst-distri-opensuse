@@ -1,14 +1,16 @@
-# Copyright 2025 SUSE LLC
+# Copyright 2025-2026 SUSE LLC
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Boot Elemental3 OS image.
 # Maintainer: unified-core@suse.com, ldevulder@suse.com
 
-use base qw(opensusebasetest);
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use lockapi;
 use mm_network qw(configure_hostname setup_static_mm_network);
+use power_action_utils qw(power_action);
 use serial_terminal qw(select_serial_terminal);
+use utils qw(validate_script_output_retry);
 
 sub run {
     my ($self) = @_;
@@ -16,40 +18,86 @@ sub run {
     # Set default root password
     $testapi::password = get_required_var('TEST_PASSWORD');
 
-    # For raw OS image boot
-    if (check_var('IMAGE_TYPE', 'disk')) {
-        # Wait for GRUB and select default entry
-        $self->wait_grub(bootloader_time => 300);
-        send_key('ret', wait_screen_change => 1);
-        wait_still_screen(timeout => 120);
-        save_screenshot();
-    }
-
-    # For iso OS image boot: the OS needs to be installed first!
-    if (check_var('IMAGE_TYPE', 'iso')) {
+    # 'install' command directly install the OS image without the installer step
+    unless (check_var('TESTED_CMD', 'install')) {
         # Wait for OS installer boot
-        $self->wait_boot_past_bootloader(textmode => 1);
-
-        # OS installation is done automatically as well as the reboot after installation
-        # We just have to wait for the VM to reboot
-        $self->wait_grub(bootloader_time => bmwqemu::scale_timeout(300));
-
-        # OS deployment done
-        record_info('OS deployment', 'Successfully installed!');
+        assert_screen('grub-unifiedcore_installer', timeout => 120);
+        wait_still_screen;
     }
+
+    # This ISO image does not install anything
+    # It is just the basic container that should be used with 'customize' command
+    if (check_var('TESTED_CMD', 'extract_iso')) {
+        # Just validate that the OS boot, no more
+        assert_screen('elemental3-tty1-selected', timeout => 120);
+        wait_still_screen;
+        record_info('ISO', 'ISO image booted!');
+        return;
+    }
+
+    # OS installation is done automatically as well as the reboot after installation
+    # We just have to wait for the VM to reboot
+    $self->wait_grub(bootloader_time => bmwqemu::scale_timeout(300));
 
     # No GUI, easier and quicker to use the serial console
     select_serial_terminal();
+
+    # OS deployment done
+    record_info('OS deployment', 'Successfully installed!');
 
     # Check the installed OS
     assert_script_run('cat /etc/os-release');
 
     # Record boot
-    record_info('OS boot', 'Successfully booted!');
+    my $cmdline = script_output('cat /proc/cmdline');
+    record_info('OS boot', "Successfully booted! /proc/cmdline='$cmdline'");
+
+    # Test if FIPS is activated
+    if (check_var('CRYPTO_POLICY', 'fips')) {
+        assert_script_run('dmesg | grep -iq "fips mode: enabled"');
+        assert_script_run('grep -iq "fips=1" /proc/cmdline');
+        record_info('FIPS', 'FIPS mode enabled!');
+    }
+
+    # Wait for system to be in running state
+    # NOTE: a lot of things are done through systemd at firstboot,
+    #       so this is why we have to wait quite a long time.
+    validate_script_output_retry(
+        'systemctl is-system-running',
+        sub { m/running/ },
+        retry => 15,
+        delay => 60,
+        die => 1,
+        fail_message => 'systemd not in running state!'
+    ) unless (get_var('PARALLEL_WITH'));
+
+    # Test reboot in recovery mode
+    if (check_var('TESTED_CMD', 'customize_recovery')) {
+        power_action('reboot', keepconsole => 1, textmode => 1);
+
+        # Select SUT for bootloader
+        select_console('sut');
+
+        # Wait for GRUB
+        $self->wait_grub();
+
+        # Choose entry to test
+        send_key_until_needlematch('elemental3-bootmenu-recovery', 'down');
+        send_key('ret', wait_screen_change => 1);
+        wait_still_screen(timeout => 120);
+
+        # In recovery mode we have auto-login configured on tty1
+        console('root-console')->set_tty(1);
+        select_console('root-console');
+
+        # Check for recovery boot option
+        assert_script_run('grep -q recovery /proc/cmdline');
+        record_info('RECOVERY', 'Booted in recovery mode!');
+    }
 }
 
 sub test_flags {
-    return {fatal => 1, milestone => 0};
+    return {fatal => 1, milestone => 1};
 }
 
 1;

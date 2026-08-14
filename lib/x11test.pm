@@ -655,7 +655,7 @@ sub restart_firefox {
     enter_cmd "$cmd" if defined $cmd;
     enter_cmd "firefox $url >>firefox.log 2>&1 &";
     $self->firefox_check_default;
-    assert_screen 'firefox-url-loaded';
+    assert_screen 'firefox-url-loaded', 300;
 }
 
 sub firefox_check_default {
@@ -769,6 +769,7 @@ sub unlock_user_settings {
     type_string "users";
     assert_screen "settings-users-selected";
     send_key "ret";
+    wait_still_screen(1, 2);
     assert_screen "users-settings";
     assert_and_click "Unlock-user-settings";
     assert_screen "authentication-required-user-settings";
@@ -1002,20 +1003,55 @@ sub disable_key_repeat {
     x11_start_program('xset -r', target_match => 'generic-desktop', no_wait => 1);
 }
 
-# Start one of the libreoffice components, close any first-run dialogs
-sub libreoffice_start_program {
-    my ($self, $program) = @_;
-    my %start_program_args;
-    $start_program_args{timeout} = 100 if get_var('LIVECD') && check_var('MACHINE', 'uefi-usb');
-    x11_start_program($program, %start_program_args);
+sub open_overview {
+    wait_still_screen 3;
+    send_key "super";
+    assert_screen 'tracker-mainmenu-launched';
+}
+
+sub libreoffice_handle_welcome_popup {
     if (check_screen('popup-welcome-to-libreoffice')) {
         send_key "alt-f4";
     }
+}
+
+sub libreoffice_handle_tip_of_the_day {
     if (check_screen([qw(ooffice-tip-of-the-day oomath-tip-of-the-day)], 5)) {
         # Unselect "_S_how tips on startup", select "_O_k"
         send_key "alt-s";
         send_key "alt-o";
     }
+}
+
+# Start one of the libreoffice components, close any first-run dialogs
+sub libreoffice_start_program {
+    my ($self, $program, %args) = @_;
+    my %start_program_args;
+
+    my %libreoffice_applications = (
+        "libreoffice" => "libreoffice",
+        "oobase" => "base",
+        "oocalc" => "calc",
+        "oodraw" => "draw",
+        "ooimpress" => "impress",
+        "oomath" => "math",
+        "oowriter" => "writer"
+    );
+
+    die "Unrecognized LibreOffice application: $program" unless $libreoffice_applications{$program};
+
+    if ($args{from_overview}) {
+        $self->open_overview;
+        type_string $libreoffice_applications{$program};
+        assert_and_click "overview-office-" . $libreoffice_applications{$program};
+        assert_screen $program;
+    } else {
+        $start_program_args{timeout} = 100 if get_var('LIVECD') && check_var('MACHINE', 'uefi-usb');
+        x11_start_program($program, %start_program_args);
+    }
+
+    libreoffice_handle_welcome_popup;
+    libreoffice_handle_tip_of_the_day;
 }
 
 sub start_gnome_tweak_tool {
@@ -1074,7 +1110,7 @@ sub firefox_print2file_overview {
     my ($self, $file) = @_;
 
     # Prepare files for firefox printing
-    x11_start_program('gnome-terminal');
+    x11_start_program(default_gui_terminal);
     if (script_run("test -d ffprint")) {
         assert_script_run "mkdir ffprint";
     }
@@ -1123,9 +1159,11 @@ sub firefox_print {
 
 sub verify_firefox_print_output {
     my ($self, $file) = @_;
+    my $pdf_viewer = is_sle(">=16.0") ? "papers" : "evince";
 
     # Verify the content and format of output file
-    x11_start_program("evince /home/$username/ffprint/$file-output.pdf", target_match => "evince-$file-output-default");
+    ensure_installed($pdf_viewer);
+    x11_start_program("$pdf_viewer /home/$username/ffprint/$file-output.pdf", target_match => "pdf_viewer-$file-output-default");
     wait_still_screen 2;
     send_key "alt-f10";    # maximize window
     assert_screen("evince-$file-output-pdf", 5);
@@ -1133,6 +1171,7 @@ sub verify_firefox_print_output {
 }
 
 sub cleanup_firefox_print {
+    x11_start_program(default_gui_terminal);
     assert_script_run "rm -rf /home/$username/ffprint/*";
     send_key 'ctrl-d';
     assert_screen 'generic-desktop';

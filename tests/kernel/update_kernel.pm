@@ -9,41 +9,23 @@
 
 package update_kernel;
 use 5.018;
-use base 'opensusebasetest';
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
-use version_utils qw(is_sle is_sle_micro is_transactional package_version_cmp);
+use version_utils qw(is_sle is_sle_micro is_transactional package_version_cmp is_opensuse);
 use bootloader_setup 'add_grub_cmdline_settings';
 use qam;
 use kernel;
 use klp;
 use power_action_utils 'power_action';
 use repo_tools qw(add_qa_head_repo);
+use Utils::Architectures 'is_zvm';
 use Utils::Backends;
 use LTP::utils;
 use transactional;
 use package_utils;
-
-sub check_kernel_package {
-    my $kernel_name = shift;
-
-    enter_trup_shell(global_options => '-c') if is_transactional;
-    script_run('shopt -s nullglob');
-    script_run('ls -1 /boot/vmlinu[xz]* /boot/[Ii]mage*');
-    script_run('shopt -u nullglob');
-    # Only check versioned kernels in livepatch tests. Some old kernel
-    # packages install /boot/vmlinux symlink but don't set package ownership.
-    my $glob = get_var('KGRAFT', 0) ? '-*' : '*';
-    my $cmd = 'shopt -s nullglob; rpm -qf --qf "%{NAME}\n" /boot/vmlinu[xz]' . $glob . ' /boot/[Ii]mage' . $glob;
-    my $packs = script_output($cmd);
-    exit_trup_shell if is_transactional;
-
-    for my $packname (split /\s+/, $packs) {
-        die "Unexpected kernel package $packname is installed, test may boot the wrong kernel"
-          if $packname ne $kernel_name;
-    }
-}
+use nvidia_utils;
 
 # kernel-azure is never released in pool, first release is in updates.
 # Fix the chicken & egg problem manually.
@@ -56,6 +38,14 @@ sub first_azure_release {
     zypper_call("ref");
     zypper_call("in -l kernel-azure", exitcode => [0, 100, 101, 102, 103], timeout => 700);
     zypper_call('in kernel-devel');
+}
+
+sub first_nvidia_release {
+    my ($self, $repo) = @_;
+
+    fully_patch_system;
+    $self->add_update_repos($repo);
+    install_package(nvidia_utils::get_nvidia_driver(variant => 'cuda'));
 }
 
 sub prepare_kernel {
@@ -75,8 +65,9 @@ sub update_kernel {
     my $devel_pack = get_kernel_devel_flavor;
 
     fully_patch_system;
-    install_package("--recommends $devel_pack") if (!is_sle('<12') &&
-        !(check_var('SLE_PRODUCT', 'slert') && is_sle_micro('<6.2')));
+    install_package("--recommends $devel_pack", trup_reboot => 1)
+      if (!is_sle('<12') && !(check_var('SLE_PRODUCT', 'slert') &&
+            is_sle_micro('<6.2')) && !is_sle_micro('<6.0'));
 
     $self->add_update_repos($repo);
     zypper_call("ref");
@@ -96,10 +87,9 @@ sub update_kernel {
     else {
         # Use single patch or patch list
         if (is_transactional) {
-            # Proceed with transactional-update patch
-            trup_call("patch");
-            # Reboot system after patch, to make sure that further checks are done on updated system
-            reboot_on_changes;
+            # Proceed with transactional-update patch. Also handle zypper
+            # updates which may require running patch twice.
+            fully_patch_system;
         } else {
             zypper_call("in -l -t patch $patches", exitcode => [0, 102, 103], log => 'zypper.log', timeout => 1400);
         }
@@ -190,6 +180,7 @@ sub override_shim {
 sub install_lock_kernel {
     my $kernel_version = shift;
     my $src_version = shift;
+    my $kernel_package = get_kernel_flavor;
 
     # Pre-Boothole (CVE 2020-10713) kernel compatibility workaround.
     # Machines with SecureBoot enabled will refuse to boot old kernels
@@ -199,8 +190,7 @@ sub install_lock_kernel {
     }
 
     # remove all kernel related packages from system
-    my @packages = remove_kernel_packages();
-    my @lpackages = @packages;
+    my @lpackages = remove_kernel_packages();
     my %packver = (
         'kernel-devel' => $src_version,
         'kernel-devel-rt' => $src_version,
@@ -209,7 +199,11 @@ sub install_lock_kernel {
         'kernel-source-rt' => $src_version
     );
 
-    push @packages, get_kernel_devel_flavor;
+    my @packages = ($kernel_package, get_kernel_devel_flavor,
+        get_kernel_devel_libs, get_kernel_source_flavor);
+
+    push @packages, 'kernel-macros' if $kernel_package eq 'kernel-default';
+    push @lpackages, @packages;
 
     # add explicit version to each package
     foreach my $package (@packages) {
@@ -222,7 +216,7 @@ sub install_lock_kernel {
 
     # install and lock needed kernel
     enter_trup_shell(global_options => '-c') if is_transactional;
-    zypper_call("in --recommends " . join(' ', @packages), exitcode => [0, 102, 103, 104], timeout => 1400);
+    zypper_call("in " . join(' ', @packages), exitcode => [0, 102, 103, 104], timeout => 1400);
     zypper_call("al " . join(' ', @lpackages));
     exit_trup_shell if is_transactional;
 }
@@ -367,12 +361,13 @@ sub start_heavy_load {
 
 sub update_kgraft {
     my ($self, $incident_klp_pkg, $repo, $incident_id) = @_;
+    my $args;
 
     $self->enable_update_repos(1);
 
     # Get patch list related to incident
-    my $patches = '';
-    $patches = get_patches($incident_id, $repo);
+    $args = '--issue="live patch"' if get_var('FLAVOR') =~ m/-Increments$|(Default-qcow|Base-RT|Base-ppc-512)-Updates$/;
+    my $patches = get_patches($incident_id, $repo, $args);
 
     if ($incident_id && !($patches)) {
         die "Patch isn't needed";
@@ -386,8 +381,8 @@ sub update_kgraft {
         # warm up system
         sleep 15;
 
-        if (is_sle) {
-            zypper_call("in -l -t patch $patches", exitcode => [0, 102, 103], log => 'zypper.log', timeout => 2100);
+        if (is_sle || is_sle_micro('6.2+')) {
+            install_package("-t patch $patches", timeout => 2100);
         } elsif (is_sle_micro) {
             trup_call('pkg in kernel-livepatch-$(uname -r | sed s/\\\./_/g)');
         } else {
@@ -421,11 +416,35 @@ sub install_kotd {
     my $repo = shift;
     my $kernel_flavor = get_kernel_flavor;
     my $devel_flavor = get_kernel_devel_flavor;
+    my $src_flavor = get_kernel_source_flavor;
     fully_patch_system;
     remove_kernel_packages;
     zypper_ar($repo, name => 'KOTD', priority => 90, no_gpg_check => 1);
     install_package("-r KOTD $kernel_flavor", trup_continue => 1);
+    my $kver = script_output("rpm -q --qf '%{VERSION}-%{RELEASE}' $kernel_flavor");
+    install_package("$src_flavor=$kver kernel-syms=$kver", trup_continue => 1);
     install_package("--recommends $devel_flavor", trup_continue => 1);
+}
+
+sub cleanup_kernel_repos {
+    # Detect leftover kernel update repositories by name (present when this
+    # image already went through a kernel update, e.g. a published KOTD
+    # image). If none exist, there is nothing to clean up.
+    my @stale = grep { /^(KOTD|kernel-update-\d+)$/ } map { $$_{alias} } @{zypper_repos()};
+    return unless @stale;
+
+    # Remove locks on all installed kernel packages, otherwise
+    # remove_kernel_packages() fails in the install branches.
+    my @kpkgs = grep { m/^kernel-(?!firmware)/ }
+      map { $_->{name} } @{zypper_search('-i kernel')};
+    zypper_call('rl ' . join(' ', @kpkgs)) if @kpkgs;
+
+    # Remove the stale repositories so a new KOTD_REPO takes effect.
+    zypper_call('rr ' . join(' ', @stale));
+
+    # Remove LTP to avoid conflicts with the following install_ltp
+    zypper_call('rm ltp ltp-stable', exitcode => [0, 104]);
+    script_run('rm -rf ' . get_ltproot(0) . ' ' . get_ltproot(1));
 }
 
 sub update_kgraft_under_load {
@@ -453,6 +472,18 @@ sub boot_to_console {
     $self->wait_boot;
     select_serial_terminal;
     setup_kernel_logging;
+}
+
+sub finish_update {
+    my ($self) = @_;
+
+    if (is_transactional) {
+        reboot_on_changes;
+    } elsif (!get_var('KGRAFT')) {
+        power_action('reboot', textmode => 1);
+        reconnect_mgmt_console if is_pvm || is_ipmi;
+        $self->wait_boot if get_var('LTP_BAREMETAL');
+    }
 }
 
 sub install_requirements {
@@ -483,7 +514,8 @@ sub install_requirements {
           net-tools
         );
     } elsif ($flavor =~ /Nvidia/) {
-        @requirements = qw(nvidia-open-driver-G06-signed-cuda-kmp-default);
+        return if get_var('NVIDIA_FIRST_RELEASE');
+        @requirements = nvidia_utils::get_nvidia_driver(variant => 'cuda');
     } elsif ($flavor =~ /Base/) {
         @requirements = qw(kdump);
     } else {
@@ -500,12 +532,7 @@ sub run {
 
     $self->{repos} = {};
 
-    unless (get_var('KERNEL_FLAVOR')) {
-        $kernel_package = 'kernel-default-base' if is_sle('<12');
-        $kernel_package = 'kernel-rt' if check_var('SLE_PRODUCT', 'slert');
-    }
-
-    if (((is_ipmi || is_pvm) && get_var('LTP_BAREMETAL')) || is_transactional) {
+    if (((is_ipmi || is_pvm || is_zvm) && get_var('LTP_BAREMETAL')) || (is_transactional && (get_var('FLAVOR', '') !~ /Immutable/))) {
         # System is already booted after installation, just switch terminal
         select_serial_terminal;
     } else {
@@ -514,6 +541,11 @@ sub run {
 
     # Install requirements for SLE 16 staging tests
     install_requirements if get_var('FLAVOR') =~ /Updates-Staging/;
+
+    # Clean up leftover kernel update repositories, locks and LTP from a
+    # previous kernel update (e.g. a republished KOTD image) so the
+    # installation below can proceed with fresh settings.
+    cleanup_kernel_repos;
 
     my $repo = get_var('KOTD_REPO');
     $repo = get_var('OS_TEST_REPOS') if (!defined($repo) && (is_sle_micro('>=6.0') || (is_sle('16+'))));
@@ -552,6 +584,14 @@ sub run {
         return;
     }
 
+    if (is_kernel_validation_flavor || check_var('FLAVOR', 'Server-DVD-Updates') || (is_opensuse && !$repo)) {
+        record_info('Kernel flavor', $kernel_package);
+        $self->prepare_kernel($kernel_package) if $kernel_package ne get_initial_kernel_flavor;
+        check_kernel_package($kernel_package);
+        $self->finish_update;
+        return;
+    }
+
     unless ($repo) {
         $repo = get_required_var('INCIDENT_REPO');
         $incident_id = get_required_var('INCIDENT_ID');
@@ -567,48 +607,25 @@ sub run {
 
         kgraft_state;
     }
-    elsif (get_var('AZURE')) {
-        $kernel_package = 'kernel-azure';
-
-        if (get_var('AZURE_FIRST_RELEASE')) {
-            $self->first_azure_release($repo);
-        }
-        else {
-            $self->prepare_kernel($kernel_package);
-            $self->update_kernel($repo, $incident_id);
-        }
+    elsif (get_var('AZURE_FIRST_RELEASE')) {
+        $self->first_azure_release($repo);
     }
-    elsif (get_var('KERNEL_BASE')) {
-        $kernel_package = 'kernel-default-base';
-        $self->prepare_kernel($kernel_package);
-        $self->update_kernel($repo, $incident_id);
-    }
-    elsif (get_var('COCO')) {
-        $kernel_package = 'kernel-coco';
-        $self->prepare_kernel($kernel_package);
-        $self->update_kernel($repo, $incident_id);
-    }
-    elsif (get_var('KERNEL_64KB')) {
-        $kernel_package = 'kernel-64kb';
-        $self->prepare_kernel($kernel_package);
-        $self->update_kernel($repo, $incident_id);
+    elsif (get_var('NVIDIA_FIRST_RELEASE')) {
+        $self->first_nvidia_release($repo);
     }
     elsif (get_var('KOTD_REPO')) {
         install_kotd($repo);
+    }
+    elsif ($kernel_package ne get_initial_kernel_flavor) {
+        $self->prepare_kernel($kernel_package);
+        $self->update_kernel($repo, $incident_id);
     }
     else {
         $self->update_kernel($repo, $incident_id);
     }
 
     check_kernel_package($kernel_package);
-
-    if (is_transactional) {
-        reboot_on_changes;
-    } elsif (!get_var('KGRAFT')) {
-        power_action('reboot', textmode => 1);
-        reconnect_mgmt_console if is_pvm || is_ipmi;
-        $self->wait_boot if get_var('LTP_BAREMETAL');
-    }
+    $self->finish_update;
 }
 
 sub test_flags {
@@ -673,3 +690,8 @@ install new kernel using the simplified installation method.
 
 Skip temporarily disabling update repos after they have been added. This
 means that they will be used during preparatory system update.
+
+=head3 NVIDIA_FIRST_RELEASE
+
+When NVIDIA_FIRST_RELEASE evaluates to true, install nvidia driver directly
+from incident repository and update system.

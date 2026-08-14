@@ -13,7 +13,7 @@ use autotest;
 use base 'Exporter';
 use Exporter;
 use bmwqemu ();
-use version_utils qw(is_sle is_leap is_sle_micro is_openstack);
+use version_utils qw(is_sle is_leap is_sle_micro is_transactional);
 use Mojo::Util qw(b64_encode b64_decode sha1_sum trim);
 use Mojo::File 'path';
 use File::Basename;
@@ -82,11 +82,6 @@ sub prepare_serial_console {
         return;
     }
 
-    if (is_openstack) {
-        record_info('skip virtio', 'Openstack Images do not have hvc consoles');
-        return;
-    }
-
     ensure_testuser_present;
 
     record_info('getty before', script_output('systemctl | grep serial-getty'));
@@ -129,6 +124,7 @@ sub get_login_message {
     }
     my $agama_opts = get_var('AGAMA_PROFILE_OPTIONS', '');
     return is_sle() && $agama_opts =~ /software_only_required/ ? qr/\blogin:/
+      : is_sle('>=16') && is_transactional() ? qr/\blogin:/
       : is_sle() ? qr/Welcome to SUSE Linux Enterprise .*\($arch\)/
       : is_sle_micro() ? qr/Welcome to SUSE Linux.* Micro .*\($arch\)/
       : is_leap() ? qr/Welcome to openSUSE Leap.*/

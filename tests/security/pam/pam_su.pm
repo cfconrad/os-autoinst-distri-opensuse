@@ -5,9 +5,8 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#70345, poo#106020, tc#1167579
 
-use base 'opensusebasetest';
+use Mojo::Base qw(opensusebasetest consoletest);
 use testapi;
-use base 'consoletest';
 use utils qw(clear_console ensure_serialdev_permissions);
 use Utils::Architectures;
 use version_utils;
@@ -89,10 +88,6 @@ expect {
     select_console 'root-console';
     assert_script_run "mv $su_file_bak $su_file";
     assert_script_run "mv $sul_file_bak $sul_file";
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 sub post_fail_hook {
