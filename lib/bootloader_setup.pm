@@ -671,11 +671,11 @@ sub bootmenu_default_params {
         }
         elsif (!is_jeos && !(is_sle_micro && get_var('BOOT_HDD_IMAGE'))) {
             # make plymouth go graphical
-            push @params, "plymouth.ignore-serial-consoles" unless $args{pxe};
+            push @params, "plymouth.ignore-serial-consoles" unless $args{pxe} || is_sle('<=12-SP5');
             push @params, get_bootmenu_console_params $args{baud_rate};
 
             # Enable linuxrc logging
-            push @params, get_linuxrc_boot_params;
+            push @params, get_linuxrc_boot_params unless is_sle('<=12-SP5');
         }
         push @params, get_extra_boot_params();
     }
@@ -1603,8 +1603,9 @@ Returns the array of the boot parameters.
 
 sub parse_bootparams_in_serial {
     my $parsed_string = wait_serial(qr/command line:.*\[/msi);
+    return () unless $parsed_string;
     $parsed_string =~ m/.*command line:(?<boot>.*)/i;
-    return split ' ', $+{boot};
+    return $+{boot} ? split(' ', $+{boot}) : ();
 }
 
 =head2 compare_bootparams
