@@ -77,7 +77,7 @@ EOT
     $self->prepare_coredump();
     $self->serve_install_rpm_from_repo();
 
-    my $package_list = 'openvpn tar';
+    my $package_list = 'openvpn tar ethtool';
     if ($self->valgrind_enable()) {
         $need_reboot = 1;
         zypper_call("-q in valgrind", timeout => 400);
