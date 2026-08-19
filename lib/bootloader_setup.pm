@@ -1695,7 +1695,11 @@ sub mimic_user_to_import {
 
 sub type_boot_parameters {
     my (@params) = @_;
-    type_string(" @params ", max_interval => check_var('TYPE_BOOT_PARAMS_FAST', 1) ? undef : utils::VERY_SLOW_TYPING_SPEED);
+    my $max_interval = check_var('TYPE_BOOT_PARAMS_FAST', 1)
+      ? undef
+      : get_var('TYPE_BOOT_PARAMS_MAX_INTERVAL', utils::VERY_SLOW_TYPING_SPEED);
+
+    type_string(" @params ", max_interval => $max_interval);
 }
 
 =head2 prepare_disks
