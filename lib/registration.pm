@@ -789,7 +789,12 @@ sub registration_bootloader_params {
     if (!(is_agama && check_var('FLAVOR', 'Full'))) {
         push @params, split ' ', registration_bootloader_cmdline;
     }
-    type_string "@params", $max_interval;
+    if (is_sle('<=12-SP5')) {
+        type_string "@params", max_interval => 1, wait_screen_change => 1;
+    }
+    else {
+        type_string "@params", $max_interval;
+    }
     save_screenshot;
     return @params;
 }
