@@ -69,8 +69,8 @@ sub full_cleanup {
     }
     my $sut_cleanup_message
       = $redirection_works
-      ? 'Console redirection to Deployer VM does not seem to work. Destroying SUT infrastructure is not possible.'
-      : 'Console redirection works, proceeding with SUT cleanup';
+      ? 'Console redirection works, proceeding with SUT cleanup'
+      : 'Console redirection to Deployer VM does not seem to work. Destroying SUT infrastructure is not possible.';
     record_info('SUT cleanup', $sut_cleanup_message);
 
     # Trigger SDAF remover script to destroy 'workload zone' and 'sap systems' resources
@@ -98,7 +98,6 @@ sub full_cleanup {
     # Clean up orphaned resources inside permanent deployer job group
     # Resource retention time can be controlled by OpenQA parameter: SDAF_DEPLOYER_VM_RETENTION_SEC
     record_info('Remove orphans', 'Cleaning up orphaned resources');
-    destroy_orphaned_resources();
     if (my $ret = destroy_orphaned_peerings()) {
         record_info('Retry', 'Delete orphaned peerings failed and retry');
         $ret = destroy_orphaned_peerings();

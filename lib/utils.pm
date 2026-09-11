@@ -145,6 +145,7 @@ our @EXPORT = qw(
   show_all_disks
   render_scc_url
   query_installed_packages
+  remove_installed_packages
 );
 
 our @EXPORT_OK = qw(
@@ -3086,7 +3087,12 @@ sub write_sut_file {
 
     save_tmp_file($path, $contents);
     my $url = join('/', (autoinst_url, 'files', $path));
-    assert_script_run("curl -v -o $path $url");
+    # AppArmor's curl profile only allows curl to write within $HOME, /tmp,
+    # /var/tmp, etc. so fetch into /tmp first and move it into place
+    # afterwards, since mv is not confined by that profile.
+    my $tmp_path = '/tmp/' . basename($path);
+    assert_script_run("curl -v -o $tmp_path $url");
+    assert_script_run("mv -Zf $tmp_path $path") unless $tmp_path eq $path;
 }
 
 =head2 is_ipxe_boot
@@ -3354,6 +3360,34 @@ sub install_extra_packages {
     $cmd = "rr";
     $cmd = $cmd . " $_" foreach (@repos_names);
     zypper_call($cmd);
+    save_screenshot;
+}
+
+=head2 remove_installed_packages
+
+ remove_installed_packages(packages => 'packages');
+
+Remove installed packages on demand. User may need to remove some packages for
+different purposes, for example, restoring environment or unsupported scenario.
+User can specify pacakges to be removed via named argument packages which support
+multiple packages separated by comma. 
+=cut
+
+sub remove_installed_packages {
+    my %args = @_;
+    $args{packages} //= '';
+    if (!$args{packages}) {
+        record_info('No packages to be removed', 'Specify arguments packages');
+        return;
+    }
+
+    my $cmd = "remove --clean-deps --no-confirm";
+    my $packages = '';
+    foreach (split(/,/, $args{packages})) {
+        next if script_run("rpm -q $_");
+        $packages .= " $_";
+    }
+    zypper_call($cmd . $packages) if ($packages);
     save_screenshot;
 }
 

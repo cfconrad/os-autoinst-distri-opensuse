@@ -121,6 +121,15 @@ sub post_run_hook {
 
 sub post_fail_hook {
     my $self = shift;
+
+    # If the test fails in interactive mode (via script_start_io), we need to make sure to close it here
+    if (get_var('SUBSHELL_NOT_AS_ROOT', 0)) {
+        script_run "ps -aux";
+        script_run "env";
+        enter_cmd('exit');
+        script_finish_io(timeout => 300, exitcodes => [0]);
+    }
+
     $self->cleanup();
     $self->SUPER::post_fail_hook;
 }

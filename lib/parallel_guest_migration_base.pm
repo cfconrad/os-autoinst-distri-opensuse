@@ -664,14 +664,20 @@ sub config_host_security {
         assert_script_run("sed -i -r \'s/^SELINUX=enforcing\$/SELINUX=permissive/g\' /etc/selinux/config");
     }
 
-    script_run("iptables -P INPUT ACCEPT;
+    # Use scoped classic serial markers for iptables network configuration
+    {
+        my $marker_guard = $testapi::distri->pretty_serial_marker_guard(0);
+
+        script_run("iptables -P INPUT ACCEPT;
 iptables -P FORWARD ACCEPT;
 iptables -P OUTPUT ACCEPT;
 iptables -t nat -F;
 iptables -F;
 sysctl -w net.ipv4.ip_forward=1;
 sysctl -w net.ipv4.conf.all.forwarding=1"
-    );
+        );
+    }
+
     save_screenshot;
     setup_common_ssh_config(ssh_id_file => $args{_keyfile});
 }
@@ -1628,7 +1634,6 @@ sub virsh_migrate_manual_postcopy {
     enter_cmd("sleep 120 && $_command[0]");
     save_screenshot;
     select_console("root-ssh-virt");
-    $testapi::serialdev = "virtsshserial";
     enter_cmd("clear");
     $_ret = script_run("(set -x;unset migrate_postcopy;export migrate_postcopy=1; for i in `seq 87000`;do $_command[1];migrate_postcopy=\$?; if [ \$migrate_postcopy -eq 0 ];then set +x;break;fi; done; if [ \$migrate_postcopy -eq 0 ];then echo -e \"Migrate Postcopy Succeeded! \\n\";else command-not-found;fi)", timeout => 300);
     wait_still_screen(30);
@@ -1855,7 +1860,11 @@ sub post_fail_hook {
 
     $self->{"stop_run"} = time();
     $self->create_junit_log;
-    collect_host_and_guest_logs('', '/var/log', '/var/log', "_post_fail_hook");
+    collect_host_and_guest_logs(
+        full_supportconfig => get_var('FULL_SUPPORTCONFIG', 1),
+        excluded_supportconfig_features => get_var('EXCLUDED_SUPPORTCONFIG_FEATURES', 'aFSLIST AUDIT SELINUX'),
+        token => '_post_fail_hook'
+    );
 }
 
 1;

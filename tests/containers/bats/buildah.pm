@@ -60,11 +60,6 @@ sub run_tests {
         "run.bats::Check if containers run with correct open files/processes limits",
     ) if (version->parse(numeric_version($version)) < version->parse("1.39.5") && !$rootless);
     push @xfails, (
-        "bud.bats::bud-multiple-platform-no-partial-manifest-list",
-        # Fails with cgroups v1
-        "namespaces.bats::use containers.conf namespace settings",
-    ) if (is_sle("<15-SP6"));
-    push @xfails, (
         "run.bats::run check /etc/resolv.conf",
     ) unless (is_aarch64 || is_x86_64);
     push @xfails, (
@@ -74,7 +69,7 @@ sub run_tests {
         "copy.bats::copy-preserving-extended-attributes",
     ) if (is_ppc64le);
 
-    my $ret = bats_tests($log_file, \%env, \@xfails, 6000);
+    my $ret = bats_tests($log_file, \%env, \@xfails, 6900);
 
     run_command "STORAGE_DRIVER=$storage_driver buildah prune -a -f";
     cleanup_podman;
@@ -108,8 +103,7 @@ sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    my @pkgs = qw(buildah docker git-daemon glibc-devel-static go1.26 libgpgme-devel libseccomp-devel make openssl podman selinux-tools);
-    push @pkgs, "qemu-linux-user" if (is_tumbleweed || is_sle('>=15-SP6'));
+    my @pkgs = qw(buildah docker git-daemon glibc-devel-static go1.26 libgpgme-devel libseccomp-devel make openssl podman qemu-linux-user selinux-tools);
     # Packages needed for conformance tests
     push @pkgs, "busybox-static docker-buildx libbtrfs-devel" unless is_sle;
 

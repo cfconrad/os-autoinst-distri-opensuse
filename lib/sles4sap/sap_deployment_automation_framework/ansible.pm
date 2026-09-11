@@ -83,7 +83,7 @@ sub set {
     # DB installation pulls in SAP specific configuration
     if (grep /db_install/, @$components) {
         # SAP-specific operating system configuration
-        push @playbook_list, {playbook_filename => 'playbook_02_os_sap_specific_config.yaml'};
+        push @playbook_list, {playbook_filename => 'playbook_02_os_sap_specific_config.yaml', timeout => 5400};
         # SAP Bill of Materials processing - this also mounts install media storage
         push @playbook_list, {playbook_filename => 'playbook_03_bom_processing.yaml', timeout => 7200};
         # SAP HANA database installation
@@ -99,7 +99,7 @@ sub set {
     # Run HA related playbooks at the end as it can mix up node order ###
     if (grep /db_ha/, @$components) {
         # SAP HANA high-availability configuration
-        push @playbook_list, {playbook_filename => 'playbook_04_00_01_db_ha.yaml', timeout => 3600};
+        push @playbook_list, {playbook_filename => 'playbook_04_00_01_db_ha.yaml', timeout => 5400};
     }
     # playbooks required for all nw* scenarios
     if (grep /nw/, @$components) {

@@ -66,9 +66,16 @@ sub load_maintenance_publiccloud_tests {
     } elsif (get_var('PUBLIC_CLOUD_EC2_ENCLAVE_TESTS')) {
         loadtest "publiccloud/aws_enclave", run_args => $args;
     } else {
+        my $smoketest = get_var('PUBLIC_CLOUD_SMOKETEST')
+          && !get_var('PUBLIC_CLOUD_CONSOLE_TESTS')
+          && !get_var('PUBLIC_CLOUD_BTRFS')
+          && !get_var('PUBLIC_CLOUD_CONTAINERS')
+          && !get_var('PUBLIC_CLOUD_XFS');
         loadtest("publiccloud/check_services", run_args => $args) if (get_var('PUBLIC_CLOUD_SMOKETEST'));
-        loadtest "publiccloud/ssh_interactive_start", run_args => $args;
+        loadtest("publiccloud/systemd_detect_virt", run_args => $args) if (get_var('PUBLIC_CLOUD_SMOKETEST'));
+        loadtest("publiccloud/smoketest", run_args => $args) if ($smoketest);
         loadtest "publiccloud/instance_overview", run_args => $args;
+        loadtest "publiccloud/ssh_interactive_start", run_args => $args;
         if (get_var('PUBLIC_CLOUD_CONSOLE_TESTS')) {
             load_publiccloud_consoletests($args);
         } elsif (get_var('PUBLIC_CLOUD_BTRFS')) {
@@ -81,12 +88,10 @@ sub load_maintenance_publiccloud_tests {
             loadtest "publiccloud/xfsprepare", run_args => $args;
             loadtest "xfstests/run", run_args => $args;
             return;
-        } elsif (get_var('PUBLIC_CLOUD_SMOKETEST')) {
-            loadtest "publiccloud/smoketest";
+        } elsif ($smoketest) {
             # flavor_check is concentrated on checking things which make sense only for image which is registered
             # against internal Public Cloud infra, so whenever we using SUSEConnect whole module does not make much sense
             loadtest "publiccloud/flavor_check" if (is_ec2() && !check_var('PUBLIC_CLOUD_SCC_ENDPOINT', 'SUSEConnect'));
-            loadtest "publiccloud/systemd_detect_virt", run_args => $args;
             loadtest "publiccloud/sev" if (get_var('PUBLIC_CLOUD_CONFIDENTIAL_VM'));
             loadtest "publiccloud/xen" if (get_var('PUBLIC_CLOUD_XEN'));
             loadtest "publiccloud/hardened" if is_hardened;
@@ -134,6 +139,10 @@ sub load_latest_publiccloud_tests {
     elsif (get_var('PUBLIC_CLOUD_AZURE_AITL')) {
         loadtest "publiccloud/azure_aitl", run_args => $args;
         return;    # Do not continue as there is no instance to destroy
+    }
+    elsif (get_var('PUBLIC_CLOUD_CIT')) {
+        loadtest "publiccloud/run_cit", run_args => $args;
+        return;
     } else {    # All test cases below require prepare_instance
         loadtest "publiccloud/prepare_instance", run_args => $args;
         loadtest "publiccloud/network_test", run_args => $args;
@@ -145,7 +154,6 @@ sub load_latest_publiccloud_tests {
         }
         elsif (get_var('PUBLIC_CLOUD_IMG_PROOF_TESTS')) {
             loadtest "publiccloud/check_services", run_args => $args;
-            loadtest "publiccloud/img_proof", run_args => $args;
         } else {    # All test cases below require registration
             loadtest("publiccloud/registration", run_args => $args);
             if (get_var('PUBLIC_CLOUD_FUNCTIONAL')) {
@@ -158,9 +166,16 @@ sub load_latest_publiccloud_tests {
             } elsif (get_var('PUBLIC_CLOUD_NEW_INSTANCE_TYPE')) {
                 loadtest("publiccloud/bsc_1205002", run_args => $args);
             } else {    # All test cases below excluding check_service require tunelled environment
+                my $smoketest = get_var('PUBLIC_CLOUD_SMOKETEST')
+                  && !get_var('PUBLIC_CLOUD_CONSOLE_TESTS')
+                  && !get_var('PUBLIC_CLOUD_BTRFS')
+                  && !check_var('PUBLIC_CLOUD_NVIDIA', 1)
+                  && !get_var('PUBLIC_CLOUD_CONTAINERS');
                 loadtest("publiccloud/check_services", run_args => $args) if (get_var('PUBLIC_CLOUD_SMOKETEST'));
-                loadtest "publiccloud/ssh_interactive_start", run_args => $args;
+                loadtest("publiccloud/systemd_detect_virt", run_args => $args) if (get_var('PUBLIC_CLOUD_SMOKETEST'));
+                loadtest("publiccloud/smoketest", run_args => $args) if ($smoketest);
                 loadtest "publiccloud/instance_overview", run_args => $args;
+                loadtest "publiccloud/ssh_interactive_start", run_args => $args;
                 if (get_var('PUBLIC_CLOUD_CONSOLE_TESTS')) {
                     load_publiccloud_consoletests($args);
                 } elsif (get_var('PUBLIC_CLOUD_BTRFS')) {
@@ -173,12 +188,10 @@ sub load_latest_publiccloud_tests {
                 }
                 elsif (get_var('PUBLIC_CLOUD_CONTAINERS')) {
                     load_container_tests();
-                } elsif (get_var('PUBLIC_CLOUD_SMOKETEST')) {
-                    loadtest "publiccloud/smoketest", run_args => $args;
+                } elsif ($smoketest) {
                     # flavor_check is concentrated on checking things which make sense only for image which is registered
                     # against internal Public Cloud infra, so whenever we using SUSEConnect whole module does not make much sense
                     loadtest "publiccloud/flavor_check", run_args => $args if (is_ec2() && !check_var('PUBLIC_CLOUD_SCC_ENDPOINT', 'SUSEConnect'));
-                    loadtest "publiccloud/systemd_detect_virt", run_args => $args;
                     loadtest "publiccloud/sev", run_args => $args if (get_var('PUBLIC_CLOUD_CONFIDENTIAL_VM'));
                     loadtest "publiccloud/xen", run_args => $args if (get_var('PUBLIC_CLOUD_XEN'));
                 } elsif (get_var('PUBLIC_CLOUD_XFS')) {
@@ -212,12 +225,8 @@ sub load_create_publiccloud_tools_image {
 sub load_publiccloud_cli_tools {
     loadtest 'installation/bootloader_zkvm' if (is_s390x);
     loadtest 'boot/boot_to_desktop';
-    if (get_var('PUBLIC_CLOUD_AZURE_CLI_TEST')) {
-        loadtest 'publiccloud/azure_more_cli';
-    } else {
-        loadtest 'publiccloud/azure_cli' if (is_azure());
-        loadtest 'publiccloud/aws_cli' if (is_ec2());
-    }
+    loadtest 'publiccloud/azure_cli' if (is_azure());
+    loadtest 'publiccloud/aws_cli' if (is_ec2());
 }
 
 sub load_publiccloud_download_repos {

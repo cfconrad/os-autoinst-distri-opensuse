@@ -52,6 +52,7 @@ our @EXPORT = qw(
   register_addon
   register_addons_in_pc
   gcloud_install
+  get_ssh_key_algo
   get_ssh_private_key_path
   permit_root_login
   prepare_ssh_tunnel
@@ -227,7 +228,7 @@ sub registercloudguest {
         die 'cloud-regionsrv-client should be installed' if !is_container_host;
     }
 
-    my $custom_smt;
+    my $custom_smt = '';
     if ((my $smt_ip = get_var('PUBLIC_CLOUD_SMT_IP')) && (my $smt_fqdn = get_var('PUBLIC_CLOUD_SMT_FQDN')) && (my $smt_fp = get_var('PUBLIC_CLOUD_SMT_FP'))) {
         $custom_smt = "--smt-ip $smt_ip --smt-fqdn $smt_fqdn --smt-fp $smt_fp";
     }
@@ -244,13 +245,14 @@ sub registercloudguest {
 
 sub register_addons_in_pc {
     my ($instance, %args) = @_;
-    my $timeout = $args{timeout} // 90;
+    # pc_refresh() below can take several minutes on many aggregated repos.
+    my $timeout = $args{timeout} // 900;
     my @addons = split(/,/, get_var('SCC_ADDONS', ''));
     my $remote = $instance->username . '@' . $instance->public_ip;
     # Refresh repos. publiccloud::zypper::pc_refresh always uses plain zypper
     # (never transactional-update, which does not support repo actions, see
     # poo#195920). Accept all exit codes and inspect the result here so we
-    # can give the historical bsc references.
+    # can diagnose the failure.
     my $ret = publiccloud::zypper::pc_refresh(
         $instance,
         timeout => $timeout,
@@ -260,7 +262,22 @@ sub register_addons_in_pc {
             publiccloud::zypper::EXIT_LOCKED,
         ],
     );
-    die 'No enabled repos defined: bsc#1245651' if $ret == publiccloud::zypper::EXIT_NO_REPOS;
+    if ($ret == publiccloud::zypper::EXIT_NO_REPOS) {
+        # "No enabled repositories" is a symptom with (at least) two causes:
+        # the system was never registered, or it was registered and the
+        # repos were dropped afterwards. Collect the evidence to tell them
+        # apart. Only the second case is bsc#1245651, which is closed but
+        # still reachable on images shipping cloud-regionsrv-client < 11.0.0,
+        # see poo#205101.
+        record_info('repos (lr)', $instance->ssh_script_output(
+                cmd => 'sudo zypper lr -u', proceed_on_failure => 1));
+        my $reg = $instance->ssh_script_output(
+            cmd => 'sudo SUSEConnect -s', proceed_on_failure => 1);
+        record_info('SUSEConnect -s', $reg);
+        die 'No enabled repos: the system is not registered'
+          if ($reg =~ /Not Registered/m || $reg !~ /\S/);
+        die 'No enabled repos on registered system (bsc#1245651)';
+    }
     die 'System management is locked by the application with pid xxx (/usr/bin/zypper)' if $ret == publiccloud::zypper::EXIT_LOCKED;
     for my $addon (@addons) {
         next if ($addon =~ /^\s+$/);
@@ -376,9 +393,40 @@ sub gcloud_install {
     record_info('GCE', script_output('gcloud version'));
 }
 
-sub get_ssh_private_key_path {
+=head2 get_ssh_key_algo
+
+    my $algo = get_ssh_key_algo();
+
+Returns the SSH key algorithm used for public cloud testing.
+
+The openQA setting B<PUBLIC_CLOUD_SSH_KEY_ALGO> overrides the default when set.
+Supported values are C<rsa> or C<ed25519>.
+
+The default is C<ed25519> except for Azure and for C<PUBLIC_CLOUD_LTP>
+runs where it is C<rsa>.
+
+=cut
+
+sub get_ssh_key_algo {
+    my $algo = get_var('PUBLIC_CLOUD_SSH_KEY_ALGO');
+    if ($algo) {
+        die "Unsupported PUBLIC_CLOUD_SSH_KEY_ALGO" unless grep { $_ eq $algo } qw(rsa ed25519);
+        return $algo;
+    }
     # Paramiko needs to be updated for ed25519 https://stackoverflow.com/a/60791079
-    return (is_azure() || get_var('PUBLIC_CLOUD_LTP')) ? "~/.ssh/id_rsa" : '~/.ssh/id_ed25519';
+    return (is_azure() || get_var('PUBLIC_CLOUD_LTP')) ? 'rsa' : 'ed25519';
+}
+
+=head2 get_ssh_private_key_path
+
+    my $path = get_ssh_private_key_path();
+
+Returns the path of the SSH private key used for public cloud testing.
+
+=cut
+
+sub get_ssh_private_key_path {
+    return '~/.ssh/id_' . get_ssh_key_algo();
 }
 
 sub permit_root_login {

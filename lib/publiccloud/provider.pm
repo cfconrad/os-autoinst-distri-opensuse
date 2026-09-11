@@ -39,7 +39,8 @@ has terraform_applied => 0;
 has resource_name => sub { get_var('PUBLIC_CLOUD_RESOURCE_NAME', 'openqa-vm') };
 has provider_client => undef;
 
-has ssh_key => get_ssh_private_key_path();
+# Use lazy evaluation otherwise unit tests will not work
+has ssh_key => sub { get_ssh_private_key_path() };
 
 my $runner = get_var('PUBLIC_CLOUD_TERRAFORM_RUNNER', 'tofu');
 unless ($runner eq 'terraform' || $runner eq 'tofu') {
@@ -126,50 +127,6 @@ sub img_proof {
     die('img_proof() isn\'t implemented');
 }
 
-=head2 parse_img_proof_output
-
-Parse the output from img-proof command and retrieves instance-id, ip and logfile names.
-
-=cut
-
-sub parse_img_proof_output {
-    my ($self, $output) = @_;
-    my $ret = {};
-    my $instance_id;
-    my $ip;
-
-    for my $line (split(/\r?\n/, $output)) {
-        if ($line =~ m/^ID of instance: (\S+)$/) {
-            $ret->{instance_id} = $1;
-        }
-        elsif ($line =~ m/^Terminating instance (\S+)$/) {
-            $ret->{instance_id} = $1;
-        }
-        elsif ($line =~ m/^IP of instance: (\S+)$/) {
-            $ret->{ip} = $1;
-        }
-        elsif ($line =~ m/^Created log file (\S+)$/) {
-            $ret->{logfile} = $1;
-        }
-        elsif ($line =~ m/^Created results file (\S+)$/) {
-            $ret->{results} = $1;
-        }
-        elsif ($line =~ m/tests=(\d+)\|pass=(\d+)\|skip=(\d+)\|fail=(\d+)\|error=(\d+)/) {
-            $ret->{tests} = $1;
-            $ret->{pass} = $2;
-            $ret->{skip} = $3;
-            $ret->{fail} = $4;
-            $ret->{error} = $5;
-        }
-        $ret->{output} .= $line . "\n";
-    }
-
-    for my $k (qw(ip logfile results tests pass skip fail error)) {
-        return unless (exists($ret->{$k}));
-    }
-    return $ret;
-}
-
 =head2 create_ssh_key
 
 Creates an ssh keypair in a given file path by $args{ssh_private_key_file}
@@ -178,8 +135,8 @@ Creates an ssh keypair in a given file path by $args{ssh_private_key_file}
 
 sub create_ssh_key {
     my ($self) = @_;
-    my $alg = $self->ssh_key;
-    $alg =~ s@[a-z0-9/-_~.]*id_@@;
+    my ($alg) = $self->ssh_key =~ m/id_([a-z0-9]+)$/;
+    die "Cannot derive ssh key algorithm from '" . $self->ssh_key . "'" unless $alg;
     record_info($alg, "The $alg key will be generated.");
     if (script_run('test -f ' . $self->ssh_key) != 0) {
         assert_script_run('SSH_DIR=`dirname ' . $self->ssh_key . '`; mkdir -p $SSH_DIR');
@@ -194,6 +151,7 @@ Creates ~/.ssh/config file with all the common ssh client settings
 =cut
 
 sub place_ssh_config {
+    my ($self) = @_;
     # configure ssh client
     # ssh will be configured by a ~/.ssh/config file, the config file come from a template.
     # By default the template is in publiccloud/ssh_config data directory.
@@ -201,79 +159,7 @@ sub place_ssh_config {
     # From now on all ssh calls will use this configuration file.
     my $ssh_config_url = data_url(get_var('PUBLIC_CLOUD_SSH_CONFIG', 'publiccloud/ssh_config'));
     assert_script_run("curl $ssh_config_url -o ~/.ssh/config");
-    file_content_replace("~/.ssh/config", "%SSH_KEY%" => get_ssh_private_key_path());
-}
-
-=head2 run_img_proof
-
-called by childs within img-proof function
-
-=cut
-
-sub run_img_proof {
-    my ($self, %args) = @_;
-    die('Must provide an instance object') if (!$args{instance});
-
-    $args{tests} //= '';
-    $args{timeout} //= 60 * 120;
-    $args{results_dir} //= 'img_proof_results';
-    $args{distro} //= 'sles';
-    $args{tests} =~ s/,/ /g;
-
-    my $exclude = $args{exclude} // '';
-    my $beta = $args{beta} // 0;
-
-    my $version = script_output('img-proof --version', 300);
-    record_info("img-proof version", $version);
-
-    my $cmd = 'img-proof --no-color test ' . $args{provider};
-    $cmd .= ' --debug ';
-    $cmd .= "--distro " . $args{distro} . " ";
-    if (is_gce()) {
-        $cmd .= '--region "' . $self->provider_client->region . '-' . $self->provider_client->availability_zone . '" ';
-    }
-    else {
-        $cmd .= '--region "' . $self->provider_client->region . '" ';
-    }
-    $cmd .= '--results-dir "' . $args{results_dir} . '" ';
-    $cmd .= '--no-cleanup ';
-    $cmd .= '--collect-vm-info ';
-    $cmd .= '--service-account-file "' . $args{credentials_file} . '" ' if ($args{credentials_file});
-    #TODO: this if is just dirty hack which needs to be replaced with something more sane ASAP.
-    $cmd .= '--access-key-id $AWS_ACCESS_KEY_ID --secret-access-key $AWS_SECRET_ACCESS_KEY ' if (is_ec2());
-    $cmd .= '--ssh-key-name $(realpath ' . $args{key_name} . ') ' if ($args{key_name});
-    $cmd .= '-u ' . $args{user} . ' ' if ($args{user});
-    $cmd .= '--ssh-private-key-file $(realpath ' . $self->ssh_key . ') ';
-    $cmd .= '--running-instance-id "' . ($args{running_instance_id} // $args{instance}->instance_id) . '" ';
-    $cmd .= "--beta " if ($beta);
-    if ($exclude) {
-        # Split exclusion tests by command and add them individually
-        for my $excl (split ',', $exclude) {
-            $excl =~ s/^\s+|\s+$//g;    # trim spaces
-            $cmd .= "--exclude $excl ";
-        }
-    }
-
-    # Tell img-proof to generate SCAP report on hardened images
-    if (is_hardened) {
-        my $scap_report = get_var("SCAP_REPORT", "skip");
-        $cmd = "SCAP_REPORT=$scap_report " . $cmd;
-    }
-
-    $cmd .= $args{tests};
-    record_info("img-proof cmd", $cmd);
-
-    my $output = script_output($cmd . ' 2>&1', $args{timeout}, proceed_on_failure => 1);
-    record_info("img-proof output", $output);
-    my $img_proof = $self->parse_img_proof_output($output);
-    record_info("img-proof results", Dumper($img_proof));
-    die($output) unless (defined($img_proof));
-
-    $args{instance}->public_ip($img_proof->{ip});
-    delete($img_proof->{instance_id});
-    delete($img_proof->{ip});
-
-    return $img_proof;
+    file_content_replace("~/.ssh/config", "%SSH_KEY%" => $self->ssh_key);
 }
 
 =head2 get_image_id
@@ -454,9 +340,10 @@ sub terraform_cmd {
 Run a single tofu/terraform step (C<init>, C<plan> or C<apply>) via
 C<script_retry()>, capturing its combined stdout/stderr to C<tf_<step>_output>
 so the output survives even on a timeout (unlike letting C<script_retry> die
-internally with no diagnostics). Always returns the exit code and the
-captured output rather than dying itself, so the caller decides how to react
-to a failure.
+internally with no diagnostics). On failure, C<tf_<step>_output> is uploaded
+as a job log so the real error stays visible after the job ends. Always
+returns the exit code and the captured output rather than dying itself, so
+the caller decides how to react to a failure.
 
 =cut
 
@@ -467,6 +354,7 @@ sub _tofu_run_step {
         timeout => $args{timeout}, delay => $args{delay}, retry => $args{retry}, die => 0);
     my $output = script_output("cat $output_file", proceed_on_failure => 1);
     record_info("TFM $args{step} output", "exit code: $ret", result => ($ret) ? 'fail' : 'ok');
+    upload_logs($output_file, failok => 1) if $ret;
     return ($ret, $output);
 }
 
@@ -556,7 +444,7 @@ sub terraform_apply {
     $vars{project} = $args{project} if ($args{project});
     if (get_var('PUBLIC_CLOUD_CLOUD_INIT')) {
         $vars{cloud_init} = TERRAFORM_DIR . "/cloud-init.yaml";
-        $vars{use_user_data} = get_var('PUBLIC_CLOUD_USER_DATA') if defined get_var('PUBLIC_CLOUD_USER_DATA');
+        $vars{use_user_data} = get_var('PUBLIC_CLOUD_USER_DATA') if (is_azure && defined get_var('PUBLIC_CLOUD_USER_DATA'));
     }
     $vars{vm_create_timeout} = $terraform_vm_create_timeout;
     my $root_size = get_var('PUBLIC_CLOUD_ROOT_DISK_SIZE');
@@ -711,7 +599,7 @@ sub terraform_destroy {
     $vars{region} = $self->provider_client->region;
     if (get_var('PUBLIC_CLOUD_CLOUD_INIT')) {
         $vars{cloud_init} = TERRAFORM_DIR . '/cloud-init.yaml';
-        $vars{use_user_data} = get_var('PUBLIC_CLOUD_USER_DATA') if defined get_var('PUBLIC_CLOUD_USER_DATA');
+        $vars{use_user_data} = get_var('PUBLIC_CLOUD_USER_DATA') if (is_azure && defined get_var('PUBLIC_CLOUD_USER_DATA'));
     }
     $vars{ssh_public_key} = $self->ssh_key . '.pub';
 

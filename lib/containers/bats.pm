@@ -149,6 +149,7 @@ sub configure_docker {
     $args{experimental} //= get_var("DOCKER_EXPERIMENTAL", 0);
     $args{selinux} //= get_var("DOCKER_SELINUX", 0);
     $args{tls} //= get_var("DOCKER_TLS", 0);
+    $args{insecure_registries} //= [];
 
     # docker-compose is needed for tests but is not available on SLES 15
     install_docker_compose if (is_sle("<16") && script_run("test -f /usr/lib/docker/cli-plugins/docker-compose"));
@@ -156,6 +157,7 @@ sub configure_docker {
     run_command "export DOCKER_BUILDKIT=1" if is_sle("<16");
 
     my $docker_opts = "-H unix:///var/run/docker.sock --insecure-registry localhost:5000 --log-level warn --registry-mirror http://$registry";
+    $docker_opts .= " --insecure-registry $_" for @{$args{insecure_registries}};
     $docker_opts .= " --experimental" if $args{experimental};
     $docker_opts .= " --selinux-enabled" if $args{selinux};
     my $port = 2375;
@@ -320,16 +322,6 @@ sub go_arch {
     return $arch;
 }
 
-sub install_git {
-    # We need git 2.47.0+ to use `--ours` with `git apply -3`
-    return if (script_run("test -f /etc/zypp/repos.d/Kernel_tools.repo") == 0);
-    my $version = get_var("VERSION");
-    $version =~ s/-/_/;
-    $version = "SLE_$version";
-    run_command "zypper addrepo https://download.opensuse.org/repositories/Kernel:/tools/$version/Kernel:tools.repo";
-    run_command "zypper --gpg-auto-import-keys -n install --allow-vendor-change git-core", timeout => 300;
-}
-
 sub install_gotestsum {
     # We need gotestsum to parse "go test" and create JUnit XML output
     return if (script_run("command -v gotestsum") == 0);
@@ -417,11 +409,9 @@ sub setup_pkgs {
     if ($oci_runtime && !grep { $_ eq $oci_runtime } @pkgs) {
         push @pkgs, $oci_runtime;
     }
-    push @pkgs, qw(jq xz);
+    push @pkgs, qw(git jq xz);
     @pkgs = uniq sort @pkgs;
-    push @pkgs, "git" unless is_sle("<16.0");
     run_command "zypper --gpg-auto-import-keys -n install --allow-vendor-change @pkgs", timeout => 1200;
-    install_git if is_sle("<16.0");
 
     configure_oci_runtime $oci_runtime;
 

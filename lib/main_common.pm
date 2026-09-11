@@ -302,7 +302,8 @@ sub is_kernel_test {
         || get_var('TRINITY')
         || get_var('NUMA_IRQBALANCE')
         || get_var('TUNED')
-        || get_var('KDUMP'));
+        || get_var('KDUMP')
+        || get_var('PSI'));
 }
 
 sub is_systemd_test {
@@ -651,7 +652,20 @@ sub load_jeos_tests {
         loadtest "jeos/efi_tid" if (get_var('UEFI') && is_sle('=12-sp5'));
     }
 
-    loadtest 'qa_automation/patch_and_reboot' if is_updates_tests;
+    if (is_updates_tests) {
+        if (get_var('CONTAINER_VALIDATE_UPGRADE')) {
+            my $run_args = OpenQA::Test::RunArgs->new();
+            $run_args->{phase} = "pre";
+            loadtest 'containers/upgrade', run_args => $run_args, name => "upgrade_" . $run_args->{phase};
+        }
+        loadtest 'qa_automation/patch_and_reboot';
+        if (get_var('CONTAINER_VALIDATE_UPGRADE')) {
+            my $run_args = OpenQA::Test::RunArgs->new();
+            $run_args->{phase} = "post";
+            loadtest 'containers/upgrade', run_args => $run_args, name => "upgrade_" . $run_args->{phase};
+            return;
+        }
+    }
     replace_opensuse_repos_tests if is_repo_replacement_required;
     loadtest 'console/verify_efi_mok' if get_var 'CHECK_MOK_IMPORT';
     # zypper_ref needs to run on jeos-containers. the is_sle is required otherwise is scheduled twice on o3
@@ -2327,7 +2341,6 @@ sub load_system_prepare_tests {
     }
     loadtest 'console/integration_services' if is_hyperv || is_vmware;
     loadtest 'console/hostname' unless is_bridged_networking;
-    loadtest 'kernel/install_kernel_flavor' if get_var('KERNEL_FLAVOR');
     loadtest 'console/install_rt_kernel' if check_var('SLE_PRODUCT', 'SLERT');
     loadtest 'console/force_scheduled_tasks' unless is_jeos;
     # Check SELinux failures if SELinux is enabled
@@ -2476,7 +2489,14 @@ sub load_host_installation_modules {
 sub set_mu_virt_vars {
     # Set UPDATE_PACKAGE based on BUILD(format example, BUILD=:33310:dtb-armv7l or BUILD=:smelt:33310:dtb-armv7l)
     my $BUILD = get_required_var('BUILD');
-    $BUILD =~ /:(\d+):([^:]+)$/im;
+    $BUILD =~ /:(\d+):([^:]+?)(?::[^:]+)?$/im;
+    die "BUILD value is $BUILD, but does not match required format." unless $2;
+    # thre expresion works:
+    # :(\d+): Captures the digits (e.g., 1234) into $1.
+    # ([^:]+?): Captures the main component name immediately following the digits (e.g., kernel-source or java) into $2.
+    # (?::[^:]+)?$: An optional non-capturing group (?: ... ?) at the end of the string. If an extra colon-separated
+    # suffix exists (like git:1234:kernel-source:kernel-rt), it matches and safely ignores/discards it.
+    # Old string to reference $BUILD =~ /:(\d+):([^:]+)$/im;
 
     die "BUILD value is $BUILD, but does not match required format." if (!$2);
     my $_pkg = $2;
@@ -2484,7 +2504,7 @@ sub set_mu_virt_vars {
     # If $_pkg contains none, it is for ease of functional testing when no incidents are coming.
     if ($_pkg =~ /none/) {
         $_update_package = '';
-    } elsif ($_pkg =~ /qemu|xen|virt-manager|libguestfs|open-vm-tools|dnsmasq|sevctl/) {
+    } elsif ($_pkg =~ /qemu|xen|virt-manager|libguestfs|open-vm-tools|dnsmasq|sevctl|snpguest|snphost/) {
         $_update_package = $_pkg;
     } elsif ($_pkg =~ /libvirt/) {
         $_update_package = 'libvirt-client';
@@ -2640,7 +2660,7 @@ sub set_sles16_mu_virt_vars {
     set_var('SLES16_MU_INSTALL_TYPE', $install_type);
 
     set_var('ENABLE_HOST_INSTALLATION', '1') unless get_var('ENABLE_HOST_INSTALLATION');
-    set_var('ENABLE_VM_INSTALL', '1') unless get_var('ENABLE_VM_INSTALL');
+    set_var('ENABLE_VM_INSTALL', '1') unless (check_var('ENABLE_VM_INSTALL', 0));
 
     diag("SLES16 MU variables configured: test_mode=staging, install_type=$install_type, host_install=" .
           get_var('ENABLE_HOST_INSTALLATION') . ", vm_install=" . get_var('ENABLE_VM_INSTALL'));
@@ -2651,6 +2671,7 @@ sub set_sles16_mu_virt_vars {
 
 sub load_hypervisor_tests {
     return unless (get_var('HOST_HYPERVISOR') =~ /xen|kvm|qemu/);
+    die "SNP testing is supported only on SLE >= 15-SP7" if (get_var('UPDATE_PACKAGE') =~ /snphost|snpguest/ && is_sle('<15-SP7'));
 
     if (check_var('ENABLE_HOST_INSTALLATION', 1)) {
         if (get_var('AUTOYAST')) {
@@ -2676,7 +2697,7 @@ sub load_hypervisor_tests {
         }
         if (check_var('PATCH_WITH_ZYPPER', 1)) {
             loadtest "virtualization/universal/patch_and_reboot";
-            if (check_var('UPDATE_PACKAGE', 'kernel-default')) {
+            if (check_var('UPDATE_PACKAGE', 'kernel-default') || check_var("UPDATE_PACKAGE", "snpguest")) {
                 loadtest "virt_autotest/login_console";
                 loadtest "virtualization/universal/list_guests";
                 loadtest "virtualization/universal/patch_guests";
@@ -2685,7 +2706,7 @@ sub load_hypervisor_tests {
                 loadtest "virtualization/universal/list_guests" unless (check_var('VIRT_NEW_GUEST_MIGRATION_DST', '1'));
             }
         }
-        loadtest "virtualization/universal/kernel";
+        loadtest "virtualization/universal/kernel" unless (check_var("UPDATE_PACKAGE", "snpguest") || check_var("UPDATE_PACKAGE", "snphost"));
         loadtest "virtualization/universal/finish";
     }
 

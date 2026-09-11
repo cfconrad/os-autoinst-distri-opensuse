@@ -25,7 +25,7 @@ sub run_tests {
     # systemd cgroups manager only works on cgroup v2
     $env{RUNC_USE_SYSTEMD} = "1" if (script_run("test -f /sys/fs/cgroup/cgroup.controllers") == 0);
 
-    if ($rootless && !is_sle("<15-SP6")) {
+    if ($rootless) {
         # /etc/subgid is keyed by user, not group
         my ($gid_start, $gid_len) = split / /, script_output(
             q(awk -F: -v user="$(id -un)" '$1 == user { print $2, $3; exit }' /etc/subgid)
@@ -73,7 +73,7 @@ sub run {
     patch_sources "runc", "v$runc_version", "tests/integration";
 
     # Compile helpers used by the tests
-    my $helpers = script_output "find contrib/cmd tests/cmd -mindepth 1 -maxdepth 1 -type d ! -name _bin -printf '%f ' || true";
+    my $helpers = script_output "find contrib/cmd tests/cmd -mindepth 1 -maxdepth 1 -type d ! -name _bin -printf '%f ' 2>/dev/null", proceed_on_failure => 1;
     record_info("helpers", $helpers);
     run_command "make $helpers || true";
 

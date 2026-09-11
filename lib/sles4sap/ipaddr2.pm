@@ -25,6 +25,7 @@ use hacluster qw($crm_mon_cmd cluster_status_matches_regex);
 use publiccloud::utils qw( get_ssh_private_key_path register_addon);
 use sles4sap::ibsm;
 use sles4sap::azure_cli;
+use sles4sap::qesap::utils qw( qesap_get_public_cloud_tags );
 use version_utils qw(package_version_cmp);
 
 
@@ -228,11 +229,14 @@ sub ipaddr2_infra_deploy(%args) {
 
     az_version();
 
+    my $tags = qesap_get_public_cloud_tags();
+
     my $rg = ipaddr2_azure_resource_group();
 
     az_group_create(
         name => $rg,
-        region => $args{region});
+        region => $args{region},
+        tags => $tags);
 
     # If image provided is a blob storage link, create image out of it
     if ($args{os} =~ /\.vhd$/) {
@@ -240,7 +244,8 @@ sub ipaddr2_infra_deploy(%args) {
         az_img_from_vhd_create(
             resource_group => $rg,
             name => $img_name,
-            source => $args{os});
+            source => $args{os},
+            tags => $tags);
         $args{os} = $img_name;
     }
 
@@ -257,14 +262,16 @@ sub ipaddr2_infra_deploy(%args) {
         vnet => $vnet,
         address_prefixes => $priv_net_address_range{main_address_range},
         snet => $subnet,
-        subnet_prefixes => $priv_net_address_range{subnet_address_range});
+        subnet_prefixes => $priv_net_address_range{subnet_address_range},
+        tags => $tags);
 
     # Create a Network Security Group
     # only needed later when creating the VM
     my $nsg = DEPLOY_PREFIX . '-nsg';
     az_network_nsg_create(
         resource_group => $rg,
-        name => $nsg);
+        name => $nsg,
+        tags => $tags);
 
     # Create a public IP for external test access.
     # It is later assigned to the third VM (bastion role)
@@ -272,14 +279,16 @@ sub ipaddr2_infra_deploy(%args) {
         resource_group => $rg,
         name => $bastion_pub_ip,
         sku => 'Standard',
-        allocation_method => 'Static');
+        allocation_method => 'Static',
+        tags => $tags);
 
     # Create a public IP for the NAT Gateway
     az_network_publicip_create(
         resource_group => $rg,
         name => $nat_pub_ip,
         sku => 'Standard',
-        allocation_method => 'Static');
+        allocation_method => 'Static',
+        tags => $tags);
 
     # Create the NAT Gateway
     my $nat_name = DEPLOY_PREFIX . '-nat';
@@ -287,7 +296,8 @@ sub ipaddr2_infra_deploy(%args) {
         resource_group => $rg,
         region => $args{region},
         name => $nat_name,
-        public_ip => $nat_pub_ip);
+        public_ip => $nat_pub_ip,
+        tags => $tags);
 
     # Associate one of the Public IP to the NAT Gateway
     az_network_vnet_subnet_update(
@@ -311,7 +321,8 @@ sub ipaddr2_infra_deploy(%args) {
         backend => $lb_be,
         frontend_ip_name => $lb_fe,
         fip => $frontend_ip,
-        sku => 'Standard');
+        sku => 'Standard',
+        tags => $tags);
 
     # All the 2 VM are later assigned to it.
     # The load balancer does not explicitly knows about it
@@ -320,7 +331,8 @@ sub ipaddr2_infra_deploy(%args) {
         resource_group => $rg,
         name => $as,
         region => $args{region},
-        fault_count => 2);
+        fault_count => 2,
+        tags => $tags);
     # Next two lines are for debug purpose only:
     # in time to time next vm create fails for missing AS
     az_vm_as_list(resource_group => $rg);
@@ -334,7 +346,8 @@ sub ipaddr2_infra_deploy(%args) {
         az_storage_account_create(
             resource_group => $rg,
             region => $args{region},
-            name => $storage_name);
+            name => $storage_name,
+            tags => $tags);
     }
 
     # - Create 2 VMs
@@ -349,7 +362,8 @@ sub ipaddr2_infra_deploy(%args) {
         vnet => $vnet,
         snet => $subnet,
         ssh_pubkey => get_ssh_private_key_path() . '.pub',
-        public_ip => "");
+        public_ip => "",
+        tags => $tags);
 
     my %vm_create_internal_args = %vm_create_generic_args;
     $vm_create_internal_args{availability_set} = $as;
@@ -882,9 +896,27 @@ sub ipaddr2_os_sanity(%args) {
     ipaddr2_os_ssh_sanity(user => $args{user}, bastion_ip => $args{bastion_ip});
 
     foreach (1 .. 2) {
-        ipaddr2_ssh_internal(id => $_,
+        my $ret = ipaddr2_ssh_internal(id => $_,
             cmd => 'sudo systemctl is-system-running',
-            bastion_ip => $args{bastion_ip});
+            bastion_ip => $args{bastion_ip},
+            no_assert => 1);
+
+        if (defined $ret && $ret == 0) {
+            next;
+        }
+        elsif (defined $ret && $ret == 1) {
+            # get the names of the failed services
+            my $failed_services = ipaddr2_ssh_internal_output(id => $_,
+                cmd => 'sudo systemctl --failed --no-pager',
+                bastion_ip => $args{bastion_ip});
+
+            # record the failed services for investigating
+            record_info('Error', "The Services failed on VM $_:\n$failed_services", result => 'fail');
+            die "Test died on VM $_ due to failed services.";
+        }
+        else {
+            die "VM $_ is not in a running state with exit code " . ($ret // 'undef');
+        }
     }
 
     ipaddr2_cloudinit_sanity(bastion_ip => $args{bastion_ip});
@@ -2616,11 +2648,15 @@ Collect logs from the ipaddr2 cluster.
                       Providing it as an argument is recommended
                       to avoid having to query Azure to get it.
 
+=item B<no_supportconfig> - Optional boolean (default 0). When set to 1,
+                            skip supportconfig log collection.
+
 =back
 =cut
 
 sub ipaddr2_logs_collect(%args) {
     $args{bastion_ip} //= ipaddr2_bastion_pubip();
+    $args{no_supportconfig} //= 0;
     my $bastion_ssh_addr = ipaddr2_bastion_ssh_addr(bastion_ip => $args{bastion_ip});
     my $vm_addr;
     my $worker_tmp_dir;
@@ -2635,13 +2671,23 @@ sub ipaddr2_logs_collect(%args) {
     foreach my $log (ipaddr2_logs_collect_cmds()) {
         $scp_ret = 0;
 
+        next if ($args{no_supportconfig} && defined $log->{name} && $log->{name} eq 'supportconfig');
+
         if (defined $log->{remote_log} && $log->{remote_log} == 1) {
             $timeout = $log->{timeout} // 300;
             # Iterate through each remote VM to generate and collect logs.
             foreach my $id (1 .. 2) {
-                $vm_addr = USER . '@' . ipaddr2_get_internal_vm_private_ip(id => $id);
                 $worker_tmp_dir = ipaddr2_get_worker_tmp_for_internal_vm(id => $id);
-                assert_script_run("mkdir -p $worker_tmp_dir || echo 'Folder $worker_tmp_dir already exist'");
+
+                # Use script_run with short timeout to detect a stuck terminal
+                my $mkdir_ret = script_run("mkdir -p $worker_tmp_dir || echo 'Folder $worker_tmp_dir already exist'", timeout => 10);
+                if (!defined $mkdir_ret) {
+                    record_info('Terminal stuck',
+                        "Cannot reach shell prompt, skipping remaining logs for VM $id",
+                        result => 'fail');
+                    last;
+                }
+
                 %log_data = %{$log->{f_log}->($id)};
                 $log_data{name} = $log->{name} if defined $log->{name};
                 $remote_file = $log_data{file};
@@ -2670,13 +2716,26 @@ sub ipaddr2_logs_collect(%args) {
                         no_assert => 1,
                         timeout => $timeout,
                         cmd => $log_data{cmd});
+
+                    # Diagnostic: if supportconfig timed out, probe the VM to identify what is blocking.
+                    if (!defined $cmd_ret && defined $log_data{name} && $log_data{name} eq 'supportconfig') {
+                        record_info('SC timeout',
+                            "supportconfig timed out on VM $id, running diagnostic",
+                            result => 'fail');
+                        ipaddr2_ssh_internal(
+                            id => $id,
+                            bastion_ip => $args{bastion_ip},
+                            no_assert => 1,
+                            timeout => 30,
+                            cmd => 'ps aux --sort=-pcpu | grep -E "supportconfig|zypper|rpm" | grep -v grep');
+                    }
                 }
 
                 # Download the generated file from the remote VM to the local worker
                 # only if the previous command was successful.
                 if (defined $cmd_ret && $cmd_ret == 0) {
                     $local_file = join('/', $worker_tmp_dir, basename($remote_file));
-
+                    $vm_addr = USER . '@' . ipaddr2_get_internal_vm_private_ip(id => $id);
                     $scp_cmd = join(' ',
                         'scp',
                         '-J', $bastion_ssh_addr,

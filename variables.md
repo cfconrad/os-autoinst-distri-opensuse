@@ -8,13 +8,16 @@ NOTE: This list is not complete and may contain outdated info. If you face such 
 
 For a better overview some domain-specific values have been moved to their own section:
 
-* [Publiccloud](#publiccloud-specific-variables)
+* [Public Cloud](#publiccloud-specific-variables)
 * [Wicked](#wicked-testsuite-specifc-variables)
 * [xfstests](#xfstests-specific-variables)
+* [Agama](#Agama-specific-variables)
+* [Remote Desktop](#Remote-desktop-specific-variables)
+* [Elemental3](#Elemental3-specific-variables)
 
 Variable        | Type      | Default value | Details
 ---             | ---       | ---           | ---
-`APACHE2_PKG` | string | `apache` | Apache2 package under test (e.g. `apache2` or `apache2-tls13`)
+APACHE2_PKG | string | apache | Apache2 package under test (e.g. `apache2` or `apache2-tls13`)
 AARCH64_MTE_SUPPORTED | boolean | false     | Set to 1 if your machine supports Memory Tagging Extension (MTE)
 ADDONS          | string    |               | Comma separated list of addons to be added using DVD. Also used to indicate addons in the SUT.
 ADDONURL        | string    |               | Comma separated list of addons. Includes addon names to get url defined in ADDONURL_*. For example: ADDONURL=sdk,we ADDONURL_SDK=https://url ADDONURL_WE=ftp://url
@@ -54,10 +57,12 @@ CONTAINERS_CRICTL_VERSION | string | v1.23.0 | The version of CriCtl tool.
 CONTAINERS_NERDCTL_VERSION | string | 0.16.1 | The version of NerdCTL tool.
 CONTAINERS_DOCKER_FLAVOUR | string | | Flavour of docker to install. Valid options are `stable` or undefined (for standard docker package)
 CONTAINERS_CHECK_SIGNATURE | boolean | false | Perform image signature check in BCI tests
+HDDSIZEGB(_*) | integer | | Size of the disk, others can be added like this: `HDDSIZEGB_1`, `HDDSIZEGB_2`, etc.
 HELM_CHART | string | | Helm chart under test. See `main_containers.pm` for supported chart types |
 HELM_CONFIG | string | | Additional configuration file for helm |
 HELM_LOGIN | string | Comma-separated list of login information if required for a registry, e.g. `registry.suse.de:username:password,registry.suse.de:geekotest:notsecret`
 HELM_FULL_REGISTRY_PATH | string | Full path to the registry images used by the helm chart. e.g. `my.registry.com/myteam/secret_project`. Only necessary when using non-publicly available container images. | 
+HOSTNAME | string | | Hostname of the SUT
 COREDUMP_IGNORE_ERRORS | boolean | | Don't quit test if coredump files are seen
 COREDUMP_WITH_BACKTRACE | boolean | | Get a backtrace when analyzing coredumps
 CPU_BUGS | boolean | | Into Mitigations testing
@@ -126,6 +131,7 @@ ISO_MAXSIZE | integer | | Max size of the iso, used in `installation/isosize.pm`
 IS_MM_SERVER | boolean | | If set, run server-specific part of the multimachine job
 IS_MM_CLIENT | boolean | | If set, run client-specific part of the multimachine job
 JEOS_CHECK_SERIAL | boolean | true | Skip the check weather the JeOS Firstboot wizard shows up on the serial terminal
+JOURNAL_LOG_LEVEL | string | err | Maximum journalctl priority inspected by the `journal_check` test module
 K3S_SYMLINK | string | | Can be 'skip' or 'force'. Skips the installation of k3s symlinks to tools like kubectl or forces the creation of symlinks
 K3S_BIN_DIR | string | | If defined, install k3s to this provided directory instead of `/usr/local/bin/`
 K3S_CHANNEL | string | | Set the release channel to pick the k3s version from. Options include "stable", "latest" and "testing"
@@ -306,17 +312,17 @@ SMELT_URL | string | https://smelt.suse.de | Defines the URL for the SUSE Mainte
 TRANSACTIONAL | boolean | false | Mark the SUT as a transactional system. Used in SLFO.
 
 
-### Publiccloud specific variables
+### Public Cloud specific variables
 
 The following variables are relevant for publiccloud related jobs. Keep in mind that variables that start with `_SECRET` are secret variables, accessible only to the job but hidden in the webui. They will be not present in cloned jobs outside the original instance.
 
 Variable        | Type      | Default value | Details
 ---             | ---       | ---           | ---
 OPENTOFU_VERSION | string | "1.11.6" | Version of opentofu to include into PC Tools image
-PUBLIC_AZURE_CLI_TEST | string | "vmss" | Azure CLI test names. This variable should list the test name which should be tested.
 PUBLIC_CLOUD | boolean | false | All Public Cloud tests have this variable set to true. Contact: qa-c@suse.de
 PUBLIC_CLOUD_ACCNET | boolean | false | If set, az_accelerated_net test module is added to the job.
 PUBLIC_CLOUD_AHB_LT | string | "SLES_BYOS" | For Azure, it specifies the license type to change to (and test).
+PUBLIC_CLOUD_AITL_TIMEOUT | integer | 5400 | Timeout in seconds for the AITL job poll loop in `azure_aitl.pm` to wait for job completion before failing the test.
 PUBLIC_CLOUD_ARCH | string | "x86_64" | The architecture of created VM.
 PUBLIC_CLOUD_AVAILABILITY_ZONE | string | "" | The availability zone to use. Depends on `PUBLIC_CLOUD_REGION`. Only for GCE.
 PUBLIC_CLOUD_AZURE_IMAGE_DEFINITION | string | "" | Defines the image definition for uploading Arm64 images to the image gallery.
@@ -332,6 +338,9 @@ PUBLIC_CLOUD_BOOTTIME_MAX | integer | undef | To set the 'overall' `boot time` t
 PUBLIC_CLOUD_BTRFS | boolean | false | If set, it schedules `publiccloud/btrfs` job.
 PUBLIC_CLOUD_BUILD | string | "" | The image build number. Used only when we use custom built image.
 PUBLIC_CLOUD_BUILD_KIWI | string | "" | The image kiwi build number. Used only when we use custom built image.
+PUBLIC_CLOUD_CIT | boolean | 0 | Schedule Google's cloud-image-test framework
+PUBLIC_CLOUD_CIT_TESTS | string | "" | Execute a list of Google's cloud-image-test internal testsuites
+PUBLIC_CLOUD_CIT_CONTAINER | string | "" | Run Google's cloud-image-test framework using a container
 PUBLIC_CLOUD_CLOUD_INIT | string | "" | If this is defined and not empty custom `cloud-config` will be attached to the instance. If it is "install" the used `cloud-config` also contain a section to install ed.
 PUBLIC_CLOUD_CONFIDENTIAL_VM | boolean | false | GCE Confidential VM instance
 PUBLIC_CLOUD_CONSOLE_TESTS | boolean | false | If set, console tests are added to the job.
@@ -354,6 +363,7 @@ PUBLIC_CLOUD_GCE_STACK_TYPE | string | IPV4_ONLY | Network stack type, possible 
 PUBLIC_CLOUD_GCE_NIC_TYPE | string | "" | Network Interface Card type, possible values: GVNIC, VIRTIO_NET, IDPF, MRDMA or IRDMA 
 PUBLIC_CLOUD_GOOGLE_ACCOUNT | string | "" | GCE only, used to specify the account id.
 PUBLIC_CLOUD_GOOGLE_PROJECT_ID | string | "" | GCP only, used to specify the project id.
+PUBLIC_CLOUD_GOOGLE_NAMESPACE | string | "" | Special override for GCP only. Overrides the Public Cloud Namespace name that will be used to compose the full credentials URL together with `PUBLIC_CLOUD_CREDENTIALS_URL`.
 PUBLIC_CLOUD_HDD2_SIZE | integer | "" | If set, the instance will have an additional disk with the given capacity in GB
 PUBLIC_CLOUD_HDD2_TYPE | string | "" | If PUBLIC_CLOUD_ADDITIONAL_DISK_SIZE is set, this defines the additional disk type (optional). The required value depends on the cloud service provider.
 PUBLIC_CLOUD_IGNORE_EMPTY_REPO | boolean | false | Ignore empty maintenance update repos
@@ -383,8 +393,6 @@ PUBLIC_CLOUD_MIGRATE_SLEM | boolean | false | Enable module for SL micro 6.x ver
 PUBLIC_CLOUD_NVIDIA | boolean | 0 | If enabled, nvidia module would be scheduled. This variable should be enabled only sle15SP4 and above.
 PUBLIC_CLOUD_PREPARE_TOOLS | boolean | false | Activate prepare_tools test module by setting this variable.
 PUBLIC_CLOUD_PROVIDER | string | "" | The type of the CSP (e.g. AZURE, EC2, GCE).
-PUBLIC_CLOUD_PY_AZURE_REPO | string | "" | PY azure repo URL for azure_more_cli_test.
-PUBLIC_CLOUD_PY_BACKPORTS_REPO | string | "" | PY Backport repo URL for azure_more_cli_test.
 PUBLIC_CLOUD_QAM | boolean | false |  1 : to identify jobs running to test "Maintenance" updates; 0 : for jobs testing "Latest" (in development). Used to control all behavioral implications which this brings.
 PUBLIC_CLOUD_REBOOT_TIMEOUT | integer | 600 | Number of seconds we wait for instance to reboot.
 PUBLIC_CLOUD_REDOWNLOAD_MU | boolean | false | Debug variable used to redownload the maintenance repositories (as they might be downloaded by parent test)
@@ -398,6 +406,7 @@ PUBLIC_CLOUD_SCC_ENDPOINT | string | "registercloudguest" | Name of binary which
 PUBLIC_CLOUD_SKIP_MU | boolean | false | Run tests without downloading/applying maintenance updates.
 PUBLIC_CLOUD_SLES4SAP | boolean | false | If set, sles4sap test module is added to the job.
 PUBLIC_CLOUD_SSH_CONFIG | string | "publiccloud/ssh_config" | Allows to override the default ssh config template location.
+PUBLIC_CLOUD_SSH_KEY_ALGO | string | "" | SSH key algorithm used for public cloud testing. Supported values are `rsa` or `ed25519`.
 PUBLIC_CLOUD_SSH_TIMEOUT | int | 300 | Sets the timeout for ssh wait operations.
 PUBLIC_CLOUD_STORAGE_ACCOUNT | string | "" | Storage account used e.g. for custom disk and container images
 PUBLIC_CLOUD_SUPPORTCONFIG_EXCLUDE | string | "" | List of comma-separated features to exclude from 'supportconfig' execution
@@ -405,12 +414,12 @@ PUBLIC_CLOUD_SMOKETEST | boolean | false | Scheduling setting - Run instance smo
 PUBLIC_CLOUD_SMT_IP | string | Specify custom SMT IP for publiccloud::utils::registercloudguest()
 PUBLIC_CLOUD_SMT_FQDN | string | Specify custom SMT FQDN for publiccloud::utils::registercloudguest()
 PUBLIC_CLOUD_SMT_FP | string | Specify custom SMT FP for publiccloud::utils::registercloudguest()
+PUBLIC_CLOUD_TAGS | string | "" | Comma-separated list of tags to apply to the public cloud resources. Supported key=value pairs or keys without value.
 PUBLIC_CLOUD_TERRAFORM_DIR | string | "/root/terraform" | Override default root path to terraform directory
 PUBLIC_CLOUD_TERRAFORM_FILE | string | "" | If defined, use this terraform file (from the `data/` directory) instead the CSP default
 PUBLIC_CLOUD_TERRAFORM_RUNNER | string | "tofu" | Override terraform runner container. Can be either "tofu" or "terraform".
 PUBLIC_CLOUD_TOOLS_CLI | boolean | false | If set, it schedules `publiccloud_tools_cli` job group.
-PUBLIC_CLOUD_TOOLS_REPO | string | "" | cloud tools repo URL for azure_more_cli_test.
-PUBLIC_CLOUD_TOOLS_REPO | string | false | The URL to the cloud:tools repo (optional). (e.g. http://download.opensuse.org/repositories/Cloud:/Tools/openSUSE_Tumbleweed/Cloud:Tools.repo).
+PUBLIC_CLOUD_TOOLS_REPO | string | "" | The URL to the cloud:tools repo (optional). (e.g. http://download.opensuse.org/repositories/Cloud:/Tools/openSUSE_Tumbleweed/Cloud:Tools.repo).
 PUBLIC_CLOUD_TTL_OFFSET | integer | 300 | This number + MAX_JOB_TIME equals the TTL of created VM.
 PUBLIC_CLOUD_UPLOAD_IMG | boolean | false | If set, `publiccloud/upload_image` test module is added to the job.
 PUBLIC_CLOUD_USER | string | "" | The public cloud instance system user.
@@ -498,6 +507,7 @@ DEBUG_SPORADIC_MAX | integer | 20 | Hard iteration cap used only in until_pass m
 XFSTESTS_XFS_REPAIR | boolean | 0 | XFS only, value=0/1. enable TEST_XFS_REPAIR_REBUILD=1 in xfstests log file local.config
 XFSTESTS_NFS_VERSION | string | 4.1 | NFS only, version of test target NFS. What's special is that set it with TLS-<nfsversion> will enable NFS over kTLS. And set it with krb5[pi]-<nfsversion> will enable NFS with kerberos5 mount option during tests
 XFSTESTS_NFS_SERVER | boolean | | NFS multimation test only, mandatory. To tag this test job for NFS server in a NFS multimachine test. NFS test in a multimachine test either a client or a server.
+XFSTESTS_PNFS_TRAFFIC_CHECK | boolean | 0 | pNFS only, verify that the block layout carries the data. Capture the NFS traffic on loopback and the requests of the block device backing the export while writing a 4K probe file. With a working block layout no NFS WRITE operation shows up and the write goes to the block device instead. The pcap and the block trace are uploaded, the check is skipped on products without the capture tools
 NFS_GRACE_TIME | integer | 15 | NFS only, set the nlm_grace_period in /etc/modprobe.d/lockd.conf used in NFS test.
 PARALLEL_WITH | string | | NFS multimation test only, value=<set-the-parent-job-name>. To set the NFS server job name in NFS client job in a NFS multimachine test. e.g. xfstests_nfs4.1-server
 XFSTESTS_PART_SIZE | string | | Partitions size in MB, separate with commas. Each size is allocated to test_dev, scratch_dev1 and so on in turn. Unconfigured partitions will divide the remaining space equally. E.g, value=5120,10240 then test_dev=5120M, scratch_dev1=10240M, and remain partitions share the rest space.
@@ -532,9 +542,43 @@ INST_AUTO | string | | The auto-installation is started by passing `inst.auto=<u
 INST_INSTALL_URL | string | | This will support using 'inst.install_url' boot parameter for overriding the default installation repositories. You can use multiple URLs separated by comma: inst.install_url=https://example.com/1,https://example.com/2
 
 ### Remote desktop specific variables
+
 Following variables are relevant for remote desktop testing
 But "x11_helm_server" and "x11_helm_client" are used to test deploy X11, pulseaudio, firefox kiosk with Kubernetes Using Helm
 
 Variable        | Type      | Default value | Details
 ---             | ---       | ---           | ---
 REMOTE_DESKTOP_TYPE | string | | This variable mainly used for remote desktop testing or other testing that uses multi machines.
+
+### Elemental3 specific variables
+
+Following variables are relevant for Elemental3 tests.
+
+Variable        | Type      | Default value | Details
+---             | ---       | ---           | ---
+CLUSTER_TYPE | string | | Type of cluster to test (single-node, multi-node)
+CRYPTO_POLICY | string | fips | Cryptographic policy to use
+INSTALL_DISK | string | /dev/vda | Installation disk to use
+ISO_CMD_LINE | string | | Set kernel command line for ISO container test
+K8S | string | rke2 | Supported K8s distribution to test (RKE2, K3s)
+STATIC_HOSTS | string | | In isolated env (like multi-machine tests) we need to hard some servers' information
+SYSEXT_IMAGES_TO_TEST | string | | Define the systemd system extensions to test
+TEMPLATE | string | default | Template to use to build the OS image
+TEST_GROUP | string | qetestgroup | Test group to create and use
+TEST_USER | string | qetest | Test user to create and use
+TOTEST_PATH | string | | Path where the ToTest artifacts could be found
+
+### Trento specific variables
+
+Following variables are relevant for Trento container tests.
+
+Variable        | Type      | Default value | Details
+---             | ---       | ---           | ---
+CERT_MANAGER_VERSION | string | v1.20.2 | cert-manager chart version used for ingress TLS
+TRENTO_ADMIN_PASSWORD | string | random 12 character password | Admin password for Trento Web, generated when unset
+TRENTO_ADMIN_USER | string | admin | Admin user for Trento Web
+TRENTO_HELM_CHARTS_REF | string | main | Git ref of the Trento helm-charts repository to check out
+TRENTO_HELM_CHARTS_REPO | string | https://github.com/trento-project/helm-charts.git | Repository providing the upstream smoke test script
+TRENTO_HELM_RELEASE | string | trento-server | Name of the Helm release
+TRENTO_INGRESS_URL | string | https://$TRENTO_SERVER_HOSTNAME | Base URL used to reach Trento through the ingress
+TRENTO_SERVER_HOSTNAME | string | localhost | Hostname used for the ingress and the TLS certificate

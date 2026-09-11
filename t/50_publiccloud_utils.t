@@ -2,6 +2,8 @@ use strict;
 use warnings;
 use Test::More;
 use Test::MockModule;
+use Test::MockObject;
+use Test::Exception;
 use Test::Warnings;
 use testapi 'set_var';
 
@@ -22,7 +24,7 @@ subtest '[export boundary] exported vs internal helpers' => sub {
     for my $exported (qw(
         is_byos is_ondemand is_ec2 is_ec2_xen is_azure is_gce
         is_container_host is_hardened is_cloudinit_supported
-        get_python_exec get_ssh_private_key_path pc_data_url
+        get_python_exec get_ssh_key_algo get_ssh_private_key_path pc_data_url
         additional_repos calculate_custodian_ttl
         )) {
         ok(__PACKAGE__->can($exported), "$exported is exported into caller");
@@ -201,6 +203,44 @@ subtest '[get_ssh_private_key_path] depends on provider/LTP' => sub {
     _unset(qw/PUBLIC_CLOUD PUBLIC_CLOUD_PROVIDER PUBLIC_CLOUD_LTP/);
 };
 
+subtest '[get_ssh_key_algo] PUBLIC_CLOUD_SSH_KEY_ALGO overrides the default' => sub {
+    set_var('PUBLIC_CLOUD', 1);
+
+    # Unset and empty behave alike: fall back to the provider/LTP default.
+    set_var('PUBLIC_CLOUD_PROVIDER', 'EC2');
+    set_var('PUBLIC_CLOUD_SSH_KEY_ALGO', undef);
+    is(get_ssh_key_algo(), 'ed25519', 'unset falls back to the default');
+    set_var('PUBLIC_CLOUD_SSH_KEY_ALGO', '');
+    is(get_ssh_key_algo(), 'ed25519', 'empty string falls back to the default');
+
+    # The override wins over the ed25519 default ...
+    set_var('PUBLIC_CLOUD_SSH_KEY_ALGO', 'rsa');
+    is(get_ssh_key_algo(), 'rsa', 'rsa override on a ed25519-by-default provider');
+    is(get_ssh_private_key_path(), '~/.ssh/id_rsa', 'key path follows the override');
+
+    # ... over the azure rsa default ...
+    set_var('PUBLIC_CLOUD_PROVIDER', 'AZURE');
+    set_var('PUBLIC_CLOUD_SSH_KEY_ALGO', 'ed25519');
+    is(get_ssh_key_algo(), 'ed25519', 'ed25519 override beats the azure rsa default');
+    is(get_ssh_private_key_path(), '~/.ssh/id_ed25519', 'key path follows the override');
+
+    # ... and over the LTP rsa default.
+    set_var('PUBLIC_CLOUD_PROVIDER', 'EC2');
+    set_var('PUBLIC_CLOUD_LTP', 1);
+    is(get_ssh_key_algo(), 'ed25519', 'ed25519 override beats the LTP rsa default');
+    _unset(qw/PUBLIC_CLOUD_LTP/);
+
+    # Anything else is a hard error: a silently wrong algorithm would only
+    # surface much later as an unexplained ssh timeout. The match is
+    # case-sensitive on purpose, so the setting has exactly one spelling.
+    for my $bogus (qw(dsa ecdsa id_rsa 1 ED25519 RSA Rsa)) {
+        set_var('PUBLIC_CLOUD_SSH_KEY_ALGO', $bogus);
+        throws_ok { get_ssh_key_algo() } qr/Unsupported PUBLIC_CLOUD_SSH_KEY_ALGO/, "'$bogus' is rejected";
+    }
+
+    _unset(qw/PUBLIC_CLOUD PUBLIC_CLOUD_PROVIDER PUBLIC_CLOUD_LTP PUBLIC_CLOUD_SSH_KEY_ALGO/);
+};
+
 subtest '[pc_data_url] github/gitlab/gitea URL conversion' => sub {
     set_var('TEST_GIT_HASH', 'abc123');
 
@@ -235,6 +275,45 @@ subtest '[additional_repos] xfs repo composition' => sub {
     like($repos[0], qr{QA:/Head/SLE-15-SP6/}, 'repo path uses SLE prefix and version');
 
     _unset(qw/PUBLIC_CLOUD_XFS VERSION/);
+};
+
+subtest '[register_addons_in_pc] discriminates the no-enabled-repos cause' => sub {
+    # poo#205965
+    my $zypper = Test::MockModule->new('publiccloud::zypper', no_auto => 1);
+    my $utils = Test::MockModule->new('publiccloud::utils', no_auto => 1);
+    $utils->redefine(record_info => sub { note(join(' ', 'RECORD_INFO -->', @_)) });
+    set_var('SCC_ADDONS', '');
+
+    my $output;
+    my $mock_instance = sub {
+        my $inst = Test::MockObject->new;
+        $inst->mock(username => sub { 'susetest' });
+        $inst->mock(public_ip => sub { '1.2.3.4' });
+        $inst->mock(ssh_script_output => sub {
+                my (undef, %args) = @_;
+                return $args{cmd} =~ /SUSEConnect/ ? ($output // '') : '';
+        });
+        return $inst;
+    };
+
+    $zypper->redefine(pc_refresh => sub { return publiccloud::zypper::EXIT_OK });
+    lives_ok { register_addons_in_pc($mock_instance->()) } 'EXIT_OK does not die';
+
+    $zypper->redefine(pc_refresh => sub { return publiccloud::zypper::EXIT_NO_REPOS });
+    $output = "SLES15-SP6-x86_64 is not managed by SUSEConnect (Not Registered)\n";
+    throws_ok {
+        register_addons_in_pc($mock_instance->());
+    }
+    qr/not registered/, 'unregistered system is named as the cause';
+    unlike($@, qr/bsc#1245651/, 'the unregistered case does not claim to be bsc#1245651');
+
+    $output = "SUSE Linux Enterprise Server 15 SP6 x86_64 (Activated)\n";
+    throws_ok {
+        register_addons_in_pc($mock_instance->());
+    }
+    qr/registered system \(bsc#1245651\)/, 'registered system is named as the cause';
+
+    _unset(qw/SCC_ADDONS/);
 };
 
 subtest '[calculate_custodian_ttl] ISO 8601 with offset' => sub {

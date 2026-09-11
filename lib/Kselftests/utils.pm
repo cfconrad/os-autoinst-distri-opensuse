@@ -94,9 +94,14 @@ sub build
 
     assert_script_run("make -j$jobs -C $source_dir headers O=$build_dir $build_env");
 
-    # Mount the source dir overlay only after make headers. Mounting it earlier
-    # disturbs make's timestamp evaluation and causes it to try to regenerate
-    # headers from source files absent in the kernel-source package.
+    # Needed for resolve_btfids/BTF module builds. Only safe for
+    # KSELFTEST_FROM_SRC, where .config is in sync with the source tree
+    assert_script_run("make -j$jobs -C $source_dir modules_prepare O=$build_dir $build_env") if get_var('KSELFTEST_FROM_SRC', 0);
+
+    # Mount the source dir overlay only after make headers/modules_prepare.
+    # Mounting it earlier disturbs make's timestamp evaluation and causes it
+    # to try to regenerate headers from source files absent in the
+    # kernel-source package.
     my $real_source_dir = script_output("readlink -f $source_dir");
     if (script_run("test -w $real_source_dir") != 0) {
         (my $tag = $real_source_dir) =~ s|[/ ]|_|g;
@@ -196,6 +201,10 @@ sub install_dependencies
         add_qa_head_repo;
         add_suseconnect_product(get_addon_fullname('phub'));
         trup_apply() if is_transactional;
+    }
+
+    if ($collection eq 'mm') {
+        install_package('libcap-devel liburing-devel libnuma-devel', trup_continue => 1);
     }
 
     if ($collection eq 'bpf') {
