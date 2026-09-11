@@ -6,7 +6,7 @@
 
 =head1 NAME
 
-azure_fence_agents_test.pm - Test module for azure stonith based fencing agent
+sles4sap/publiccloud/azure_fence_agents_test.pm - Test module for azure stonith based fencing agent
 
 =head1 DESCRIPTION
 
@@ -31,16 +31,6 @@ Specifies the public cloud provider. Must be set to 'AZURE' for this test.
 
 Specifies the Azure fence agent configuration method. Can be 'msi' or 'spn'.
 
-=item B<_SECRET_AZURE_SPN_APPLICATION_ID>
-
-The application ID for the Service Principal Name (SPN) used by the fencing agent.
-Required when B<AZURE_FENCE_AGENT_CONFIGURATION> is 'spn'.
-
-=item B<_SECRET_AZURE_SPN_APP_PASSWORD>
-
-The application password for the Service Principal Name (SPN) used by the fencing agent.
-Required when B<AZURE_FENCE_AGENT_CONFIGURATION> is 'spn'.
-
 =back
 
 =head1 MAINTAINER
@@ -49,16 +39,17 @@ QE-SAP <qe-sap@suse.de>
 
 =cut
 
-use base 'sles4sap_publiccloud_basetest';
+use Mojo::Base 'sles4sap::publiccloud_basetest';
 use serial_terminal 'select_serial_terminal';
 use testapi;
-use sles4sap_publiccloud;
+use publiccloud::utils 'get_credentials';
+use sles4sap::publiccloud;
 use sles4sap::qesap::qesapdeployment;
 use sles4sap::qesap::azure;
 use Data::Dumper;
 
 sub test_flags {
-    return {fatal => 1, publiccloud_multi_module => 1};
+    return {fatal => 1};
 }
 
 sub run {
@@ -91,8 +82,9 @@ sub run {
     my @bashrc_vars = ("export SUBSCRIPTION_ID=$subscription_id");
 
     if ($fence_agent_configuration eq 'spn') {
-        my $spn_application_id = get_var('AZURE_SPN_APPLICATION_ID', get_required_var('_SECRET_AZURE_SPN_APPLICATION_ID'));
-        my $spn_application_password = get_var('AZURE_SPN_APP_PASSWORD', get_required_var('_SECRET_AZURE_SPN_APP_PASSWORD'));
+        my $data = get_credentials(url_suffix => 'azure.json');
+        my $spn_application_id = $data->{fencing_client_id};
+        my $spn_application_password = $data->{fencing_client_secret};
 
         push @bashrc_vars, "export SPN_APPLICATION_ID=$spn_application_id";
         push @bashrc_vars, "export SPN_APP_PASSWORD=$spn_application_password";

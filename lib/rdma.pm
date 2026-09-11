@@ -38,8 +38,12 @@ sub install_rdma_dependency {
       librdmacm-utils
       infiniband-diags
       libibverbs-utils
-      kernel-default-extra
     );
+    my $kernel_version = get_var('KERNEL_VERSION');
+    my $match = $kernel_version || script_output("uname -r | sed 's/-[^0-9]*\$//'");
+    my $rpm_output = script_output("rpm -q kernel-default --queryformat '%{VERSION}-%{RELEASE}\\n'");
+    my $kver = (grep { /^\Q$match\E/ } split(/\n/, $rpm_output))[-1] // '';
+    push @deps, "kernel-default-extra=$kver";
     my $packages = join(' ', @deps);
     script_run('zypper --gpg-auto-import-keys ref');
     install_package($packages, trup_reboot => 1);

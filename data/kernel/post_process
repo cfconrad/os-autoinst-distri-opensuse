@@ -5,6 +5,10 @@ check_for_errors() {
 	local error=0
 
 	for file in $(find ./results/$dir -type f); do
+		if is_not_run "$file"; then
+			continue
+		fi
+
 		while IFS= read -r line; do
 			if [[ "$line" == *"exit_status"* && "$line" == *"1"* ]]; then
 				error=1
@@ -15,6 +19,18 @@ check_for_errors() {
 	done
 
 	echo "$error"
+}
+
+is_not_run() {
+	local file="$1"
+
+	while IFS= read -r line; do
+		if [[ "$line" == "status"* && "$line" == *"not run"* ]]; then
+			return 0
+		fi
+	done < "$file"
+
+	return 1
 }
 
 get_test_description() {
@@ -38,9 +54,27 @@ generate_xunit_report() {
 	local error
 	error=$(check_for_errors "$dir")
 
+	local any_tests=0
+	for file in $(find ./results/$dir -type f); do
+		if ! is_not_run "$file"; then
+			any_tests=1
+			break
+		fi
+	done
+
+	if [[ $any_tests -eq 0 ]]; then
+		echo "Skipping group $dir: all tests were skipped"
+		return
+	fi
+
 	echo "<testsuite errors=\"$error\" name=\"$dir\">" > "./$results"
 
 	for file in $(find ./results/$dir -type f); do
+		if is_not_run "$file"; then
+			echo "not run: $file"
+			continue
+		fi
+
 		local test_name
 		test_name=$(get_test_description "$file")
 		local test_group
@@ -56,8 +90,6 @@ generate_xunit_report() {
 					echo "<testcase name=\"${test_group}::${test_name}\">" >> "./$results"
 					echo "  <failure message=\"$failure_message\"/>" >> "./$results"
 					echo "</testcase>" >> "./$results"
-				elif [[ "$line" == *"not run"* ]]; then
-					echo "not run: $file"
 				fi
 			fi
 		done < "$file"

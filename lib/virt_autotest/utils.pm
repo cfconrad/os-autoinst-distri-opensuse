@@ -34,12 +34,15 @@ our @EXPORT = qw(
   is_fv_guest
   is_pv_guest
   is_sev_es_guest
+  is_transactional_guest
   guest_is_sle
   is_guest_ballooned
   is_xen_host
   is_kvm_host
   is_sles_mu_virt_test
   is_sles16_mu_virt_test
+  host_os_version_prefix
+  is_guest_of_host_version
   is_monolithic_libvirtd
   turn_on_libvirt_debugging_log
   restart_libvirtd
@@ -61,6 +64,7 @@ our @EXPORT = qw(
   ssh_setup
   setup_common_ssh_config
   add_alias_in_ssh_config
+  get_default_ssh_keyfile
   install_default_packages
   parse_subnet_address_ipv4
   backup_file
@@ -73,6 +77,7 @@ our @EXPORT = qw(
   subscribe_extensions_and_modules
   check_activate_network_interface
   wait_for_host_reboot
+  setup_br0_with_virt_bridge_setup
   create_guest
   import_guest
   ssh_copy_id
@@ -106,6 +111,8 @@ our @EXPORT = qw(
   double_check_xen_role
   check_kvm_modules
   install_product_software
+  collect_guests_supportconfig_and_logs
+  reset_network_config
 );
 
 my %log_cursors;
@@ -205,6 +212,64 @@ sub is_sles16_mu_virt_test {
     # Note: Xen will be tested from SLES16.2
 }
 
+# Convert openQA VERSION variable to the guest name prefix used in %virt_autotest::common::guests.
+# This normalizes the different versioning schemes:
+#   "15-SP7"  -> "sles15sp7"   (dash-based, SLES15 and older)
+#   "16.0"    -> "sles16"      (dot-based, SLES16+ base release)
+#   "16.1"    -> "sles16sp1"   (dot-based, SLES16+ service pack)
+#   "12.5"    -> "sles12sp5"   (dot-based service pack)
+# Returns: e.g. "sles16", "sles15sp7"
+sub host_os_version_prefix {
+    my $distri = get_var('DISTRI', 'sle');
+    my $version = get_var('VERSION', '');
+    return "${distri}s" . _normalize_version($version);
+}
+
+# Normalize VERSION string to guest name component:
+#   "15-SP7"  -> "15sp7"
+#   "16.0"    -> "16"       (x.0 means base release, no SP suffix)
+#   "16.1"    -> "16sp1"
+sub _normalize_version {
+    my $version = shift;
+    if ($version =~ /^(\d+)\.(\d+)$/) {
+        return $2 == 0 ? $1 : "${1}sp${2}";
+    }
+    # Dash-based: "15-SP7" -> "15SP7" -> "15sp7"
+    return lc($version =~ s/-//r);
+}
+
+# Check if a guest name corresponds to the host OS version.
+# Handles all naming conventions across backends:
+#   KVM/Xen:      sles16efi_online, sles16sp2efi_online, sles15sp7PV, sles15sp7-efi-sev-es
+#   VMware/HyperV: sles16.0, sles16.2, sles15sp7, sles15sp7TD
+# Args: $guest_name - the guest name key from %virt_autotest::common::guests
+# Returns: 1 if guest matches host version, 0 otherwise
+sub is_guest_of_host_version {
+    my $guest = shift;
+    my $distri = get_var('DISTRI', 'sle');
+    my $version = get_var('VERSION', '');
+    my $base = "${distri}s";
+    my $prefix;
+
+    if ($version =~ /^(\d+)\.(\d+)$/) {
+        my ($major, $minor) = ($1, $2);
+        if ($minor == 0) {
+            # 16.0: KVM="sles16...", VMware/HyperV="sles16.0..."
+            $prefix = "${base}${major}(?:\\.0)?";
+        } else {
+            # 16.2: KVM="sles16sp2...", VMware/HyperV="sles16.2..."
+            $prefix = "(?:${base}${major}sp${minor}|${base}${major}\\.${minor})";
+        }
+    } else {
+        # Dash-based: "15-SP7" -> "sles15sp7"
+        $prefix = $base . lc($version =~ s/-//r);
+    }
+
+    # Negative lookahead: reject if followed by "sp\d" or bare digit,
+    # which would indicate a different version (e.g. sles16sp1 != sles16).
+    return $guest =~ /^${prefix}(?!sp\d|\d)/;
+}
+
 #return 1 if it is a fv guest judging by name
 #feel free to extend to support more cases
 sub is_fv_guest {
@@ -220,7 +285,12 @@ sub is_pv_guest {
 }
 
 #Check if guest is SLE with optional filter for:
-#Version: <=12-sp3 =12-sp1 >11-sp1 >=15 15+ (>=15 and 15+ are equivalent)
+#Version: 16 =16.1 <16.0 16.1+ <=12-sp3 >=15 15+ (>=15 and 15+ are equivalent)
+#Examples of guest name:
+#   sles-16-1-64-kvm-hvm-uefi-agama-online-iso,
+#   sles_15_sp7_64_kvm_hvm_uefi-qcow2nvram,
+#   sles16efi_full-sev-es, sles15sp7-efi-sev-es
+#   sles-16dot1-aarch64-kvm-uefi
 #usage: guest_is_sle($guest_name, '<=12-sp2')
 sub guest_is_sle {
     my $guest_name = lc shift;
@@ -229,10 +299,22 @@ sub guest_is_sle {
     return 0 unless $guest_name =~ /sle/;
     return 1 unless $query;
 
+    # Replace "dot" with hyphen (eg. sles-16dot1 -> sles-16-1)
+    $guest_name =~ s/(\d+)dot(\d+)/$1-$2/g;
+
     # Version check
-    $guest_name =~ /sles-*(\d{2})(?:-*sp(\d))?/;
-    my $version = defined($2) ? "$1-sp$2" : "$1-sp0";
-    return check_version($query, $version, qr/\d{2}(?:-sp\d)?/);
+    if ($guest_name =~ /sles[-_]*(\d{2})(?:[-_]*(?:sp)?(?!(?:64|x86|aarch|efi|kvm)\b)(\d+)|sp(\d+))?/) {
+        my $major = $1;
+        my $sp = defined($2) ? $2 : (defined($3) ? $3 : 0);
+        my $version = "${major}.${sp}";
+        $query =~ s/[-_]*sp(\d+)/.$1/gi;
+        if ($query =~ /^\d+(?:\.\d+)?$/) {
+            $query = "=" . $query;
+        }
+        return check_version($query, $version, qr/\d{2}(?:\.\d+)?/);
+    }
+
+    return 0;
 }
 
 
@@ -473,12 +555,14 @@ sub print_cmd_output_to_file {
 
 sub download_script_and_execute {
     my ($script_name, %args) = @_;
-    $args{output_file} //= "$args{script_name}.log";
+    $args{script_args} //= '';
+    $args{output_file} //= "$script_name.log";
     $args{machine} //= 'localhost';
     $args{proceed_on_failure} //= 0;
 
     download_script($script_name, script_url => $args{script_url}, machine => $args{machine}, proceed_on_failure => $args{proceed_on_failure});
     my $cmd = "~/$script_name";
+    $cmd .= " $args{script_args}" unless $args{script_args} eq '';
     $cmd = "ssh root\@$args{machine} " . "\"$cmd\"" if ($args{machine} ne 'localhost');
     script_run("$cmd >> $args{output_file} 2>&1");
 }
@@ -534,10 +618,24 @@ sub download_script {
     script_run($cmd);
 }
 
+=head2 get_default_ssh_keyfile
+
+Get the default SSH key file path based on SLE version.
+Returns ed25519 key for SLE 16+ (RSA+SHA1 is disabled by default),
+and RSA key for SLE 15 and below.
+Optional parameter: 'pubkey' => 1 to get the public key file path.
+=cut
+
+sub get_default_ssh_keyfile {
+    my (%args) = @_;
+    my $keyfile = is_sle('16+') ? '/root/.ssh/id_ed25519' : '/root/.ssh/id_rsa';
+    return $args{pubkey} ? "$keyfile.pub" : $keyfile;
+}
+
 sub ssh_setup {
     my $default_ssh_key = shift;
 
-    $default_ssh_key //= is_sle('16+') ? "/root/.ssh/id_ed25519" : "/root/.ssh/id_rsa";
+    $default_ssh_key //= get_default_ssh_keyfile();
     my $dt = DateTime->now;
     my $comment = "openqa-" . $dt->mdy . "-" . $dt->hms('-') . get_var('NAME');
     if (script_run("[[ -s $default_ssh_key ]]") != 0) {
@@ -563,7 +661,7 @@ sub ssh_copy_id {
     my $authorized_keys = $args{authorized_keys} // '.ssh/authorized_keys';
     my $scp = $args{scp} // 0;
     my $default_ssh_key = $args{default_ssh_key};
-    $default_ssh_key //= is_sle('16+') ? "/root/.ssh/id_ed25519.pub" : "/root/.ssh/id_rsa.pub";
+    $default_ssh_key //= get_default_ssh_keyfile(pubkey => 1);
     script_retry "nmap $guest -PN -p ssh | grep open", delay => 15, retry => 12;
     assert_script_run "ssh-keyscan $guest >> ~/.ssh/known_hosts";
     if (script_run("ssh -o PreferredAuthentications=publickey -o ControlMaster=no $username\@$guest hostname") != 0) {
@@ -576,7 +674,8 @@ sub ssh_copy_id {
             exec_and_insert_password("scp $options $default_ssh_key $username\@$guest:'$authorized_keys'");
             if (script_run("nmap $guest -PN -p ssh -sV | grep Windows") == 0) {
                 exec_and_insert_password("ssh $options $username\@$guest 'icacls $authorized_keys /remove \"NT AUTHORITY\\Authenticated Users\"'");
-                exec_and_insert_password("ssh $options $username\@$guest 'icacls $authorized_keys /inheritance:r'");
+                # Inheritance access and grant user access
+                exec_and_insert_password("ssh $options $username\@$guest 'icacls $authorized_keys /inheritance:r /grant \"Administrators:F\" /grant \"SYSTEM:F\"'");
             } else {
                 exec_and_insert_password("ssh $options $username\@$guest 'chmod 0700 ~/.ssh/'");
                 exec_and_insert_password("ssh $options $username\@$guest 'chmod 0644 ~/.ssh/authorized_keys'");
@@ -763,10 +862,15 @@ sub create_guest {
             record_info("Boot Firmware", "Guest $name configured for EFI sev_es boot");
         }
         if ($guest->{boot_firmware} && $guest->{boot_firmware} eq 'efi-with-qcow2-based-nvram') {
-            # Need to match with SNAPSHOT_NVRAM_TEMPLATE_SRC and SNAPSHOT_NVRAM_TEMPLATE_NEW settings
-            $virtinstall .= " --boot loader=/usr/share/qemu/ovmf-x86_64-suse-4m-code.bin,loader.readonly=yes,"
-              . "loader.type=pflash,nvram.template=/usr/share/qemu/ovmf-x86_64-suse-4m-qcow2-vars.bin,"
-              . "nvram.templateFormat=qcow2,hd,bootmenu.enable=yes,menu=on";
+            if (is_sle('>=16.1')) {
+                $virtinstall .= " --boot loader=/usr/share/qemu/ovmf-x86_64-suse-4m-code.qcow2,loader.readonly=yes,"
+                  . "loader.type=pflash,nvram.template=/usr/share/qemu/ovmf-x86_64-suse-4m-vars.qcow2,";
+            } else {
+                # Need to match with SNAPSHOT_NVRAM_TEMPLATE_SRC and SNAPSHOT_NVRAM_TEMPLATE_NEW settings
+                $virtinstall .= " --boot loader=/usr/share/qemu/ovmf-x86_64-suse-4m-code.bin,loader.readonly=yes,"
+                  . "loader.type=pflash,nvram.template=/usr/share/qemu/ovmf-x86_64-suse-4m-qcow2-vars.bin,";
+            }
+            $virtinstall .= "nvram.templateFormat=qcow2,hd,bootmenu.enable=yes,menu=on";
             record_info("Boot Firmware", "Guest $name configured with EFI bootloader and qcow2 based nvram for snapshot test");
         }
 
@@ -796,17 +900,28 @@ sub import_guest {
     my $vcpus = $guest->{vcpus} // "2";
     my $maxvcpus = $guest->{maxvcpus} // $vcpus + 1;    # same as for memory, test functionality but don't waste resources
     my $network_model = $guest->{network_model} // "";
+    my $boot_firmware = $guest->{boot_firmware} // "";
 
     if ($method eq 'virt-install' || $method eq '') {
         record_info "$name", "Going to import $name guest";
         send_key 'ret';    # Make some visual separator
 
-        my $network = "network=default,mac=$macaddress,";
-        $network .= ",model=$network_model" unless ($network_model eq "");
+        my $network = "network=default,mac=$macaddress";
+        $network .= ",model=$network_model" if $network_model;
+
+        # Build vcpus and memory parameters
+        # Xen HVM does not support hot-add of vcpus/memory, so skip maxvcpus/maxmemory
+        my $vcpus_param = "--vcpus=$vcpus";
+        $vcpus_param .= ",maxvcpus=$maxvcpus" unless is_xen_host();
+        my $memory_param = "--memory=$memory";
+        $memory_param .= ",maxmemory=$maxmemory" unless is_xen_host();
 
         # Run unattended installation for selected guest
-        my $virtinstall = "virt-install $extra_params --name $name --vcpus=$vcpus,maxvcpus=$maxvcpus --memory=$memory,maxmemory=$maxmemory --cpu host";
-        $virtinstall .= " --graphics vnc --disk $disk --network $network --noautoconsole  --autostart --import";
+        my $virtinstall = "virt-install $extra_params --name $name $vcpus_param $memory_param --cpu host";
+        $virtinstall .= " --graphics vnc --disk $disk --network $network";
+        # Add EFI boot firmware if specified (for SLES 16+ Windows guests)
+        $virtinstall .= " --boot firmware=efi" if ($boot_firmware eq 'efi');
+        $virtinstall .= " --noautoconsole --autostart --import";
         assert_script_run $virtinstall;
     } else {
         die "unsupported import_guest method '$method'";
@@ -964,7 +1079,7 @@ sub remove_additional_nic {
 sub collect_virt_system_logs {
     if (script_run("ls /var/log/libvirt/*d.log") == 0) {
         script_run('tar czvf /tmp/libvirt_daemons.tar.gz /var/log/libvirt/*d.log');
-        upload_asset("/tmp/libvirt_daemons.tar.gz");
+        upload_logs("/tmp/libvirt_daemons.tar.gz");
     }
     else {
         record_info "File /var/log/libvirt/*d.log does not exist.";
@@ -972,16 +1087,31 @@ sub collect_virt_system_logs {
 
     if (script_run("test -d /var/log/libvirt/libxl/") == 0) {
         assert_script_run 'tar czvf /tmp/libxl.tar.gz /var/log/libvirt/libxl/';
-        upload_asset '/tmp/libxl.tar.gz';
+        upload_logs '/tmp/libxl.tar.gz';
     } else {
         record_info "Directory /var/log/libvirt/libxl/ does not exist.";
     }
 
+    if (script_run("test -d /var/log/libvirt/qemu/") == 0) {
+        assert_script_run 'tar czvf /tmp/qemu.tar.gz /var/log/libvirt/qemu/';
+        upload_logs '/tmp/qemu.tar.gz';
+    } else {
+        record_info "Directory /var/log/libvirt/qemu/ does not exist.";
+    }
+
     if (script_run("test -d /var/log/xen/") == 0) {
         assert_script_run 'tar czvf /tmp/xen.tar.gz /var/log/xen/';
-        upload_asset '/tmp/xen.tar.gz';
+        upload_logs '/tmp/xen.tar.gz';
     } else {
         record_info "Directory /var/log/xen/ does not exist.";
+    }
+
+    if (script_run("ls ~/virt-install_*") == 0) {
+        script_run('tar czvf /tmp/virt-install.tar.gz ~/virt-install_*');
+        upload_logs("/tmp/virt-install.tar.gz");
+    }
+    else {
+        record_info "Files for ~/virt-install_* does not exist.";
     }
 
     assert_script_run("journalctl -b > /tmp/journalctl-b.txt");
@@ -992,7 +1122,7 @@ sub collect_virt_system_logs {
     assert_script_run 'mkdir -p /tmp/dumpxml';
     assert_script_run 'for guest in `virsh list --all --name`; do virsh dumpxml $guest > /tmp/dumpxml/$guest.xml; done';
     assert_script_run 'tar czvf /tmp/dumpxml.tar.gz /tmp/dumpxml/';
-    upload_asset '/tmp/dumpxml.tar.gz';
+    upload_logs '/tmp/dumpxml.tar.gz';
 
     upload_system_log::upload_supportconfig_log();
 }
@@ -1316,7 +1446,7 @@ sub do_system_registration {
     $args{usetrup} //= 0;
 
     my $cmd = (($args{usetrup} == 1 or get_var('USE_TRUP')) ? "transactional-update register" : "SUSEConnect");
-    $cmd .= $args{activate} == 1 ? " -r " . get_required_var('SCC_REGCODE') . " --url " . get_required_var('SCC_URL') : " -d";
+    $cmd .= $args{activate} == 1 ? " -r " . get_required_var('SCC_REGCODE') . " --url " . render_scc_url : " -d";
     $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
     script_run($cmd);
     save_screenshot;
@@ -1339,7 +1469,7 @@ sub check_system_registration {
     $args{usetrup} //= 0;
 
     my $cmd = (($args{usetrup} == 1 or get_var('USE_TRUP')) ? "transactional-update register" : "SUSEConnect");
-    $cmd .= " --status-text";
+    $cmd .= " --status-text;zypper -n repos --details";
     $cmd = "ssh root\@$args{dst_machine} " . "\"$cmd\"" if ($args{dst_machine} ne 'localhost');
     record_info("System Registration Status", script_output($cmd, proceed_on_failure => 1));
 }
@@ -1424,7 +1554,7 @@ sub is_sev_es_guest {
     $guest_name //= '';
     croak('Arugment guest_name should not be empty') if ($guest_name eq '');
 
-    if ($guest_name =~ /(sev-es|sev)/img) {
+    if ($guest_name =~ /(sev-es|seves|sev)/img) {
         record_info("$guest_name is $1 guest", "Guest $guest_name is a $1 enabled guest judging by its name.");
         return $1;
     } else {
@@ -1658,6 +1788,18 @@ sub wait_for_host_reboot {
     select_console('root-ssh');
 }
 
+sub setup_br0_with_virt_bridge_setup {
+    zypper_call('-t in virt-bridge-setup') unless script_run("rpm -q virt-bridge-setup") == 0;
+    record_info("Setting up br0", "");
+    script_run("virt-bridge-setup -d add -bn br0 --stp no");
+    enter_cmd("nmcli con; echo DONE > /dev/$serialdev");
+    unless (defined(wait_serial 'DONE', timeout => 10)) {
+        reset_consoles;
+        select_console('root-console');
+    }
+    record_info("br0 set up done", script_output("ip a", proceed_on_failure => 1));
+}
+
 =head2 execute_over_ssh
 
   execute_over_ssh(username => $user, address => $address,
@@ -1808,13 +1950,17 @@ sub reselect_openqa_console {
 
 =head2 select_backend_console
 
-Select corresponding ipmi or qemu backend console 'root-ssh' or 'root-console'.
-If argument init is set, select ipmi backend 'sol' console. User can also set
-arguments console or wait to select cusotmized console in desired behavior.
+Select corresponding ipmi, qemu or pvm_hmc backend console, namely 'root-ssh' or
+'root-console'. If argument init is set, select 'sol' console for ipmi backend, 
+or powerhmc-ssh for pvm_hmc backend because test run is in initialization or the
+very beginning phase, for example, pxe boot, host installation or startup. User
+can also set desired console or choose whether to wait for the selected console.
+Argument reset_times specifies the number of times reset_consoles to be done.
 =cut
 
 sub select_backend_console {
     my (%args) = @_;
+    $args{reset_times} //= 1;
     $args{init} //= 1;
     $args{wait} //= 0;
 
@@ -1824,8 +1970,11 @@ sub select_backend_console {
     elsif (is_qemu) {
         $args{console} //= 'root-console';
     }
+    elsif (is_ppc64le) {
+        $args{console} //= ($args{init} ? 'powerhmc-ssh' : 'root-ssh') if (is_pvm_hmc);
+    }
 
-    reset_consoles;
+    reset_consoles for (0 .. $args{reset_times} - 1);
     if (is_ipmi) {
         select_console($args{console}, await_console => $args{wait});
         use_ssh_serial_console if (!$args{init});
@@ -1835,6 +1984,10 @@ sub select_backend_console {
         select_console($args{console}, await_console => $args{wait});
         ensure_serialdev_permissions;
         serial_terminal::prepare_serial_console();
+    }
+    elsif (is_ppc64le) {
+        select_console($args{console}, await_console => $args{wait});
+        select_console('root-ssh') if (!$args{init});
     }
 }
 
@@ -2015,6 +2168,12 @@ sub install_product_software {
     $args{pattern} //= get_var('INSTALL_PRODUCT_PATTERNS', '');
 
     zypper_call("--gpg-auto-import-keys refresh");
+    if ($args{pattern}) {
+        my $cmd = "install --no-allow-downgrade --no-allow-name-change --no-allow-vendor-change -t pattern ";
+        $cmd = $cmd . " $_" foreach (split(/,/, $args{pattern}));
+        zypper_call($cmd);
+        save_screenshot;
+    }
     if ($args{package}) {
         my $cmd = "install --no-allow-downgrade --no-allow-name-change --no-allow-vendor-change";
         $cmd = $cmd . " virt-install libvirt-client libguestfs0 guestfs-tools";
@@ -2024,12 +2183,82 @@ sub install_product_software {
         zypper_call($cmd);
         save_screenshot;
     }
-    if ($args{pattern}) {
-        my $cmd = "install --no-allow-downgrade --no-allow-name-change --no-allow-vendor-change -t pattern ";
-        $cmd = $cmd . " $_" foreach (split(/,/, $args{pattern}));
-        zypper_call($cmd);
-        save_screenshot;
+}
+
+=head2 collect_guests_supportconfig_and_logs
+
+  collect_guests_supportconfig_and_logs();
+
+Runs supportconfig and collects compressed /var/log* from all guests 
+
+=cut
+
+sub collect_guests_supportconfig_and_logs {
+    foreach my $guest (keys %virt_autotest::common::guests) {
+        record_info("Logs $guest", "Run supportconfig and collect logs from $guest");
+        my $var_log_archive = "/tmp/var_log_${guest}.tar.gz";
+
+        # Run supportconfig on guest
+        script_run("ssh root\@$guest 'supportconfig < /dev/null'", timeout => 600);
+
+        # Compress /var/log (which now includes the supportconfig log)
+        script_run("ssh root\@$guest 'tar -czf $var_log_archive /var/log'");
+
+        # Pull the archive to the host and upload to openQA
+        script_run("scp root\@$guest:$var_log_archive $var_log_archive");
+        upload_logs("$var_log_archive", log_name => "var_logs_${guest}.tar.gz");
     }
+}
+
+=head2 reset_network_config
+
+  reset_network_config(config => absolute path to config file);
+
+Reset network config, for example, restore auto dns policy to enable automatic
+dns migration to higher version
+
+=cut
+
+sub reset_network_config {
+    my (%args) = @_;
+    $args{config} //= '';
+
+    if (!is_networkmanager) {
+        $args{config} = '/etc/sysconfig/network/config';
+        return if (script_run("ls $args{config}") != 0);
+        if (script_run("grep -E \"^NETCONFIG_DNS_POLICY.*\$\" $args{config}") == 0) {
+            assert_script_run("sed -i -r \'s/^NETCONFIG_DNS_POLICY.*\$/NETCONFIG_DNS_POLICY=\"auto\"/g\' $args{config}");
+        }
+        else {
+            assert_script_run("echo -e \"NETCONFIG_DNS_POLICY=\"auto\"\" >> $args{config}");
+        }
+    }
+}
+
+=head2 is_transactional_guest
+
+  is_transactional_guest(address => ip or domain name or fqdn);
+
+Check whether guest is in immutable mode by leveraging the two most reliable methods
+, namely transactional-update shell exists or root partition is mounted read only if
+its domain name does not have 'immutable' or 'transactional'. Need ssh connection to
+perform the check, so argument address is needed which can be guest ip address, domain
+name or FQDN as long as it can be used for ssh connection.
+
+=cut
+
+sub is_transactional_guest {
+    my (%args) = @_;
+    $args{address} //= '';
+    croak('Guest ip address, domain name or FQDN must be given') if (!$args{address});
+
+    return 1 if ($args{address} =~ /immutable|transactional/i);
+    return 0 if ($args{address} =~ /standard|traditional/i);
+    my $ret = 1;
+    my $ssh_command_prefix = "ssh -vvv -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no";
+    $ret &= script_retry("$ssh_command_prefix root\@$args{address} transactional-update --help || mount | grep \'on / \' | grep ro", die => 0);
+    save_screenshot;
+    $ret == 0 ? return 1 : return 0;
 }
 
 1;

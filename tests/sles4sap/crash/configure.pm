@@ -2,16 +2,66 @@
 #
 # Copyright SUSE LLC
 # SPDX-License-Identifier: FSFAP
-# Maintainer: QE-SAP <qe-sap@suse.de>
 # Summary: Public Cloud - VM Configuration and Registration
-# This module connects to the VM via SSH and performs:
-# - SSH availability check
-# - Host key scan and trust
-# - (Optional) IBSM repo addition for maintenance update testing
-# - SUSEConnect registration using SCC_REGCODE
-# - System patching using zypper
-# - System reboot
-# This prepares the system for crash testing.
+# Maintainer: QE-SAP <qe-sap@suse.de>
+
+=head1 NAME
+
+sles4sap/crash/configure.pm - VM Configuration and Registration
+
+=head1 DESCRIPTION
+
+C<configure.pm> performs initial setup on the SUT cloud VM for subsequent crash testing.
+
+Its primary tasks are:
+
+=over
+
+=item * Connect to the VM via SSH and verify its availability.
+
+=item * Scan and trust the host key.
+
+=item * Register the system using C<SCC_REGCODE_SLES4SAP> and optional C<SCC_ADDONS>.
+
+=item * Prepare the system by patching and rebooting using C<crash_system_ready>.
+
+=back
+
+=head1 SETTINGS
+
+=over
+
+=item B<PUBLIC_CLOUD_PROVIDER>
+
+Type of the public cloud provider (e.g., AWS, AZURE, GCE). Required.
+
+=item B<PUBLIC_CLOUD_REGION>
+
+Region of the public cloud provider.
+
+=item B<PUBLIC_CLOUD_AVAILABILITY_ZONE>
+
+Availability zone for the public cloud provider (Required for GCE).
+
+=item B<SCC_REGCODE_SLES4SAP>
+
+Registration code for SLES for SAP.
+
+=item B<PUBLIC_CLOUD_SCC_ENDPOINT>
+
+Custom SCC endpoint URL. Optional. Defaults to 'registercloudguest' inside C<crash_system_ready>.
+
+=item B<SCC_ADDONS>
+
+Comma-separated list of addons to register. Optional.
+
+=back
+
+=head1 MAINTAINER
+
+QE-SAP <qe-sap@suse.de>
+
+=cut
 
 use Mojo::Base 'publiccloud::basetest';
 use serial_terminal 'select_serial_terminal';
@@ -23,15 +73,13 @@ sub run {
     my ($self) = @_;
 
     my $provider = get_required_var('PUBLIC_CLOUD_PROVIDER');
-    my $vm_ip = crash_pubip(provider => $provider, region => get_var('PUBLIC_CLOUD_REGION'));
+    my %crash_pubip_args = (provider => $provider, region => get_var('PUBLIC_CLOUD_REGION'));
+    $crash_pubip_args{availability_zone} = get_required_var('PUBLIC_CLOUD_AVAILABILITY_ZONE') if $provider eq 'GCE';
+    my $vm_ip = crash_pubip(%crash_pubip_args);
 
-    my $remote_host;
-    if ($provider eq 'EC2') {
-        $remote_host = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ec2-user\@$vm_ip";
-    }
-    elsif ($provider eq 'AZURE') {
-        $remote_host = 'cloudadmin@' . $vm_ip;
-    }
+    my $username = crash_get_username(provider => $provider);
+    my $remote_host = "$username\@$vm_ip";
+    $remote_host = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $remote_host" unless $provider eq 'AZURE';
     my $ssh_cmd = "ssh $remote_host";
 
     my $start_time = time();
@@ -53,18 +101,15 @@ sub run {
 }
 
 sub test_flags {
-    return {fatal => 1, publiccloud_multi_module => 1};
+    return {fatal => 1};
 }
 
 sub post_fail_hook {
     my ($self) = shift;
     my $provider = get_required_var('PUBLIC_CLOUD_PROVIDER');
-    if ($provider eq 'AZURE') {
-        crash_destroy_azure();
-    }
-    elsif ($provider eq 'EC2') {
-        crash_destroy_aws(region => get_required_var('PUBLIC_CLOUD_REGION'));
-    }
+    my %clean_args = (provider => $provider, region => get_required_var('PUBLIC_CLOUD_REGION'));
+    $clean_args{availability_zone} = get_required_var('PUBLIC_CLOUD_AVAILABILITY_ZONE') if $provider eq 'GCE';
+    crash_cleanup(%clean_args);
     $self->SUPER::post_fail_hook;
 }
 

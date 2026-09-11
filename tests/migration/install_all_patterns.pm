@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Install patterns for allpatterns cases before conducting migration
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi qw(select_console);
 use utils qw(install_patterns);
 

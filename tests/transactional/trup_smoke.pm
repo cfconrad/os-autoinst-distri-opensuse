@@ -7,7 +7,7 @@
 #           operations work and system can properly boot.
 # Maintainer: qa-c team <qa-c@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use transactional;
 use Utils::Architectures qw(is_s390x);
@@ -40,7 +40,7 @@ sub run {
         record_soft_failure("boo#1226676: kdump not yet implemented with sdbootutil");
     }
     else {
-        action('kdump', 'Regenerate kdump');
+        action('kdump', 'Regenerate kdump') if is_sle_micro;
     }
     action('cleanup', 'Run cleanup', 0);
 }

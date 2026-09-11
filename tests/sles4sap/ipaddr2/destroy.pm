@@ -58,7 +58,6 @@ use Mojo::Base 'publiccloud::basetest';
 use testapi;
 use serial_terminal qw( select_serial_terminal );
 use mmapi qw( get_current_job_id );
-use sles4sap::ibsm qw( ibsm_network_peering_azure_delete );
 use sles4sap::ipaddr2 qw(
   ipaddr2_bastion_pubip
   ipaddr2_infra_destroy
@@ -66,7 +65,8 @@ use sles4sap::ipaddr2 qw(
   ipaddr2_cleanup
   ipaddr2_logs_collect
   ipaddr2_logs_cloudinit
-  ipaddr2_ssh_intrusion_detection);
+  ipaddr2_ssh_intrusion_detection
+  ipaddr2_network_peering_delete);
 
 sub run {
     my ($self) = @_;
@@ -79,15 +79,12 @@ sub run {
     my $bastion_ip = ipaddr2_bastion_pubip();
 
     ipaddr2_ssh_intrusion_detection(bastion_ip => $bastion_ip);
+    # Skip supportconfig in the normal pass path: it is time-consuming and
+    # only needed for failure diagnostics.  The post_fail_hook will collect
+    # it if the test fails.
+    ipaddr2_logs_collect(bastion_ip => $bastion_ip, no_supportconfig => 1);
     ipaddr2_logs_cloudinit(bastion_ip => $bastion_ip) unless (check_var('IPADDR2_CLOUDINIT', 0));
-    ipaddr2_logs_collect(bastion_ip => $bastion_ip);
-
-    if (my $ibsm_rg = get_var('IBSM_RG')) {
-        ibsm_network_peering_azure_delete(
-            sut_rg => ipaddr2_azure_resource_group(),
-            sut_vnet => get_current_job_id(),
-            ibsm_rg => $ibsm_rg);
-    }
+    ipaddr2_network_peering_delete(ibsm_rg => get_var('IBSM_RG')) if (get_var('IBSM_RG'));
     ipaddr2_infra_destroy();
 }
 
@@ -102,7 +99,6 @@ sub post_fail_hook {
         diagnostic => get_var('IPADDR2_DIAGNOSTIC', 0),
         cloudinit => get_var('IPADDR2_CLOUDINIT', 1),
         ibsm_rg => get_var('IBSM_RG'));
-    $self->SUPER::post_fail_hook;
 }
 
 1;

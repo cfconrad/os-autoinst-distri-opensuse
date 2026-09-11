@@ -19,6 +19,18 @@
         <media_url><![CDATA[http://dist.suse.de/ibs/SUSE/Updates/SLE-Product-SLES/<%= $get_var->('VERSION') %>-LTSS/<%= $get_var->('ARCH') %>/update/]]></media_url>
       </listentry>
         % }
+        % unless ($is_ltss) {
+      <listentry>
+        <name>sle-module-packagehub-subpackages:<%= $get_var->('VERSION') %>::pool</name>
+        <alias>sle-module-packagehub-subpackages:<%= $get_var->('VERSION') %>::pool</alias>
+        <media_url><![CDATA[http://dist.suse.de/ibs/SUSE/Products/SLE-Module-Packagehub-Subpackages/<%= $get_var->('VERSION') %>/<%= $get_var->('ARCH') %>/product/]]></media_url>
+      </listentry>
+      <listentry>
+        <name>sle-module-packagehub-subpackages:<%= $get_var->('VERSION') %>::update</name>
+        <alias>sle-module-packagehub-subpackages:<%= $get_var->('VERSION') %>::update</alias>
+        <media_url><![CDATA[http://dist.suse.de/ibs/SUSE/Updates/SLE-Module-Packagehub-Subpackages/<%= $get_var->('VERSION') %>/<%= $get_var->('ARCH') %>/update/]]></media_url>
+      </listentry>
+        % }
       <listentry>
         <name>sle-module-containers:<%= $get_var->('VERSION') %>::pool</name>
         <alias>sle-module-containers:<%= $get_var->('VERSION') %>::pool</alias>
@@ -58,16 +70,6 @@
         <name>sle-module-web-scripting:<%= $get_var->('VERSION') %>::update</name>
         <alias>sle-module-web-scripting:<%= $get_var->('VERSION') %>::update</alias>
         <media_url><![CDATA[http://dist.suse.de/ibs/SUSE/Updates/SLE-Module-Web-Scripting/<%= $get_var->('VERSION') %>/<%= $get_var->('ARCH') %>/update/]]></media_url>
-      </listentry>
-      <listentry>
-        <name>sle-module-packagehub-subpackages:<%= $get_var->('VERSION') %>::pool</name>
-        <alias>sle-module-packagehub-subpackages:<%= $get_var->('VERSION') %>::pool</alias>
-        <media_url><![CDATA[http://dist.suse.de/ibs/SUSE/Products/SLE-Module-Packagehub-Subpackages/<%= $get_var->('VERSION') %>/<%= $get_var->('ARCH') %>/product/]]></media_url>
-      </listentry>
-      <listentry>
-        <name>sle-module-packagehub-subpackages:<%= $get_var->('VERSION') %>::update</name>
-        <alias>sle-module-packagehub-subpackages:<%= $get_var->('VERSION') %>::update</alias>
-        <media_url><![CDATA[http://dist.suse.de/ibs/SUSE/Updates/SLE-Module-Packagehub-Subpackages/<%= $get_var->('VERSION') %>/<%= $get_var->('ARCH') %>/update/]]></media_url>
       </listentry>
       <listentry>
         <name>sle-module-server-applications:<%= $get_var->('VERSION') %>::pool</name>
@@ -286,11 +288,51 @@
       </zone>
     </zones>
   </firewall>
-  <partitioning config:type="list">
+  <partitioning t="list">
     <drive>
       <disklabel>gpt</disklabel>
-      <enable_snapshots config:type="boolean">true</enable_snapshots>
-      <initialize config:type="boolean">true</initialize>
+      <enable_snapshots t="boolean">true</enable_snapshots>
+      <initialize t="boolean">true</initialize>
+      <partitions t="list">
+        <partition t="map">
+          <create t="boolean">true</create>
+          <filesystem t="symbol">btrfs</filesystem>
+          <format t="boolean">true</format>
+          <mount>/</mount>
+          <partition_id t="integer">131</partition_id>
+          <partition_nr t="integer">1</partition_nr>
+          <size>max</size>
+        </partition>
+        <partition t="map">
+          <create t="boolean">true</create>
+          <filesystem t="symbol">ext4</filesystem>
+          <format t="boolean">true</format>
+          <mount>/home</mount>
+          <partition_id t="integer">131</partition_id>
+          <partition_nr t="integer">2</partition_nr>
+          <size>2G</size>
+        </partition>
+        <partition t="map">
+          <create t="boolean">true</create>
+          <filesystem t="symbol">swap</filesystem>
+          <format t="boolean">true</format>
+          <mount>swap</mount>
+          <partition_id t="integer">130</partition_id>
+          <partition_nr t="integer">3</partition_nr>
+          <size>2G</size>
+        </partition>
+        % if ($check_var->('ARCH', 's390x')) {
+        <partition t="map">
+          <create t="boolean">true</create>
+          <filesystem t="symbol">ext2</filesystem>
+          <format t="boolean">true</format>
+          <mount>/boot/zipl</mount>
+          <partition_id t="integer">131</partition_id>
+          <partition_nr t="integer">4</partition_nr>
+          <size>300M</size>
+        </partition>
+        % }
+      </partitions>
       <use>all</use>
     </drive>
   </partitioning>

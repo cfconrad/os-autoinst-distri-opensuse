@@ -14,7 +14,9 @@ use testapi;
 use utils;
 use publiccloud::ssh_interactive "select_host_console";
 use maintenance_smelt qw(is_embargo_update);
-use version_utils qw(is_sle_micro);
+use version_utils qw(is_sle_micro is_sle);
+use publiccloud::utils qw(additional_repos);
+use publiccloud::zypper qw(pc_zypper_call);
 
 sub run {
     my ($self, $args) = @_;
@@ -50,6 +52,8 @@ sub run {
             push(@repos, $maintrepo) unless (is_embargo_update($incident, $type)); }
     }
 
+    push @repos, additional_repos();
+
     s/https?:\/\/.*\/ibs\/// for @repos;
 
     # Create list of directories for rsync
@@ -72,24 +76,26 @@ sub run {
     $instance->ssh_assert_script_run("find $repodir -name '*.rpm' -exec du -h '{}' + | sort -h > /tmp/rpm_list.txt", timeout => 60);
     $instance->upload_log('/tmp/rpm_list.txt');
 
-    if (is_sle_micro(">=6.0")) {
+    if (is_sle_micro(">=6.0") || is_sle("16+")) {
         my $counter = 0;
         for my $repo (@repos) {
-            $instance->ssh_assert_script_run("sudo zypper ar -p10 " . $repodir . $repo . " ToTest_$counter");
+            pc_zypper_call($instance, "ar -p10 " . $repodir . $repo . " ToTest_$counter");
             $counter += 1;
         }
     }
     else {
         $instance->ssh_assert_script_run("sudo find $repodir -name *.repo -exec sed -i 's,http://download.suse.de/ibs/,$repodir,g' '{}' \\;");
+        # QA:/Head repos have an untrusted GPG key; disable gpgcheck in the .repo file before adding
+        $instance->ssh_assert_script_run("sudo grep -rl 'QA:/Head' $repodir | grep '\\.repo\$' | xargs -r sudo sed -i 's/^gpgcheck=.*/gpgcheck=0/'");
         $instance->ssh_assert_script_run("sudo find $repodir -name *.repo -exec zypper ar -p10 '{}' \\;");
         $instance->ssh_assert_script_run("sudo find $repodir -name *.repo -exec echo '{}' \\;");
     }
 
-    $instance->ssh_assert_script_run("zypper lr -P");
+    record_info("zypper repos", $instance->ssh_script_output("zypper lr -P"));
 }
 
 sub test_flags {
-    return {fatal => 1, publiccloud_multi_module => 1};
+    return {fatal => 1};
 }
 
 1;

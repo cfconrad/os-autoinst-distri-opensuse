@@ -7,13 +7,12 @@
 #
 # Maintainer: QE-C team <qa-c@suse.de>
 
-use base "publiccloud::basetest";
+use Mojo::Base 'publiccloud::basetest';
 use testapi;
 use utils;
 use publiccloud::ec2;
 use publiccloud::azure;
 use publiccloud::gce;
-use publiccloud::openstack;
 use serial_terminal 'select_serial_terminal';
 use version_utils qw(is_jeos);
 
@@ -65,7 +64,7 @@ sub finalize {
 
 sub test_flags {
     # in case of migration this is not single module so we need to skip cleanup
-    return {fatal => 1, publiccloud_multi_module => 1} if (get_var('PUBLIC_CLOUD_MIGRATION'));
+    return {fatal => 1} if (get_var('PUBLIC_CLOUD_MIGRATION'));
     return {fatal => 1};
 }
 

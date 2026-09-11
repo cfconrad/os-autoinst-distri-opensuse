@@ -11,6 +11,7 @@ use Mojo::Base 'containers::basetest';
 use testapi;
 use serial_terminal qw(select_serial_terminal);
 use version_utils;
+use version;
 use containers::bats;
 
 sub run_tests {
@@ -33,7 +34,7 @@ sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    my @pkgs = qw(conmon socat);
+    my @pkgs = qw(binutils conmon podman socat);
     my @oci_runtimes = split(/\s+/, get_var("OCI_RUNTIME", is_sle ? "runc" : "crun runc"));
     push @pkgs, @oci_runtimes;
 

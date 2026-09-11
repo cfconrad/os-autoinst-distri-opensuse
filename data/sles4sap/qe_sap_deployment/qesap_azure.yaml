@@ -20,6 +20,7 @@ terraform:
     iscsi_enabled: true
     allowed_ssh_cidr_csv: '%WORKER_IP%'
 ansible:
+  verbosity: 3
   roles_path: '%ANSIBLE_ROLES%'
   az_storage_account_name: '%HANA_ACCOUNT%'
   az_container_name:  '%HANA_CONTAINER%'
@@ -35,6 +36,7 @@ ansible:
     sap_hana_install_sid: 'HQ0'
     sap_hana_install_instance_number: '00'
     sap_hana_install_update_firewall: '%HANA_FIREWALL%'
+    firewall_cfg: '%FIREWALL%'
     sap_domain: 'qe-test.example.com'
     primary_site: 'goofy'
     secondary_site: 'miky'

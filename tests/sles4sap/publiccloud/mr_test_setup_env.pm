@@ -15,8 +15,7 @@ use testapi;
 sub test_flags {
     return {
         fatal => 1,
-        milestone => 0,
-        publiccloud_multi_module => 1
+        milestone => 0
     };
 }
 
@@ -27,7 +26,7 @@ sub run {
     my $mr_test_tar = 'mr_test-master.tar.gz';
     my $instance = $run_args->{my_instance};
 
-    # This test module is using publiccloud::basetest and not sles4sap_publiccloud_basetest
+    # This test module is using publiccloud::basetest and not sles4sap::publiccloud_basetest
     # as base class. ansible_present is propagated here
     # to a different context than usual
     $self->{ansible_present} = 1 if ($run_args->{ansible_present});
@@ -52,7 +51,6 @@ sub run {
 
     # Clear $instance->ssh_opts which omit the known hosts file and strict host checking by default
     $instance->ssh_opts('');
-    $instance->network_speed_test();
 
     # Set ssh-tunnel
     $testapi::username = 'bernhard';

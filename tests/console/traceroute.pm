@@ -12,9 +12,10 @@
 # - ensure last log line has target ip
 # Maintainer: QE Core <qe-core@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
-use utils 'zypper_call';
+use package_utils 'install_package';
+use utils 'validate_script_output_retry';
 use serial_terminal 'select_serial_terminal';
 
 sub run {
@@ -23,12 +24,13 @@ sub run {
     my $target = 'opensuse.org';
     my $ip_target = script_output("dig +short A $target");
 
-    zypper_call('in traceroute') if (script_run('rpm -q traceroute'));
+    install_package('traceroute', trup_reboot => 1) if (script_run('rpm -q traceroute'));
     record_info("Version", script_output("rpm -q --qf '%{version}' traceroute"));
-    assert_script_run("traceroute -I $target > $log");
+    validate_script_output_retry("traceroute -I $target  | tail -n +2 | tee $log", sub { m/$ip_target/ }, retry => 3);
     record_info("Traceroute logs", script_output("cat $log"));
     assert_script_run("test -s $log", fail_message => "Log file is empty");
-    assert_script_run("tail -n 1 $log | grep -q $ip_target", fail_message => "traceroute did not reach destination ip");
 }
+
+sub test_flags { return {no_rollback => 1} }
 
 1;

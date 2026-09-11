@@ -7,18 +7,29 @@
 #
 # Maintainer: QE-C team <qa-c@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
 use version_utils;
 use publiccloud::utils;
 use containers::k8s;
+use bootloader_setup qw(add_grub_cmdline_settings);
+use power_action_utils qw(power_action);
 
 sub run {
     my ($self, $args) = @_;
 
     select_serial_terminal;
+
+    # Switch to cgroup v2 if not already active
+    # NOTE: Remove when 15-SP5 LTSS is EOL
+    if (script_run("test -f /sys/fs/cgroup/cgroup.controllers") != 0) {
+        add_grub_cmdline_settings("systemd.unified_cgroup_hierarchy=1", update_grub => 1);
+        power_action('reboot', textmode => 1);
+        $self->wait_boot();
+        select_serial_terminal;
+    }
 
     my $k8s_version = $args->{k8s_version};
     install_kubectl($k8s_version);
@@ -135,10 +146,10 @@ sub run {
     record_info('Balancer IP', $ip);
     validate_script_output_retry("curl http://$ip:8080/index.html", qr/I am Groot/, retry => 6, delay => 20, timeout => 10);
 
-    assert_script_run('kubectl delete job sayhello');
-    assert_script_run('kubectl delete job gimme-date');
-    assert_script_run('kubectl delete -f service.yml');
-    assert_script_run('kubectl delete -f deployment.yml');
+    assert_script_run('kubectl delete job sayhello', timeout => 300);
+    assert_script_run('kubectl delete job gimme-date', timeout => 300);
+    assert_script_run('kubectl delete -f service.yml', timeout => 300);
+    assert_script_run('kubectl delete -f deployment.yml', timeout => 300);
 }
 
 sub uninstall_kubectl {
@@ -151,10 +162,10 @@ sub cleanup {
     script_run('kubectl describe services');
     script_run('kubectl describe pods');
     # Cleanup
-    script_run('kubectl delete -f service.yml');
-    script_run('kubectl delete -f deployment.yml');
-    script_run('kubectl delete job sayhello');
-    script_run('kubectl delete job gimme-date');
+    script_run('kubectl delete -f service.yml', timeout => 300);
+    script_run('kubectl delete -f deployment.yml', timeout => 300);
+    script_run('kubectl delete job sayhello', timeout => 300);
+    script_run('kubectl delete job gimme-date', timeout => 300);
 
     uninstall_kubectl if get_var("KUBERNETES_VERSIONS");
 }

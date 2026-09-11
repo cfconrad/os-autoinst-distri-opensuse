@@ -5,9 +5,9 @@
 
 # Summary: Apply local user's password for root user
 #
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base 'y2_installbase';
+use Mojo::Base 'y2_installbase';
 use Test::Assert ':all';
 
 sub run {

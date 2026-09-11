@@ -33,9 +33,11 @@ use Carp qw(croak);
 use Mojo::JSON qw(decode_json);
 use Exporter 'import';
 use testapi;
+use mmapi qw( get_current_job_id );
 
 our @EXPORT = qw(
   qesap_is_job_finished
+  qesap_get_public_cloud_tags
 );
 
 =head1 DESCRIPTION
@@ -60,25 +62,42 @@ sub qesap_is_job_finished {
     my (%args) = @_;
     croak 'Missing mandatory job_id argument' unless $args{job_id};
 
-    my $url = get_required_var('OPENQA_HOSTNAME') . "/api/v1/jobs/$args{job_id}";
-    my $json_data = script_output("curl -s '$url'");
+    my $url = get_required_var('OPENQA_HOSTNAME')
+      . "/api/v1/experimental/jobs/$args{job_id}/status";
+
+    my $json_data = script_output("curl -s '$url'", quiet => 1);
 
     my $job_data = eval { decode_json($json_data) };
     if ($@) {
-        if ($json_data =~ /<h1>Page not found<\/h1>/) {
-            record_info(
-                "JOB NOT FOUND",
-                "Job $args{job_id} was not found on the server " . get_required_var('OPENQA_HOSTNAME') .
-                  ". It may be deleted, from a different openqa server or from a manual deployment."
-            );
-        }
-        else {
-            record_info("OPENQA QUERY FAILED", "Failed to decode JSON data for job $args{job_id}: $@");
-        }
-        return 0;    # assume job is still running if we cannot get its info
+        record_info(
+            "OPENQA QUERY FAILED",
+            "Failed to decode JSON data for job $args{job_id}: $@"
+        );
+        return 0;    # assume job is still running if we cannot get the data
     }
 
-    my $job_state = $job_data->{job}->{state} // 'running';    # assume job is running if unable to get status
+    my $job_state = $job_data->{state} // 'running';    # assume running if missing
     return ($job_state ne 'running');
 }
+
+=head3 qesap_get_public_cloud_tags
+
+    my $tags = qesap_get_public_cloud_tags();
+
+Retrieve tags from the `PUBLIC_CLOUD_TAGS` openQA setting, map key=value pairs,
+override `openqa_var_job_id` with get_current_job_id(), and return a formatted,
+space-separated string suitable for the `--tags` argument of the az cli.
+
+=cut
+
+sub qesap_get_public_cloud_tags {
+    my $tags = '';
+    if (my $value = get_var('PUBLIC_CLOUD_TAGS')) {
+        my %tags_hash = map { if (/([^=]+)=([^=]+)/) { $1 => "$2" } else { $_ => 1 } } split(/,/, $value);
+        $tags_hash{openqa_var_job_id} = get_current_job_id() if exists $tags_hash{openqa_var_job_id};
+        $tags = join(' ', map { "$_=$tags_hash{$_}" } sort keys %tags_hash);
+    }
+    return $tags;
+}
+
 1;

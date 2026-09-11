@@ -22,7 +22,6 @@ use main_common 'opensuse_welcome_applicable';
 use isotovideo;
 use IO::Socket::INET;
 use x11utils qw(handle_login ensure_unlocked_desktop handle_additional_polkit_windows);
-use publiccloud::ssh_interactive 'select_host_console';
 use Utils::Logging qw(save_and_upload_log tar_and_upload_log export_healthcheck_basic select_log_console upload_coredumps export_logs);
 
 # Base class for all openSUSE tests
@@ -386,9 +385,7 @@ sub wait_grub {
     my $in_grub = $args{in_grub} // 0;
     my @tags;
     push @tags, 'bootloader-shim-import-prompt' if get_var('UEFI') && !get_var('DISABLE_SECUREBOOT');
-    push @tags, 'grub2-bls' if is_bootloader_grub2_bls;
-    push @tags, 'bootloader-sdboot' if is_bootloader_sdboot;
-    push @tags, 'grub2' if is_bootloader_grub2;
+    push @tags, get_default_bootloader();
     push @tags, 'boot-live-' . get_var('DESKTOP') if get_var('LIVETEST');    # LIVETEST won't to do installation and no grub2 menu show up
     push @tags, 'bootloader' if get_var('OFW');
     push @tags, 'encrypted-disk-password-prompt-grub', 'encrypted-disk-password-prompt' if get_var('ENCRYPT');
@@ -486,9 +483,7 @@ sub wait_grub_to_boot_on_local_disk {
     boot_local_disk;
     my @tags = qw(tianocore-mainmenu tianocore-bootmenu);
     push @tags, 'encrypted-disk-password-prompt' if (get_var('ENCRYPT'));
-    push @tags, 'grub2' if is_bootloader_grub2;
-    push @tags, 'grub2-bls' if is_bootloader_grub2_bls;
-    push @tags, 'systemd-boot' if is_bootloader_sdboot;
+    push @tags, get_default_bootloader();
 
     # Workaround for poo#118336
     if (is_ppc64le && is_qemu) {
@@ -574,14 +569,14 @@ sub reconnect_s390 {
         sleep 2 if is_s390x;
         type_line_svirt "root", expect => qr/Passwor[dt]/;
         type_line_svirt "$testapi::password";
-        type_line_svirt "systemctl is-active network", expect => 'active';
+        type_line_svirt "systemctl is-active network", expect => qr/^active\s*$/m;
         if ($enable_root_ssh eq 1) {
             record_info('Enable root ssh login');
             type_line_svirt "mkdir -p /etc/ssh/sshd_config.d";
             type_line_svirt "echo 'PermitRootLogin yes' \\> /etc/ssh/sshd_config.d/root.conf";
             type_line_svirt "systemctl restart sshd";
         }
-        type_line_svirt 'systemctl is-active sshd', expect => 'active';
+        type_line_svirt 'systemctl is-active sshd', expect => qr/^active\s*$/m;
 
         # make sure we can reach the SSH server in the SUT, try up to 1 min (12 * 5s)
         my $retries = 12;
@@ -664,6 +659,16 @@ sub handle_pxeboot {
 
 sub grub_select {
     save_screenshot;
+
+    # If GRUB_ARGS is defined, we are modifying the default grub entry with
+    # the provided extra kernel parameters and rebooting, so just select
+    # default entry and return.
+    # so far this is implemented only for grub2-bls bootloader.
+    if (get_var('GRUB_ARGS') && is_bootloader_grub2_bls) {
+        set_var('GRUB_BOOT_NONDEFAULT', undef);
+        set_var('GRUB_SELECT_FIRST_MENU', undef);
+    }
+
     if ((my $grub_nondefault = get_var('GRUB_BOOT_NONDEFAULT', 0)) gt 0) {
         my $menu = $grub_nondefault * 2 + 1;
         bmwqemu::fctinfo("Boot non-default grub option $grub_nondefault (menu item $menu)");
@@ -684,7 +689,8 @@ sub grub_select {
         push @tags, 'linux-login' if check_var('DESKTOP', 'textmode');
         push @tags, 'displaymanager' if check_var('DESKTOP', 'gnome');
 
-        assert_screen(\@tags);
+        my $timeout = is_sle_micro && is_ppc64le && is_qemu ? 60 : 30;
+        assert_screen(\@tags, $timeout);
 
         if (match_has_tag 'grub2') {
             send_key 'ret';
@@ -912,7 +918,8 @@ sub wait_boot {
     # for powerVM, it need switch console, it need wait longer time to
     # get grub page. After we get grub page, the workflow will be same
     # as others
-    $self->wait_grub(bootloader_time => $bootloader_time) if is_pvm;
+    select_console('powerhmc-ssh', await_console => 0) if (is_pvm_hmc);
+    $self->wait_grub(bootloader_time => $bootloader_time) if (is_pvm);
 
     # Reset the consoles after the reboot: there is no user logged in anywhere
     reset_consoles;
@@ -1069,14 +1076,6 @@ sub post_fail_hook {
     }
 
     export_logs;
-
-    if ((is_public_cloud() || is_openstack()) && $self->{run_args}->{my_provider}) {
-        select_host_console(force => 1);
-
-        # Destroy the public cloud instance in case of fatal test failure
-        my $flags = $self->test_flags();
-        $self->{run_args}->{my_provider}->finalize() if ($flags->{fatal});
-    }
 }
 
 sub test_flags {

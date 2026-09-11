@@ -5,9 +5,9 @@
 
 # Package: yast2-registration yast2-migration yast2-add-on
 # Summary: sle12 online migration testsuite
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base 'y2_installbase';
+use Mojo::Base 'y2_installbase';
 use testapi;
 use Utils::Architectures;
 use utils;

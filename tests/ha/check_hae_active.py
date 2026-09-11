@@ -8,11 +8,13 @@
 
 from testapi import *
 import json
+import re
 
 perl.require("registration")
 perl.require("serial_terminal")
 perl.require("utils")
 perl.require("suseconnect_register")
+perl.require("package_utils")
 
 def check_suseconnect(self):
     '''
@@ -21,7 +23,7 @@ def check_suseconnect(self):
     no_suseconnect = int(script_run("which SUSEConnect"))
     if (no_suseconnect):
         record_soft_failure("bsc#1238913 - SUSEConnect is not installed by default")
-        perl.utils.zypper_call("in suseconnect-ng")
+        perl.package_utils.install_package("suseconnect-ng", trup_apply=1)
 
 def check_product_registration(self):
     '''
@@ -60,7 +62,9 @@ def check_ha_registered(self):
                          for product in json.loads(script_output("SUSEConnect --status"))])
 
     if (not ha_registered):
-        record_soft_failure("jsc#TEAM-10163 - HA Extension not active. Activating it")
+        if re.search("High Availability Extension.*Activated", script_output("SUSEConnect --list-extensions")):
+            record_soft_failure("bsc#1259059 - SUSEConnect --status does not show registered extensions")
+
         perl.registration.register_addons_cmd()
         perl.utils.zypper_call("lr -u")
 
@@ -79,7 +83,7 @@ def run(self):
     pattern_ha_sles_exists = (int(script_run("zypper patterns --installed-only | grep ha_sles")) == 0)
     if (not pattern_ha_sles_exists):
         record_info('Softfail', "pattern 'ha_sles' is not installed", "result", "softfail")
-        perl.utils.zypper_call("in -t pattern ha_sles")
+        perl.package_utils.install_package("-t pattern ha_sles", trup_reboot=1)
 
 def test_flags(self):
     return {'fatal': 1, 'milestone': 1}

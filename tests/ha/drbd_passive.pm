@@ -7,9 +7,8 @@
 # Summary: DRBD active/passive OpenQA test
 # Maintainer: QE-SAP <qe-sap@suse.de>, Loic Devulder <ldevulder@suse.com>
 
-use base 'haclusterbasetest';
+use Mojo::Base 'haclusterbasetest';
 use version_utils 'is_sle';
-use utils 'zypper_call';
 use testapi;
 use lockapi;
 use hacluster;
@@ -56,6 +55,8 @@ B<The key tasks performed by this module include:>
 =item * Replace hostnames, IP addresses and block devices in the drbd template.
 
 =item * Add drbd files in C</etc/csync2/csync2.conf> and run csync2 from node 1 to synchronize configuration files in all nodes.
+
+=item * Alternatively, use C<crm cluster copy> instead of C<csync2> on 16 or newer.
 
 =item * Create and enable a drbd block device in both nodes with C<drbdadm>
 
@@ -161,8 +162,6 @@ sub run {
     # Wait until DRBD test is initialized
     barrier_wait("DRBD_INIT_$cluster_name");
 
-    zypper_call '-n up';
-
     # Do the DRBD configuration only on the first node
     if (is_node(1)) {
         # 2 LUNs are needed for DRBD
@@ -192,8 +191,8 @@ sub run {
         # Show the result
         enter_cmd "cat $drbd_rsc_file";
 
-        # We need to add the configuration in csync2.conf
-        add_file_in_csync(value => '/etc/drbd*');
+        # Synchronize drbd configuration in both nodes
+        sync_path('/etc/drbd*');
     }
     else {
         diag 'Wait until DRBD configuration is created...';

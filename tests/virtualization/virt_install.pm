@@ -7,7 +7,7 @@
 # Summary: 'virt-install' test
 # Maintainer: aginies <aginies@suse.com>
 
-use base 'x11test';
+use Mojo::Base 'x11test';
 use testapi;
 use x11utils qw(default_gui_terminal close_gui_terminal);
 
@@ -23,6 +23,8 @@ sub run {
         send_key('ret');
     }
     wait_still_screen;
+    send_key 'alt-f4';
+    assert_and_click('close-virt-viewer');
     # Close or at least deactivate the current window in case it would cover vncviewer later
     close_gui_terminal;
     wait_still_screen;

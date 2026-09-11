@@ -1,3 +1,8 @@
+local disk_id = '{{INSTALL_DISK_WWN}}';
+local partitions_config = {
+  partitions: [{ generate: 'default' }],
+  [if disk_id != '' then 'search']: '/dev/disk/by-id/' + disk_id
+};
 {
   product: {
     id: '{{AGAMA_PRODUCT_ID}}',
@@ -14,7 +19,16 @@
   },
   root: {
     password: '$6$vYbbuJ9WMriFxGHY$gQ7shLw9ZBsRcPgo6/8KmfDvQ/lCqxW8/WnMoLCoWGdHO6Touush1nhegYfdBbXRpsQuy/FTZZeg7gQL50IbA/',
-    hashedPassword: true
+    hashedPassword: true,
+    sshPublicKey: 'fake public key to enable sshd and open firewall'
+  },
+  software: {
+    packages: ['openssh-server-config-rootlogin'],
+  },
+  storage: {
+    drives: [
+      partitions_config
+    ]
   },
   scripts: {
     pre: [
@@ -32,15 +46,6 @@
       }
     ],
     post: [
-      {
-        name: 'enable root login',
-        chroot: true,
-        content: |||
-          #!/usr/bin/env bash
-          echo 'PermitRootLogin yes' > /etc/ssh/sshd_config.d/root.conf
-          systemctl enable sshd
-        |||
-      },
       {
         name: 'set grub terminal to console',
         chroot: true,

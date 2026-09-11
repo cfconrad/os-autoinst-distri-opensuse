@@ -7,13 +7,13 @@
 #
 # Maintainer: QE-C team <qa-c@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use registration;
 use testapi;
 use utils;
 use version_utils 'is_sle_micro';
 use publiccloud::ssh_interactive "select_host_console";
-use publiccloud::utils "validate_repo";
+use publiccloud::utils qw(additional_repos validate_repo);
 
 
 # Get the status of the update repos
@@ -56,9 +56,13 @@ sub run {
     die "No test repositories" if ($check_empty_repos && $count == 0);
     my $ret = 0;
     my $reject = "'robots.txt,*.ico,*.png,*.gif,*.css,*.js,*.htm*,*.mirrorlist'";
-    my $regex = "'s390x\\/|ppc64le\\/|kernel*debuginfo*.rpm|src\\/'";
+    # If running on x86_64, also ignore aarch64 and viceversa
+    my $other = check_var("ARCH", "x86_64") ? "aarch64" : "x86_64";
+    my $regex = "'s390x\\/|ppc64le\\/|$other\\/|kernel*debuginfo*.rpm|src\\/'";
 
     set_var("PUBLIC_CLOUD_EMBARGOED_UPDATES_DETECTED", 0);
+
+    push @repos, additional_repos();
 
     for my $maintrepo (@repos) {
         unless (validate_repo($maintrepo)) {
@@ -71,7 +75,7 @@ sub run {
         my ($domain) = $parent =~ '^([a-zA-Z.]*)';
         my ($realpath) = $parent =~ m|ibs/(.*)|;
 
-        $ret = script_run("wget -nH --cut-dirs=1 --no-clobber -r --reject $reject --reject-regex=$regex --domains $domain --no-parent $maintrepo/", timeout => 600);
+        $ret = script_run("wget -nH --cut-dirs=1 --no-clobber -r --reject $reject --reject-regex=$regex --domains $domain --no-parent $maintrepo/", timeout => 3600);
         if ($ret !~ /0|8/) {
             # softfailure, if repo doesn't exist (anymore). This is required for cloning jobs, because the original test repos could be empty already
             record_info('Softfail', "Download /failed (rc=$ret):\n$maintrepo", result => 'softfail');
@@ -84,10 +88,6 @@ sub run {
                 assert_script_run("find $realpath >> /tmp/repos.list.txt");
             } elsif (is_sle_micro(">=6.0")) {
                 assert_script_run("find $realpath >> /tmp/repos.list.txt");
-            } else {
-                record_info('Softfail', "No .repo file found in $realpath. This directory will be removed.", result => 'softfail');
-                assert_script_run("echo 'No .repo found for $maintrepo' >> ~/repos/qem_download_status.txt");
-                assert_script_run("rm -rf $realpath");
             }
         }
 
@@ -124,8 +124,7 @@ sub post_fail_hook {
 sub test_flags {
     return {
         fatal => 1,
-        milestone => 1,
-        publiccloud_multi_module => 1
+        milestone => 1
     };
 }
 

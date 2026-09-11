@@ -9,6 +9,7 @@
 provider: 'gcp'
 apiver: 4
 terraform:
+  bin: '%TERRAFORM_RUNNER%'
   variables:
     # GENERAL VARIABLES #
     project: '%SLES4SAP_GOOGLE_PROJECT%'
@@ -29,5 +30,7 @@ terraform:
     # HANA
     hana_count: '%NODE_COUNT%'
     hana_ha_enabled: '%HA_CLUSTER%'
+    hana_vm_size: '%PUBLIC_CLOUD_INSTANCE_TYPE%'
+    machine_type: '%PUBLIC_CLOUD_INSTANCE_TYPE%'
     hana_data_disk_type: '%HANA_DISK_TYPE%'
     hana_log_disk_type: '%HANA_DISK_TYPE%'

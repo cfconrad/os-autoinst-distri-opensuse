@@ -6,6 +6,8 @@
 # Summary: Verify installation starts and is in progress
 # Maintainer: Michael Moese <mmoese@suse.de>
 
+## no os-autoinst style
+
 package ipxe_install;
 use base 'y2_installbase';
 
@@ -85,8 +87,8 @@ sub set_bootscript {
         $install .= get_var('HDD_1') ? get_var('HDD_1') : get_required_var('INSTALL_HDD_IMAGE');
         if (is_sle('>=16.1')) {
             if (is_transactional) {
-                $kernel .= "/pxeboot." . uc($distri) . "S-$version-Transactional.$arch-$version.0.kernel";
-                $initrd .= "/pxeboot." . uc($distri) . "S-$version-Transactional.$arch-$version.0.initrd";
+                $kernel .= "/pxeboot." . uc($distri) . "S-$version-Immutable.$arch-$version.0.kernel";
+                $initrd .= "/pxeboot." . uc($distri) . "S-$version-Immutable.$arch-$version.0.initrd";
             }
         }
         else {
@@ -127,15 +129,6 @@ END_BOOTSCRIPT
         diag $curl;
         diag "===== END autoyast $autoyast =====";
     }
-
-    set_ipxe_bootscript($bootscript);
-}
-
-sub set_bootscript_hdd {
-    my $bootscript = <<"END_BOOTSCRIPT";
-#!ipxe
-exit
-END_BOOTSCRIPT
 
     set_ipxe_bootscript($bootscript);
 }
@@ -188,7 +181,7 @@ sub enter_o3_ipxe_boot_entry {
 sub set_bootscript_agama_cmdline_extra {
     my $cmdline_extra = " ";
     if (my $agama_auto = get_var('INST_AUTO')) {
-        my $agama_auto_url = autoyast::expand_agama_profile($agama_auto);
+        my $agama_auto_url = ($agama_auto =~ /\.libsonnet/) ? autoyast::generate_json_profile($agama_auto) : autoyast::expand_agama_profile($agama_auto);
         $cmdline_extra .= "inst.auto=$agama_auto_url inst.finish=stop ";
     }
     # Agama Installation repository URL
@@ -208,8 +201,7 @@ sub set_bootscript_agama_cmdline_extra {
     }
     if (is_ipmi) {
         my $ipxe_console = get_required_var('IPXE_CONSOLE');
-        my $sol_console = (split(/,/, $ipxe_console))[0];
-        $cmdline_extra .= "console=$ipxe_console linuxrc.log=/dev/$sol_console linuxrc.core=/dev/$sol_console linuxrc.debug=4,trace ";
+        $cmdline_extra .= "console=$ipxe_console ";
     }
 
     # Support passing EXTRA_PXE_CMDLINE and EXTRABOOTPARAMS to bootscripts (inherited from set_bootscript_cmdline_extra)
@@ -364,7 +356,7 @@ sub run {
         return;
     }
 
-    if (get_var('WORKER_CLASS') =~ /ipmi-nvdimm/) {
+    if (get_var('WORKER_CLASS') =~ /(ipmi-nvdimm.+region-nue|region-nue.+ipmi-nvdimm)/) {
         assert_screen 'nue-ipxe-menu', 600;
         my $sut_ip = inet_ntoa(inet_aton(get_required_var('SUT_IP')));
         wait_screen_change { send_key 'i' };
@@ -376,8 +368,8 @@ sub run {
     }
 
     if (is_agama) {
-        assert_screen([qw(load-linux-kernel load-initrd)], 240);
-        record_info("Installing", "Please check the expected product is being installed");
+        record_info('Loading kernel&initrd and starting installation');
+        check_screen([qw(load-linux-kernel load-initrd)], 240);
         assert_screen('agama-installer-live-root', 400);
         set_bootscript_hdd if get_var('IPXE_SET_HDD_BOOTSCRIPT');
         return;

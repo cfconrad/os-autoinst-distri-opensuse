@@ -6,7 +6,7 @@
 # Summary: Do a basic examination to the host and guests after tests run
 # Maintainer: Julie CAO <JCao@suse.com>, qe-virt@suse.de
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use Utils::Logging qw(upload_coredumps);
@@ -40,10 +40,20 @@ sub run {
     # Upload logs on x86_64
     if (get_var('FORCE_UPLOAD_LOGS') || @unhealthy_list != 0) {
         if (get_var('FORCE_UPLOAD_LOGS')) {
-            collect_host_and_guest_logs(join(' ', grep { $_ ne 'host' } keys %health_status), '', '', '_validate_system_health');
+            collect_host_and_guest_logs(
+                guest => join(' ', grep { $_ ne 'host' } keys %health_status),
+                full_supportconfig => get_var('FULL_SUPPORTCONFIG', 1),
+                excluded_supportconfig_features => get_var('EXCLUDED_SUPPORTCONFIG_FEATURES', 'aFSLIST AUDIT SELINUX'),
+                token => '_validate_system_health'
+            );
         }
         else {
-            collect_host_and_guest_logs(join(' ', grep { $_ ne 'host' } @unhealthy_list), '', '', '_validate_system_health');
+            collect_host_and_guest_logs(
+                guest => join(' ', grep { $_ ne 'host' } @unhealthy_list),
+                full_supportconfig => get_var('FULL_SUPPORTCONFIG', 1),
+                excluded_supportconfig_features => get_var('EXCLUDED_SUPPORTCONFIG_FEATURES', 'aFSLIST AUDIT SELINUX'),
+                token => '_validate_system_health'
+            );
         }
         $self->upload_coredumps;
         save_screenshot;

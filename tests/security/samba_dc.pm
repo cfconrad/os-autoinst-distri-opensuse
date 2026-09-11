@@ -11,12 +11,13 @@
 #
 # Maintainer: QE Security <none@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use lockapi;
 use utils qw(zypper_call systemctl script_retry random_string);
 use serial_terminal 'select_serial_terminal';
-use version_utils 'is_sle';
+use network_utils 'iface';
+use Utils::Architectures 'is_s390x';
 use feature 'signatures';
 no warnings 'experimental::signatures';
 
@@ -26,11 +27,23 @@ use constant {
     PASSWORD => 'Passw0rd',
 };
 
+our ($netdev, $server_ip, $client_ip);
+
 # ------------------------ common entry point -------------------------------
 
 sub run ($self) {
     my $hostname = get_var('HOSTNAME');
     select_serial_terminal;
+
+    if (is_s390x) {
+        $netdev = iface();
+        $server_ip = get_var('SERVER_IP', '10.0.2.123');
+        $client_ip = get_var('CLIENT_IP', '10.0.2.124');
+        #s390x does not have MM setup, this is needed
+        if ($hostname eq 'server') {
+            assert_script_run("hostnamectl set-hostname $hostname");
+        }
+    }
 
     ($hostname eq 'client') ? run_client() : run_server();
 }
@@ -105,11 +118,16 @@ sub run_client() {
     zypper_call('in samba-client krb5-client samba-winbind bind-utils adcli cyrus-sasl-gssapi');
     disable_ipv6();
     barrier_wait('SAMBA_DC_SETUP');
-
     my $client_hostname = randomize_hostname();
 
-    my $server_ip = script_output(q{getent hosts server | head -n1 | awk '{print $1}'});
+    unless (is_s390x) {
+        $server_ip = script_output(q{getent hosts server | head -n1 | awk '{print $1}'});
+    }
     my $interface = script_output("nmcli -t -f NAME c | grep -v '^lo' | head -n1");
+    # S390x does not support TAP, network must be setup manualy
+    if (is_s390x) {
+        assert_script_run("nmcli con add type vlan con-name \"$netdev\".1 dev \"$netdev\" id 10 ipv4.method manual ipv4.address \"$client_ip/24\"");
+    }
     assert_script_run("nmcli con mod \"$interface\" ipv4.dns \"$server_ip\" ipv4.ignore-auto-dns yes");
     assert_script_run("nmcli con up \"$interface\"");
 
@@ -127,6 +145,16 @@ sub run_client() {
         'echo "   idmap config * : range = 3000-7999" >> /etc/samba/smb.conf'
     );
     assert_script_run($_) for @smb_conf_setup;
+
+    # Fix Kerberos context initialization by providing a clean client krb5.conf
+    my @krb5_conf_setup = (
+        'echo "[libdefaults]" > /etc/krb5.conf',
+        'echo "    default_realm = ' . REALM . '" >> /etc/krb5.conf',
+        'echo "    dns_lookup_realm = false" >> /etc/krb5.conf',
+        'echo "    dns_lookup_kdc = true" >> /etc/krb5.conf'
+    );
+    assert_script_run($_) for @krb5_conf_setup;
+
     assert_script_run('net ads join -U Administrator%' . PASSWORD);
     assert_script_run('net ads testjoin');
     assert_script_run('smbclient -L //server -I ' . $server_ip . ' -U testuser%' . PASSWORD);
@@ -162,6 +190,13 @@ sub configure_server_resolver() {
 
 # Start samba services
 sub validate_samba_services() {
+    #s390x network setup
+    if (is_s390x) {
+        systemctl("stop firewalld");
+        assert_script_run("nmcli con add type vlan con-name \"$netdev\".1 dev \"$netdev\" id 10 ipv4.method manual ipv4.address \"$server_ip/24\"");
+        #extra disable ipv6 due to nmcl
+        disable_ipv6();
+    }
     systemctl('enable --now samba-ad-dc.service');
     systemctl('status samba-ad-dc.service');
     verify_dns_records('localhost');
@@ -169,7 +204,7 @@ sub validate_samba_services() {
     validate_script_output('samba-tool domain level show', sub { /Forest function level:.*2008 R2/ }, 60);
     validate_script_output('echo ' . PASSWORD . ' | kinit -V Administrator', sub { /Authenticated to Kerberos/ });
     # use klist to verify that the ticket was obtained
-    validate_script_output('klist', sub { /Default principal: Administrator@${\(REALM)}/ });
+    validate_script_output('klist', sub { /Default principal: Administrator\@${\(REALM)}/ });
 }
 
 sub setup_samba_server() {

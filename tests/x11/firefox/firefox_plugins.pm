@@ -16,14 +16,14 @@
 # - Exit firefox
 # Maintainer: wnereiz <wnereiz@gmail.com>
 
-use base "x11test";
+use Mojo::Base 'x11test';
 use testapi;
 
 sub run {
     my ($self) = @_;
     $self->start_firefox_with_profile;
 
-    wait_still_screen 3;
+    wait_still_screen 1, 2;
     send_key "ctrl-shift-a";
     assert_and_click('firefox-addons-plugins');
     assert_screen [qw(firefox-plugins-overview_01 firefox-plugins-missing)], 60;

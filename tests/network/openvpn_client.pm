@@ -11,14 +11,14 @@
 #  * When connected, we perform the ping, and finally disconnect.
 # Maintainer: QE Security <none@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use lockapi;
 use y2_module_guitest;
 use mm_network;
 use utils qw(systemctl zypper_call exec_and_insert_password script_retry);
-use version_utils 'is_sle';
+use version_utils qw(is_sle package_version_cmp);
 use Utils::Architectures;
 use network_utils 'iface';
 
@@ -45,7 +45,7 @@ sub run {
     mutex_wait 'OPENVPN_STATIC_KEY';
 
     # Download key from the server
-    assert_script_run("curl -o static.key $server_ip:8008/static.key");
+    script_retry("curl -fsS -o static.key $server_ip:8008/static.key", delay => 5, retry => 12, timeout => 30);
     assert_script_run("cat /etc/openvpn/static.key");
 
     # Download the client config
@@ -53,6 +53,10 @@ sub run {
 
     # Remove unsupported configuration options on older SLE versions
     assert_script_run('sed -i "/^cipher/d; /^data-ciphers/d" static.conf') if (is_sle('<15-sp4'));
+
+    # openvpn 2.7 only starts a static key (non TLS) config with this opt-in, poo#205689
+    my $openvpn_version = script_output('rpm -q --qf "%{version}" openvpn');
+    assert_script_run('echo allow-deprecated-insecure-static-crypto >> static.conf') if (package_version_cmp($openvpn_version, '2.7') >= 0);
 
     # Start the client when also server is ready and test the connection
     systemctl('start openvpn@static');
@@ -83,9 +87,9 @@ sub run {
     assert_script_run('sed -i "/^cipher/d; /^data-ciphers/d" ca.conf') if (is_sle('<15-sp4'));
 
     # Download key from the server
-    assert_script_run("curl -o ca.crt $server_ip:8008/pki/ca.crt");
-    assert_script_run("curl -o client.crt $server_ip:8008/pki/issued/client.crt");
-    assert_script_run("curl -o client.key $server_ip:8008/pki/private/client.key");
+    script_retry("curl -fsS -o ca.crt $server_ip:8008/pki/ca.crt", delay => 5, retry => 12, timeout => 30);
+    script_retry("curl -fsS -o client.crt $server_ip:8008/pki/issued/client.crt", delay => 5, retry => 12, timeout => 30);
+    script_retry("curl -fsS -o client.key $server_ip:8008/pki/private/client.key", delay => 5, retry => 12, timeout => 30);
 
     # Start the client when also server is ready and test the connection
     systemctl('start openvpn@ca');

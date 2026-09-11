@@ -9,7 +9,7 @@
 #
 # Maintainer: QE-C team <qa-c@suse.de>, QE-SAP <qe-sap@suse.de>
 
-use base "opensusebasetest";
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
@@ -69,12 +69,16 @@ sub run {
     record_info('Azure', script_output('az -v'));
 
     # Install Google Cloud SDK
+    my $google_cli_install_log = '/tmp/google_cli_install.txt';
+
     assert_script_run("export CLOUDSDK_CORE_DISABLE_PROMPTS=1");
     assert_script_run("export CLOUDSDK_PYTHON=$python_exec");
-    assert_script_run("curl sdk.cloud.google.com | bash");
+    assert_script_run("curl sdk.cloud.google.com | bash > $google_cli_install_log 2>&1");
     assert_script_run("echo . /root/google-cloud-sdk/completion.bash.inc >> ~/.bashrc");
     assert_script_run("echo . /root/google-cloud-sdk/path.bash.inc >> ~/.bashrc");
     record_info('GCE', script_output('source ~/.bashrc && gcloud version'));
+
+    upload_logs("$google_cli_install_log", failok => 1);
 
     my $terraform_version = get_var('TERRAFORM_VERSION', '1.5.7');
     # Terraform in a container
@@ -86,7 +90,7 @@ EOT
     validate_script_output("terraform -version", qr/$terraform_version/);
     record_info('Terraform', script_output('terraform -version'));
 
-    my $opentofu_version = get_var('OPENTOFU_VERSION', '1.9.1');
+    my $opentofu_version = get_var('OPENTOFU_VERSION', '1.11.6');
     # opentofu in a container
     my $opentofu_wrapper = <<EOT;
 #!/bin/bash -e
@@ -114,12 +118,8 @@ EOT
     }
     record_info('Ansible', script_output('ansible --version'));
 
-    # Kubectl in a container
-    my $kubectl_version = get_var('KUBECTL_VERSION', 'v1.22.12');
-    assert_script_run("curl -Lo /usr/bin/kubectl https://dl.k8s.io/release/$kubectl_version/bin/linux/amd64/kubectl");
-    assert_script_run("curl -Lo /usr/bin/kubectl.sha256 https://dl.k8s.io/$kubectl_version/bin/linux/amd64/kubectl.sha256");
-    assert_script_run('echo "$(cat /usr/bin/kubectl.sha256)  /usr/bin/kubectl" | sha256sum --check');
-    assert_script_run('chmod +x /usr/bin/kubectl');
+    my $kubectl_version = get_var('KUBECTL_VERSION', '1.35');
+    zypper_call("in kubernetes$kubectl_version-client");
     record_info('kubectl', script_output('kubectl version --client=true'));
 
     # Remove persistent net rules, necessary to boot the x86_64 image in the aarch64 test runs

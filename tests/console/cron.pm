@@ -8,11 +8,12 @@
 # - check cron status
 # Maintainer: Dominik Heidler <dheidler@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
-use version_utils qw(is_sle is_public_cloud is_opensuse);
+use package_utils 'install_package';
+use version_utils qw(is_sle is_public_cloud is_opensuse is_leap);
 
 sub run {
     select_serial_terminal;
@@ -21,9 +22,9 @@ sub run {
     if ((is_sle("<15")) && (!is_public_cloud)) {
         script_retry("systemctl is-active ntp-wait.service | grep -vq 'activating'", retry => 10, delay => 60, fail_message => "ntp-wait did not finish syncing");
     }
-    # cronie is not installed by default on sle16 and on openSUSE for agama based installations
-    if (is_sle('>=16') || (is_opensuse && check_var('AGAMA', 1))) {
-        zypper_call('in cronie');
+    # cronie is only installed by default on sle/leap < 16
+    unless (is_sle('<16') || is_leap('<16')) {
+        install_package('cronie', trup_reboot => 1);
         systemctl('enable cron');
         systemctl('start cron');
     }

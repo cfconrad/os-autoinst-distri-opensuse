@@ -7,9 +7,7 @@
 # Summary: Do basic checks to make sure system is ready for wicked testing
 # Maintainer: Anton Smorodskyi <asmorodskyi@suse.com>
 
-use base 'wickedbase';
-use strict;
-use warnings;
+use Mojo::Base 'wickedbase';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call systemctl file_content_replace zypper_ar ensure_ca_certificates_suse_installed);
@@ -22,7 +20,6 @@ use wicked::wlan;
 use mm_network;
 use power_action_utils 'power_action';
 use Mojo::Util 'trim';
-use registration;
 
 sub run {
     my ($self, $ctx) = @_;
@@ -37,9 +34,6 @@ sub run {
     my $escaped = $enable_command_logging =~ s/'/'"'"'/gr;
     assert_script_run("echo '$escaped' >> /root/.bashrc");
     assert_script_run($enable_command_logging);
-
-    $self->switch_to_wicked($ctx) if (systemctl('is-active NetworkManager', ignore_failure => 1) == 0);
-
     record_info('INFO', 'Setting debug level for wicked logs');
     file_content_replace('/etc/sysconfig/network/config', '--sed-modifier' => 'g', '^WICKED_DEBUG=.*' => 'WICKED_DEBUG="all"', '^WICKED_LOG_LEVEL=.*' => 'WICKED_LOG_LEVEL="debug2"');
     assert_script_run('mkdir -p /etc/systemd/journald.conf.d/');
@@ -60,6 +54,7 @@ EOT
     #preparing directories for holding config files
     assert_script_run('mkdir -p /data/{static_address,dynamic_address}');
 
+    $self->switch_to_wicked($ctx) if (systemctl('is-active NetworkManager', ignore_failure => 1) == 0);
 
     if (check_var('WICKED', 'ipv6')) {
         setup_static_network(ip => $self->get_ip(type => 'host', netmask => 1), silent => 1, ipv6 =>
@@ -86,7 +81,6 @@ EOT
     if (check_var('IS_WICKED_REF', '1')) {
         $package_list .= ' radvd' if (check_var('WICKED', 'ipv6'));
         # Common REF Configuration
-        record_info('INFO', 'Setup DHCP server');
         $package_list .= ' dhcp-server';
         zypper_call("-q in $package_list", timeout => 400);
         if ($need_reboot) {
@@ -144,9 +138,8 @@ EOT
         } elsif (my $wicked_repo = get_var('WICKED_REPO')) {
             record_info('REPO', $wicked_repo);
             if ($wicked_repo =~ /suse\.de/ && script_run('rpm -qi ca-certificates-suse') == 1) {
-                my $repo_url = "https://download.opensuse.org/repositories/SUSE:/CA/";
-                zypper_ar($repo_url . generate_version('_') . '/', name => 'suse_ca', no_gpg_check => 1, priority => 60);
-                zypper_call("-n in ca-certificates-suse");
+                zypper_call("ar --refresh https://download.opensuse.org/repositories/SUSE:/CA/openSUSE_Tumbleweed/SUSE:CA.repo");
+                zypper_call("--gpg-auto-import-keys -n in ca-certificates-suse");
             }
             zypper_ar($wicked_repo, priority => 10, params => '-n wicked_repo', no_gpg_check => 1);
             my ($resolv_options, $repo_id) = (' --allow-vendor-change  --allow-downgrade ', 'wicked_repo');

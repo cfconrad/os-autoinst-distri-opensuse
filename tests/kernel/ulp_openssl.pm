@@ -6,7 +6,7 @@
 # Summary: Test openssl-3-livepatches by iterating over supported openssl versions
 # Maintainer: <qe-core@suse.com>
 
-use base 'opensusebasetest';
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use utils;
 use serial_terminal;
@@ -90,7 +90,10 @@ sub run {
     }
     record_info('Downgrade', "Installing old version: openssl-3-$target_ver");
     # Force install the old package. Exit codes 106/107 indicate updates are available, which is expected.
-    install_package("--oldpackage libopenssl3=$target_ver openssl-3=$target_ver", trup_continue => 1, trup_reboot => 1);
+    my $ssl_packs = zypper_search('-i libopenssl3');
+    my @downgrade_list = map { "$_->{name}=$target_ver" } @$ssl_packs;
+    push @downgrade_list, "openssl-3=$target_ver";
+    install_package("--oldpackage " . join(' ', @downgrade_list), trup_continue => 1, trup_reboot => 1);
 
     # Start `openssl s_server` in the background. It's a long-running process that links with libssl/libcrypto.
     my $server_pid = background_script_run("openssl s_server -cert cert.pem -key key.pem -pass pass:password -accept 44330 -www");
@@ -105,7 +108,14 @@ sub run {
     }
 
     record_info('Install LP', "Installing livepatch package: $packname");
-    install_package($packname);
+    # Refer ticket: poo#197309
+    if (is_sle('=15-sp6')) {
+        my $install_done = "Done executing rpm-helper";
+        script_run("(zypper -n in -l $packname; echo $install_done) |& tee /dev/$serialdev", 0);
+        wait_serial(qr/^$install_done/m, 800) || die "installation is not finished";
+    } else {
+        install_package($packname, timeout => 800);
+    }
 
     # Get the list of livepatch files (.so) installed by the package.
     my $patch_files = script_output("rpm -ql $packname | grep '\\.so\$'");

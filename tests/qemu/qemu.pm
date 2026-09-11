@@ -6,7 +6,7 @@
 # Summary: Run QEMU as emulator
 # Maintainer: Dominik Heidler <dheidler@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use Utils::Backends;
 use utils;
@@ -17,16 +17,13 @@ use version_utils qw(is_sle_micro is_leap_micro is_transactional);
 # 'patterns-microos-kvm_host' is required for SUMA client use case
 sub is_qemu_preinstalled {
     if (is_sle_micro('<6.0') || is_leap_micro('<6.0')) {
-        assert_script_run('rpm -q patterns-microos-kvm_host');
-        return 1;
+        return 1 if (script_run('rpm -q patterns-microos-kvm_host') == 0);
     }
     elsif (is_sle_micro('>=6.2') || is_leap_micro('>=6.2')) {
-        assert_script_run('rpm -q patterns-micro-kvm_host');
-        return 1;
+        return 1 if (script_run('rpm -q patterns-micro-kvm_host') == 0);
     }
     elsif (is_sle_micro('>=6.0') || is_leap_micro('>=6.0')) {
-        assert_script_run('rpm -q patterns-base-kvm_host');
-        return 1;
+        return 1 if (script_run('rpm -q patterns-base-kvm_host') == 0);
     }
     return 0;
 }
@@ -83,7 +80,8 @@ sub run {
         enter_cmd "qemu-system-aarch64 -M virt,usb=off -cpu cortex-a57 -nographic -pflash flash0.img -pflash flash1.img";
         assert_screen([qw(qemu-enter-boot-manager qemu-uefi-shell)], 600);
         if (match_has_tag('qemu-enter-boot-manager')) {
-            send_key('e');
+            send_key('spc');
+            wait_screen_change { send_key 'ret' };
             assert_screen('qemu-uefi-boot-manager');
         }
     }

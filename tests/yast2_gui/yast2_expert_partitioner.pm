@@ -27,9 +27,9 @@
 # - Start xterm, run "lvdisplay /dev/vgtest/lv<number>" for each partition
 # - Close xterm, start a new yast2 storage and delete all partitions created
 #
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "y2_module_guitest";
+use Mojo::Base 'y2_module_guitest';
 use testapi;
 use YuiRestClient;
 use scheduler 'get_test_suite_data';

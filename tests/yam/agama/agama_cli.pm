@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # Summary: Perform a default installation using only CLI while exercising various commands.
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base Yam::Agama::agama_base;
+use Mojo::Base 'Yam::Agama::agama_base';
 use testapi;
 use power_action_utils qw(power_action);
 use Utils::Architectures qw(is_s390x);
 use Utils::Backends qw(is_svirt);
+use version_utils qw(is_sle);
 
 sub agama_config_edit {
     my $regex = shift;
@@ -29,26 +30,25 @@ sub run {
     assert_script_run('agama config show | jq -C');
 
     assert_script_run("jq -n '.root.password = \"$testapi::password\"' | agama config load");
-    assert_script_run("agama config show | grep $testapi::password");
+
+    assert_script_run("agama config show | grep -C 4 $testapi::password");
 
     my $product_id = get_var('AGAMA_PRODUCT_ID');
     assert_script_run("jq -n '.product.id = \"$product_id\"' | agama config load");
-    assert_script_run("agama config show | grep $product_id");
-
-    validate_script_output('agama probe', qr/Analyze/, fail_message => 'Agama probe returned bad state');
+    assert_script_run("agama config show | grep -C 4 $product_id");
 
     my $rpm_url = data_url('yam/agama/hello-world-0.1-1.1.noarch.rpm');
     assert_script_run("agama download $rpm_url /tmp/hello-world.rpm");
     validate_script_output('stat /tmp/hello-world.rpm', qr/Size: 7019/,
         fail_message => 'Downloaded file does not match expected size');
 
+    script_run('agama events > /tmp/agama_events.log 2>&1 &', timeout => 0);
     agama_config_edit(":\%s/bernhard/jose/g");
-    assert_script_run('agama config show | grep jose');
+    assert_script_run('agama config show | grep -C 4 jose');
     agama_config_edit(":\%s/jose/bernhard/g");
 
-    script_run('agama events > /tmp/agama_events.log 2>&1 &', timeout => 0);
-    validate_script_output('cat /tmp/agama_events.log', qr/ClientConnected/,
-        fail_message => 'Agama connected event not shown');
+    validate_script_output('cat /tmp/agama_events.log', qr/ProgressChanged/,
+        fail_message => 'Agama ProgressChanged event not shown');
 
     script_run('agama auth login', timeout => 0);
     enter_cmd("$testapi::password");

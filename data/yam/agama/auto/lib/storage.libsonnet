@@ -66,6 +66,35 @@ local lvm(encrypted=false, encryption='luks2') = {
   ],
 };
 
+local lvm_2_disks(dasd=false) = {
+  drives: [
+    {
+      search: if dasd == true then '/dev/dasda' else '/dev/vda',
+      alias: 'pvs-disk1',
+    },
+    {
+      search: if dasd == true then '/dev/dasdb' else '/dev/vdb',
+      alias: 'pvs-disk2',
+    },
+  ],
+  volumeGroups: [
+    {
+      name: 'system',
+      physicalVolumes: [
+        {
+          generate: {
+            targetDevices: ['pvs-disk1', 'pvs-disk2'],
+            spacePolicy: 'useAvailable'
+          }
+        },
+      ],
+      logicalVolumes: [
+        { generate: 'default' },
+      ],
+    },
+  ],
+};
+
 local whole_disk_and_boot_unattended() = {
   drives: [
     {
@@ -99,7 +128,7 @@ local whole_disk_and_boot_unattended() = {
     },
   ],
   boot: {
-    configure: 'true',
+    configure: true,
     device: 'boot-disk',
   },
 };
@@ -129,9 +158,13 @@ local raid(level='raid0', boot_type='bios') = {
         },
         mdroot_partition,
         mdswap_partition,
+        {
+          size: '1024 MiB',
+          filesystem: { path: '/boot', type: 'xfs' },
+        },
       ],
     },
-    // Additional disks: EFI partition, not mounted
+    // Additional disks: EFI and boot partition, not mounted
     {
       search: '*',
       partitions: [
@@ -143,13 +176,26 @@ local raid(level='raid0', boot_type='bios') = {
         },
         mdroot_partition,
         mdswap_partition,
+        {
+          size: '1024 MiB',
+          filesystem: { type: 'xfs' },
+        },
       ],
     },
   ] else if boot_type == 'prep' then [
+    // First disk: includes PReP
+    {
+      search: '/dev/vda',
+      partitions: [
+        { id: 'prep', size: '8 MiB' },
+        mdroot_partition,
+        mdswap_partition,
+      ],
+    },
+    // Additional disks: no PReP
     {
       search: '*',
       partitions: [
-        { id: 'prep', size: '8 MiB' },
         mdroot_partition,
         mdswap_partition,
       ],
@@ -208,6 +254,17 @@ local search_raid0() = {
           filesystem: {
             path: '/boot/efi',
             type: 'vfat'
+          },
+        },
+        {
+          search: {
+            condition: {
+              size: '1024 MiB'
+            }
+          },
+          filesystem: {
+            path: '/boot',
+            type: 'xfs'
           },
         },
       ],
@@ -311,6 +368,8 @@ local btrfs_without_snapshots() = {
   lvm: lvm(false),
   lvm_encrypted: lvm(true),
   lvm_tpm_fde: lvm(true, 'tpmFde'),
+  lvm_2_disks: lvm_2_disks(),
+  lvm_2_disks_dasd: lvm_2_disks(true),
   raid0: raid('raid0'),
   raid0_uefi: raid('raid0', 'uefi'),
   raid0_uefi_search: search_raid0(),

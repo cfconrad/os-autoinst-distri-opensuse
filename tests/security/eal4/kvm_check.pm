@@ -7,7 +7,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#101956
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use serial_terminal 'select_serial_terminal';
@@ -39,10 +39,6 @@ sub run {
 
     assert_script_run('virsh net-start default');
     validate_script_output 'virsh net-list --all | grep default', qr/default\s+active\s+no\s+yes/;
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

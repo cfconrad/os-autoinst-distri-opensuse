@@ -10,9 +10,10 @@
 # Summary: Test the himmelblau identity provider package
 # Maintainer: qa-c team <qa-c@suse.de>
 
-use base 'opensusebasetest';
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
+use version_utils qw(is_sle is_tumbleweed);
 use utils qw(zypper_call);
 
 sub configure_himmelblau {
@@ -22,15 +23,18 @@ sub configure_himmelblau {
     my $CONFIG_FILE = "/etc/himmelblau/himmelblau.conf";
     my $ENABLE_DEBUG_LOGS = "true";
 
-    assert_script_run("sed -i -e 's/# domains =/domains = $allowed_domain/g' $CONFIG_FILE");
-    assert_script_run("sed -i -e 's/# pam_allow_groups =.*/pam_allow_groups = $allowed_user/g' $CONFIG_FILE");
-    assert_script_run("sed -i -e 's/# debug =.*/debug = $ENABLE_DEBUG_LOGS/g' $CONFIG_FILE");
+    assert_script_run("sed -ri 's/# (domains?) =.*/\\1 = $allowed_domain/g' $CONFIG_FILE");
+    assert_script_run("sed -i 's/# pam_allow_groups =.*/pam_allow_groups = $allowed_user/g' $CONFIG_FILE");
+    assert_script_run("sed -i 's/# debug =.*/debug = $ENABLE_DEBUG_LOGS/g' $CONFIG_FILE");
 
     record_info("Himmelblau configured");
 }
 
 sub configure_nss {
-    my $NSSWITCH_CONF_PATH = "/usr/etc/nsswitch.conf";
+    my $NSSWITCH_CONF_PATH = "/etc/nsswitch.conf";
+    if (is_sle(">=16") || is_tumbleweed) {
+        assert_script_run("cp /usr/etc/nsswitch.conf $NSSWITCH_CONF_PATH");
+    }
 
     assert_script_run("sed -i -e '0,/passwd:.*/!{0,/passwd:.*/s/passwd:.*/passwd:    files systemd himmelblau/}' $NSSWITCH_CONF_PATH");
     assert_script_run("sed -i -e '0,/group:.*/!{0,/group:.*/s/group:.*/group:    files systemd himmelblau/}' $NSSWITCH_CONF_PATH");
@@ -40,7 +44,11 @@ sub configure_nss {
 }
 
 sub configure_pam {
-    assert_script_run('pam-config --add --himmelblau');
+    if (is_sle(">=16")) {
+        assert_script_run('pam-config --add --himmelblau');
+    } else {
+        assert_script_run('aad-tool configure-pam --really');
+    }
     assert_script_run('sed -i -e "/account requisite pam_unix.so try_first_pass/account sufficient pam_unix.so try_first_pass/g" /etc/pam.d/common-account');
     record_info("PAM configured");
 }
@@ -53,9 +61,24 @@ sub run {
     select_serial_terminal;
 
     # Install Himmelblau
+    zypper_call("ref");
     zypper_call("update");
     zypper_call("lr -U");
-    zypper_call("install himmelblau");
+    if (zypper_call("install himmelblau", exitcode => [0, 104]) == 104) {
+        if (is_sle("<=15-SP6")) {
+            record_soft_failure('bsc#1260384');
+            return;
+        }
+        die "zypper install himmelblau failed";
+    }
+
+    # Add softfailure for bsc#1259741 but only specifically for the affected himmelblau version
+    my $version = script_output("rpm -q --qf '%{VERSION}-%{RELEASE}\n' himmelblau");
+    record_info("himmelblau", "himmelblau package version:\n$version");
+    if (is_sle("=15-SP7") && $version eq '0.7.18+git.0.8485a75-150700.3.6.1') {
+        record_soft_failure("bsc#1259741 himmelblau pam configuration not available on 15-SP7");
+        return;
+    }
 
     # Configure the relevant services
     configure_himmelblau($allowed_domain, $user);

@@ -7,18 +7,19 @@
 # Summary: fwupd smoke test
 # Maintainer: QE Core <qe-core@suse.de>
 
-use base 'opensusebasetest';
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils;
 use Utils::Backends 'is_pvm';
 use version_utils 'is_sle';
+use package_utils 'install_package';
 
 sub run {
     select_serial_terminal;
 
     # Install and start fwupd
-    zypper_call "in fwupd";
+    install_package("fwupd", trup_reboot => 1);
     systemctl "start fwupd";
 
     # Get all devices that support firmware updates

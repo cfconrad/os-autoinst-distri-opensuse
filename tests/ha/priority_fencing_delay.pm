@@ -7,13 +7,14 @@
 # The node with the master resource must always win the fencing match
 # Maintainer: QE-SAP <qe-sap@suse.de>
 
-use base 'haclusterbasetest';
+use Mojo::Base 'haclusterbasetest';
 use testapi;
 use lockapi;
 use hacluster;
-use utils qw(zypper_call reconnect_mgmt_console);
+use utils qw(reconnect_mgmt_console);
 use Utils::Backends qw(is_pvm);
 use version_utils qw(is_sle);
+use package_utils qw(install_package);
 
 sub stonith_iptables {
     my ($self, $count, $cluster) = @_;
@@ -52,13 +53,14 @@ sub run {
     prepare_console_for_fencing;
 
     # iptables is not installed in SLE 16 by default
-    zypper_call 'in iptables' if is_sle('>=16');
+    install_package('iptables', trup_apply => 1) if is_sle('>=16');
 
     # Configure a master resource on node1 for getting a heavier weight for the priority fencing feature
     if (is_node(1)) {
         assert_script_run "crm configure primitive stateful-1 ocf:pacemaker:Stateful meta priority=129";
         assert_script_run "crm configure clone promotable-1 stateful-1 meta promotable=true";
-        assert_script_run "crm resource param stonith-sbd set pcmk_delay_max 15";
+        my $fencing_ra = get_fencing_ra_name(script_output($crm_config_show_fence_sbd));
+        assert_script_run "crm resource param $fencing_ra set pcmk_delay_max 15";
         assert_script_run "crm configure property priority-fencing-delay=30";
         # Workaround for bsc#1244437
         if (is_sle('16+') and get_var("WORKAROUND_BSC1244437")) {

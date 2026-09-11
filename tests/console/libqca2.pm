@@ -15,7 +15,7 @@
 # - monitor keystore
 # Maintainer: Paolo Stivanin <pstivanin@suse.com>
 
-use base "opensusebasetest";
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use utils;
 use version_utils qw(is_sle is_leap is_tumbleweed);
@@ -55,8 +55,9 @@ sub run {
     assert_script_run "$qca_cmd show cert cert.pem";
     assert_script_run "$qca_cmd keybundle make rsapriv.pem cert.pem --pass=suse --newpass=suse";
     assert_script_run "$qca_cmd keystore list-stores";
-    enter_cmd "$qca_cmd keystore monitor";
-    assert_screen "qctool2_keystore_monitor";
+    enter_cmd "$qca_cmd keystore monitor >>/dev/$serialdev";
+    wait_serial 'Monitoring keystores';
+    wait_serial 'System Trusted Certificates';
     enter_cmd "q";
     assert_script_run "$qca_cmd show kb cert.p12 --pass=suse";
 

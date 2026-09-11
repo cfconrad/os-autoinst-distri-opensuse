@@ -3,8 +3,8 @@
 #
 # Summary: Check the system is unregistered and register it via suseconnect tool.
 #
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
-use base 'consoletest';
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
+use Mojo::Base 'consoletest';
 use testapi;
 
 sub run {
@@ -18,10 +18,6 @@ sub run {
     assert_script_run "SUSEConnect --list-extensions";
     assert_script_run "SUSEConnect -d || SUSEConnect --cleanup";
     assert_script_run "SUSEConnect -s | grep 'Not Registered'";
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

@@ -11,6 +11,7 @@ use Mojo::Base 'containers::basetest';
 use testapi;
 use serial_terminal qw(select_serial_terminal);
 use version_utils;
+use version;
 use containers::bats;
 
 sub run_tests {
@@ -39,7 +40,7 @@ sub run {
     my ($self) = @_;
     select_serial_terminal;
 
-    my @pkgs = qw(attr diffutils file go1.24 go-md2man jq libcap-progs make moreutils python313-xattr runc skopeo umoci);
+    my @pkgs = qw(attr diffutils file go1.26 go-md2man jq libcap-progs make moreutils python313-xattr runc skopeo umoci);
     $self->setup_pkgs(@pkgs);
 
     my $os_version = "openSUSE_Tumbleweed";
@@ -76,13 +77,13 @@ sub cleanup {
 }
 
 sub post_fail_hook {
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 sub post_run_hook {
-    cleanup;
     bats_post_hook;
+    cleanup;
 }
 
 1;

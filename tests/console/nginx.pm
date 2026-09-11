@@ -6,7 +6,7 @@
 # Summary: Test nginx service, http, https and http2 capabilities
 # Maintainer: Pavel Dostal <pdostal@suse.cz>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use services::nginx;
@@ -21,6 +21,10 @@ sub run {
     services::nginx::check_service();
     services::nginx::config_service();
     services::nginx::check_function();
+}
+
+sub post_run_hook {
+    services::nginx::stop_service();
 }
 
 sub test_flags {

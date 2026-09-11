@@ -7,7 +7,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#109774
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use Utils::Architectures 'is_s390x';
@@ -49,10 +49,6 @@ sub run {
     assert_script_run("cd $test_dir");
     assert_script_run("./$exe_file >> $log_file", timeout => 900);
     upload_logs("$log_file");
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 sub post_fail_hook {

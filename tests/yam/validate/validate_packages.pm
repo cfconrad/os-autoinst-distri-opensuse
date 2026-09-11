@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Validate individual packages installed or not in the system
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 
 sub run {

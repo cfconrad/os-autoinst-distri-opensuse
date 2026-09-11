@@ -7,6 +7,8 @@ package virt_autotest_base;
 # Summary: virt_autotest: the initial version of virtualization automation test in openqa, with kvm support fully, xen support not done yet
 # Maintainer: alice <xlai@suse.com>
 
+## no os-autoinst style
+
 use File::Basename;
 use base "opensusebasetest";
 use testapi;
@@ -266,10 +268,10 @@ sub post_fail_hook {
 
     #FOR S390X LPAR
     if (is_s390x) {
-        #collect and upload supportconfig log from S390X LPAR
+        #collect and upload required logs from S390X LPAR
         virt_utils::lpar_cmd("supportconfig -B supportconfig", {timeout => 600});
-        upload_logs("/var/log/scc_supportconfig.txz");
-        upload_logs("/tmp/s390x_guest_install_test.tar.bz2");
+        virt_utils::lpar_upload_logs("/var/log/scc_supportconfig.txz");
+        virt_utils::lpar_upload_logs("/tmp/s390x_guest_install_test.tar.bz2");
         virt_utils::lpar_cmd("rm -f /var/log/scc_supportconfig.*;rm -rf /tmp/s390x_guest_install_test.*");
         return;
     }
@@ -280,10 +282,17 @@ sub post_fail_hook {
     check_host_health;
 
     if (get_var("VIRT_PRJ2_HOST_UPGRADE")) {
-        virt_utils::collect_host_and_guest_logs('', '/root/autoupg.xml', '');
+        virt_utils::collect_host_and_guest_logs(
+            extra_host_log => get_var('EXTRA_HOST_LOG', '/root/autoupg.xml'),
+            full_supportconfig => get_var('FULL_SUPPORTCONFIG', 1),
+            excluded_supportconfig_features => get_var('EXCLUDED_SUPPORTCONFIG_FEATURES', 'aFSLIST AUDIT SELINUX')
+        );
     }
     else {
-        virt_utils::collect_host_and_guest_logs;
+        virt_utils::collect_host_and_guest_logs(
+            full_supportconfig => get_var('FULL_SUPPORTCONFIG', 1),
+            excluded_supportconfig_features => get_var('EXCLUDED_SUPPORTCONFIG_FEATURES', 'aFSLIST AUDIT SELINUX')
+        );
     }
     save_screenshot;
 

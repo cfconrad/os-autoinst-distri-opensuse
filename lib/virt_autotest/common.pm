@@ -38,90 +38,76 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             autoyast => 'autoyast_xen/sles15sp2HVM_PRG.xml',
             extra_params => '--connect xen:/// --virt-type xen --hvm --os-variant sle15sp1',    # sle15sp2 is unknown on 12.3
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
         },
         sles15sp2PV => {
             name => 'sles15sp2PV',
             autoyast => 'autoyast_xen/sles15sp2PV_PRG.xml',
             extra_params => '--connect xen:/// --virt-type xen --paravirt --os-variant sle15sp1',    # sle15sp2 is unknown on 12.3
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
-        },
-        sles15sp3PV => {
-            name => 'sles15sp3PV',
-            autoyast => 'autoyast_xen/sles15sp3PV_PRG.xml',
-            extra_params => '--os-variant sle15-unknown',
-            distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP3-Full-LATEST/x86_64/DVD1/',
-        },
-        sles15sp3HVM => {
-            name => 'sles15sp3HVM',
-            autoyast => 'autoyast_xen/sles15sp3HVM_PRG.xml',
-            extra_params => '--os-variant sle15-unknown',
-            distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP3-Full-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
         },
         sles12sp5HVM => {
             name => 'sles12sp5HVM',
             autoyast => 'autoyast_xen/sles12sp5HVM_PRG.xml',
             extra_params => '--connect xen:/// --virt-type xen --hvm --os-variant sles12sp4',    # old system compatibility
             distro => 'SLE_12_SP5',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
         },
         sles12sp5PV => {
             name => 'sles12sp5PV',
             autoyast => 'autoyast_xen/sles12sp5PV_PRG.xml',
             extra_params => '--connect xen:/// --virt-type xen --paravirt --os-variant sles12sp4',    # old system compatibility
             distro => 'SLE_12_SP5',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
         },
         sles15sp4PV => {
             name => 'sles15sp4PV',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
             distro => 'SLE_15_SP4',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
         },
         sles15sp4HVM => {
             name => 'sles15sp4HVM',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
             distro => 'SLE_15_SP4',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
         },
         sles15sp5PV => {
             name => 'sles15sp5PV',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
             distro => 'SLE_15_SP5',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
         },
         sles15sp5HVM => {
             name => 'sles15sp5HVM',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
             distro => 'SLE_15_SP5',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
         },
         sles15sp6PV => {
             name => 'sles15sp6PV',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
         },
         sles15sp6HVM => {
             name => 'sles15sp6HVM',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
         },
         sles15sp7PV => {
             name => 'sles15sp7PV',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
         },
         sles15sp7HVM => {
             name => 'sles15sp7HVM',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
         }
     );
     # Filter out guests not allowed for the detected SLE version
@@ -131,12 +117,7 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
         }
     } elsif (is_sle('=15-SP2')) {
-        my @allowed_guests = qw(sles15sp2HVM sles15sp2PV sles15sp3HVM sles15sp3PV);
-        foreach my $guest (keys %guests) {
-            delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
-        }
-    } elsif (is_sle('=15-SP3')) {
-        my @allowed_guests = qw(sles15sp3HVM sles15sp3PV sles15sp4HVM sles15sp4PV);
+        my @allowed_guests = qw(sles15sp2HVM sles15sp2PV);
         foreach my $guest (keys %guests) {
             delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
         }
@@ -174,59 +155,52 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             autoyast => 'autoyast_kvm/sles12sp3_PRG.xml',
             extra_params => '--os-variant sles12sp3',
             distro => 'SLE_12_SP3',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-12-SP3-Server-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-12-SP3-Server-GM/x86_64/DVD1/',
         },
         sles15sp2 => {
             name => 'sles15sp2',
             autoyast => 'autoyast_kvm/sles15sp2_PRG.xml',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade (originally sle15sp2)
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
-        },
-        sles15sp3 => {
-            name => 'sles15sp3',
-            autoyast => 'autoyast_kvm/sles15sp3_PRG.xml',
-            extra_params => '--os-variant sle15-unknown',
-            distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP3-Full-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP2-Full-GM/x86_64/DVD1/',
         },
         sles12sp5 => {
             name => 'sles12sp5',
             autoyast => 'autoyast_kvm/sles12sp5_PRG.xml',
             extra_params => '--os-variant sles12sp4',    # old system compatibility
             distro => 'SLE_12_SP5',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-12-SP5-Server-LATEST/x86_64/DVD1/',
         },
         sles15sp4 => {
             name => 'sles15sp4',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/',
         },
         sles15sp5 => {
             name => 'sles15sp5',
             extra_params => '--os-variant sle15-unknown',    # problems after kernel upgrade
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP5-Full-LATEST/x86_64/DVD1/',
         },
         sles15sp6 => {
             name => 'sles15sp6',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
         },
         sles15sp6efi => {
             name => 'sles15sp6efi',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
             boot_firmware => 'efi',    # EFI version of SLES 15 SP6
         },
         'sles15sp6-efi-sev-es' => {
             name => 'sles15sp6-efi-sev-es',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
+            location => 'http://download.suse.de/install/SLP/SLE-15-SP6-Full-GM/x86_64/DVD1/',
             boot_firmware => 'efi_sev_es',    # sev_es
             launch_security => 'sev,policy=0x06',    # sev_es
             memory_backing => 'locked=on',    # sev_es
@@ -235,27 +209,27 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             name => 'sles15sp7',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+            location => 'http://openqa.suse.de/assets/repo/fixed/SLE-15-SP7-Full-x86_64-GM-Media1/',
         },
         sles15sp7efi => {
             name => 'sles15sp7efi',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+            location => 'http://openqa.suse.de/assets/repo/fixed/SLE-15-SP7-Full-x86_64-GM-Media1/',
             boot_firmware => 'efi',    # EFI version of SLES 15 SP7
         },
         'sles15sp7efi-snapshot' => {
             name => 'sles15sp7efi-snapshot',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+            location => 'http://openqa.suse.de/assets/repo/fixed/SLE-15-SP7-Full-x86_64-GM-Media1/',
             boot_firmware => 'efi-with-qcow2-based-nvram',    # For efi vm snapshot test
         },
         sles16efi_online => {
             name => 'sles16efi_online',
             extra_params => '--os-variant sles16',    # Use SLES16 variant
             distro => 'SLE_16',
-            iso_url => 'http://openqa.suse.de/assets/iso/SLES-16.0-Online-x86_64-Build135.5.install.iso',    # ISO download URL
+            iso_url => 'http://openqa.suse.de/assets/iso/fixed/SLES-16.0-Online-x86_64-GM.install.iso',    # ISO download URL
             boot_firmware => 'efi',    # SLES16 only supports EFI guests, no BIOS support
         },
         sles16efi_full => {
@@ -263,7 +237,7 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             extra_params => '--os-variant sles16',    # Use SLES16 variant
             distro => 'SLE_16',
             location => 'http://openqa.suse.de/assets/repo/fixed/SLES-16.0-Full-x86_64-GM.install/',    # Network location for live OS
-            install_url => 'http://openqa.suse.de/assets/repo/SLES-16.0-x86_64-Build135.5/',    # Install repository URL
+            install_url => 'http://openqa.suse.de/assets/repo/fixed/SLES-16.0-x86_64-GM/',    # Install repository URL
             boot_firmware => 'efi',    # SLES16 only supports EFI guests, no BIOS support
         },
         sles16efi_full_snapshot => {
@@ -271,17 +245,33 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             extra_params => '--os-variant sles16',    # Use SLES16 variant
             distro => 'SLE_16',
             location => 'http://openqa.suse.de/assets/repo/fixed/SLES-16.0-Full-x86_64-GM.install/',    # Network location for live OS
-            install_url => 'http://openqa.suse.de/assets/repo/SLES-16.0-x86_64-Build135.5/',    # Install repository URL
+            install_url => 'http://openqa.suse.de/assets/repo/fixed/SLES-16.0-x86_64-GM/',    # Install repository URL
             boot_firmware => 'efi-with-qcow2-based-nvram',    # For efi vm snapshot test
         },
         'sles15sp7-efi-sev-es' => {
             name => 'sles15sp7-efi-sev-es',
             extra_params => '--os-variant sle15-unknown',
             distro => 'SLE_15',
-            location => 'http://mirror.suse.cz/install/SLP/SLE-15-SP7-Full-GM/x86_64/DVD1/',
+            location => 'http://openqa.suse.de/assets/repo/fixed/SLE-15-SP7-Full-x86_64-GM-Media1/',
             boot_firmware => 'efi_sev_es',    # sev_es
             launch_security => 'sev,policy=0x06',    # sev_es
             memory_backing => 'locked=on',    # sev_es
+        },
+        'sles16efi_full-sev-es' => {
+            name => 'sles16efi_full-sev-es',
+            extra_params => '--os-variant sles16',    # Use SLES16 variant
+            distro => 'SLE_16',
+            location => 'http://download.suse.de/install/SLP/SLES-16.0-Full-LATEST/x86_64/DVD1/',    # Network location for live OS
+            boot_firmware => 'efi_sev_es',    # sev_es
+            launch_security => 'sev,policy=0x06',    # sev_es
+            memory_backing => 'locked=on',    # sev_es
+        },
+        'sles16efi_full-tdx' => {
+            name => 'sles16efi_full-tdx',
+            extra_params => '--os-variant sles16',    # Use SLES16 variant
+            distro => 'SLE_16',
+            location => 'http://download.suse.de/install/SLP/SLES-16.0-Full-LATEST/x86_64/DVD1/',    # Network location for live OS
+            launch_security => 'tdx',
         }
     );
     # Filter out guests not allowed for the detected SLE version
@@ -301,12 +291,7 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
         }
     } elsif (is_sle('=15-SP2')) {
-        my @allowed_guests = qw(sles15sp2 sles15sp3);
-        foreach my $guest (keys %guests) {
-            delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
-        }
-    } elsif (is_sle('=15-SP3')) {
-        my @allowed_guests = qw(sles15sp3 sles15sp4);
+        my @allowed_guests = qw(sles15sp2);
         foreach my $guest (keys %guests) {
             delete $guests{$guest} unless grep { $_ eq $guest } @allowed_guests;
         }
@@ -346,6 +331,10 @@ if (get_var("REGRESSION", '') =~ /xen/) {
             @allowed_guests = qw(sles15sp7efi sles16efi_online);
         } elsif (check_var('ENABLE_SEV_SNP', '1')) {
             @allowed_guests = qw(sles15sp7efi sles16efi_full);
+        } elsif (check_var('ENABLE_SEV_ES', '1')) {
+            @allowed_guests = qw(sles15sp7-efi-sev-es sles16efi_full-sev-es);
+        } elsif (check_var('ENABLE_TDX', '1')) {
+            @allowed_guests = qw(sles16efi_full-tdx);
         } elsif (check_var('ENABLE_SNAPSHOTS', '1')) {
             @allowed_guests = qw(sles15sp7efi-snapshot sles16efi_full_snapshot);
         }
@@ -372,9 +361,6 @@ if (get_var("REGRESSION", '') =~ /xen/) {
         },
         sles15sp2TD => {
             name => 'sles15sp2TD',
-        },
-        sles15sp3 => {
-            name => 'sles15sp3',
         },
         sles15sp4 => {
             name => 'sles15sp4',
@@ -411,9 +397,6 @@ if (get_var("REGRESSION", '') =~ /xen/) {
         sles15sp2TD => {
             vm_name => 'sles-15.2_openQA-virtualization-maintenance',
         },
-        sles15sp3 => {
-            vm_name => 'sles-15.3_openQA-virtualization-maintenance',
-        },
         sles15sp4 => {
             vm_name => 'sles-15.4_openQA-virtualization-maintenance',
         },
@@ -437,34 +420,61 @@ if (get_var("REGRESSION", '') =~ /xen/) {
 }
 
 our %imports = ();    # imports are virtual machines that we don't install but just import. We test those separately.
+my $win_variant = is_sle('<=15-SP5') ? 'win2k22' : 'win2k25';    # os-variant win2k25 is avaiable from 15sp6 bsc#1259771
+
 if (get_var("REGRESSION", '') =~ /xen/) {
-    %imports = (
-        win2k19 => {
-            name => 'win2k19',
-            extra_params => '--connect xen:/// --hvm --os-type windows --os-variant win2k16',    # --os-variant win2k19 not supported in older versions
-            disk => '/var/lib/libvirt/images/win2k19.raw',
-            source => '/mnt/virt_images/xen/win2k19.raw',
-            macaddress => '52:54:00:78:73:66',
-            version => 'Microsoft Windows Server 2019',
-            memory => 4096,
-            vcpus => 4,
-            network_model => "e1000",
-        },
-    );
+    if (is_sle('>=16')) {
+        # SLES 16+ does not support Xen
+        %imports = ();
+    } else {
+        # SLES 12/15 use legacy BIOS boot
+        %imports = (
+            'win2k25-bios-xen' => {
+                name => 'win2k25-bios-xen',
+                extra_params => "--connect xen:/// --virt-type xen --hvm --os-variant $win_variant",
+                disk => '/var/lib/libvirt/images/win2k25-bios-xen.qcow2',
+                source => '/mnt/virt_images/xen/win2k25-bios-xen.qcow2',
+                macaddress => '52:54:00:78:73:66',
+                version => 'Microsoft Windows Server 2025',
+                memory => 8192,
+                vcpus => 4,
+                network_model => "e1000",
+            },
+        );
+    }
 } elsif (get_var("REGRESSION", '') =~ /kvm|qemu/) {
-    %imports = (
-        win2k19 => {
-            name => 'win2k19',
-            extra_params => '--os-type windows --os-variant win2k16',    # --os-variant win2k19 not supported in older versions
-            disk => '/var/lib/libvirt/images/win2k19.raw',
-            source => '/mnt/virt_images/kvm/win2k19.raw',
-            macaddress => '52:54:00:78:73:66',
-            version => 'Microsoft Windows Server 2019',
-            memory => 4096,
-            vcpus => 4,
-            network_model => "e1000",
-        },
-    );
+    if (is_sle('>=16')) {
+        # SLES 16+ only supports UEFI boot
+        %imports = (
+            'win2k25-efi-kvm' => {
+                name => 'win2k25-efi-kvm',
+                extra_params => "--os-variant $win_variant",
+                disk => '/var/lib/libvirt/images/win2k25-efi-kvm.qcow2',
+                source => '/mnt/virt_images/kvm/win2k25-efi-kvm.qcow2',
+                macaddress => '52:54:00:78:73:67',
+                version => 'Microsoft Windows Server 2025',
+                memory => 8192,
+                vcpus => 4,
+                network_model => "e1000",
+                boot_firmware => 'efi',
+            },
+        );
+    } else {
+        # SLE15 and earlier use legacy BIOS boot
+        %imports = (
+            'win2k25-bios-kvm' => {
+                name => 'win2k25-bios-kvm',
+                extra_params => "--os-variant $win_variant",
+                disk => '/var/lib/libvirt/images/win2k25-bios-kvm.qcow2',
+                source => '/mnt/virt_images/kvm/win2k25-bios-kvm.qcow2',
+                macaddress => '52:54:00:78:73:66',
+                version => 'Microsoft Windows Server 2025',
+                memory => 8192,
+                vcpus => 4,
+                network_model => "e1000",
+            },
+        );
+    }
 } else {
     %imports = ();
 }

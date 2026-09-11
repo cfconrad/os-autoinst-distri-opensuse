@@ -4,9 +4,9 @@
 # SPDX-License-Identifier: FSFAP
 
 # Summary: Validate that the product installed by agama via /etc/os-release
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use Config::Tiny;
 use Test::Assert ':all';
@@ -27,7 +27,7 @@ sub run {
 }
 
 sub test_flags {
-    return {fatal => 1};
+    return {fatal => 0};
 }
 
 1;

@@ -15,7 +15,7 @@
 # - Exit firefox
 # Maintainer: QE Core <qe-core@suse.de>
 
-use base "x11test";
+use Mojo::Base 'x11test';
 use testapi;
 
 sub run {
@@ -33,7 +33,7 @@ sub run {
     }
     if (match_has_tag 'test-firefox_audio-notplayed') {
         record_info('poo#186585', 'Play the audio file manually');
-        send_key_until_needlematch('test-firefox_audio-1', 'spc', 3, 3);
+        send_key_until_needlematch('test-firefox_audio-1', 'spc', 3, 4);
     }
     sleep 1;    # at least a second of silence
 

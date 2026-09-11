@@ -7,7 +7,7 @@
 # Summary: Simple smoke test for testing USB drive connected to system
 # Maintainer: LSG QE Kernel <kernel-qa@suse.de>
 
-use base 'opensusebasetest';
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use serial_terminal;
 use utils;
@@ -21,18 +21,22 @@ sub md5sum {
     return $md5;
 }
 
-
 sub run {
     my ($self) = @_;
 
     select_serial_terminal;
     check_usb_devices;
 
-    my $lun = script_output 'lsscsi -t -v | awk -F" " \'/usb/ {split($2,a,/[\/]/); print a[6]}\'';
-    die "no usb storage device connected" if $lun eq "";
+    my $lsscsi_out = script_output 'lsscsi -v -t 2>/dev/null';
 
-    my $device = "/dev/" . script_output "lsscsi -v | awk -F\"/\" \'/$lun/ {print \$3; exit}\'";
+    my $device;
+    if ($lsscsi_out =~ /usb:.*(\/dev\/\w+)/) {
+        $device = $1;
+    }
 
+    die "No USB storage device found in lsscsi output" unless $device;
+
+    record_info("USB Found", "Using device: $device");
     # create filesystem, mountpoint and temporary file
     my $tmp = script_output 'mktemp -d';
     my $file = "$tmp/file";
@@ -62,7 +66,7 @@ sub run {
 
 
     if (@{zypper_search('lklfuse')}) {
-        install_package 'lklfuse';
+        install_package('lklfuse', trup_apply => 1);
         assert_script_run "usermod -a -G disk bernhard";
 
         select_user_serial_terminal;
@@ -77,6 +81,8 @@ sub run {
         my $mounts = script_output "mount";
         die "$mountpoint not found in mtab!" unless $mounts =~ /\Q$mountpoint\E/;
         assert_script_run "cp $file $file_copy";
+        assert_script_run "sync";
+        record_info "Drive contents", script_output("ls $mountpoint");
         assert_script_run "fusermount -u $mountpoint";
         assert_script_run "sync";
         # make sure the file doesn't exist after unmointing, this would mean the device wasn't mounted

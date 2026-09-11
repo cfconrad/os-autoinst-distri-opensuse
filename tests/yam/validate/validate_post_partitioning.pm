@@ -5,15 +5,15 @@
 
 # Summary: Validate that post partition script was executed
 
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 
 sub run {
     select_console 'root-console';
-    assert_script_run("ls /etc/zypp/zypp.conf.rpmnew");
+    assert_script_run("ls /etc/zypp/zypper.conf.rpmnew");
 }
 
 1;

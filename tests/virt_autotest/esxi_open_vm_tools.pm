@@ -6,14 +6,18 @@
 # Summary: Run open-vm-tools testing against VMware ESXi
 # Maintainer: Nan Zhang <nan.zhang@suse.com>
 
-use base 'consoletest';
+## no os-autoinst compile-check
+
+use Mojo::Base 'consoletest';
 use testapi;
+use transactional;
 use utils;
 use virt_autotest::common;
 use virt_autotest::esxi_utils;
+use virt_autotest::utils;
 use Time::Local;
 use Utils::Backends qw(is_qemu is_svirt);
-use version_utils qw(is_sle);
+use version_utils qw(is_sle is_transactional);
 use package_utils 'install_package';
 
 my $ssh_vm;
@@ -27,9 +31,8 @@ sub run {
         run_tests($vm_name);
     }
     elsif (is_qemu) {
-        my $host_os_ver = get_var('DISTRI') . "s" . lc(get_var('VERSION') =~ s/-//r);
         foreach my $guest (keys %virt_autotest::common::guests) {
-            run_tests($guest) if ($guest eq $host_os_ver || $guest eq "${host_os_ver}TD" || $guest eq "${host_os_ver}PV" || $guest eq "${host_os_ver}HVM" || $guest eq "${host_os_ver}ES");
+            run_tests($guest) if (is_guest_of_host_version($guest));
         }
     }
 }
@@ -91,6 +94,8 @@ sub do_power_mgmt_tests {
     check_vmtools_service() if (is_svirt);
     $powerops_ret = take_vm_power_ops($vm_id, $powerops, $VM_POWER_ON);
     check_vm_power_state($vm_id, $vm_ip, $powerops, $powerops_ret, 0, $VM_POWER_OFF);
+    # Disconnect CD-ROM
+    esxi_vm_disconnect_cdrom($vm_id);
 
     record_info('Guest Power On');
     $powerops = 'power.on';
@@ -114,8 +119,6 @@ sub do_power_mgmt_tests {
     check_vmtools_service() if (is_svirt);
     $powerops_ret = take_vm_power_ops($vm_id, $powerops, $VM_POWER_ON);
     check_vm_power_state($vm_id, $vm_ip, $powerops, $powerops_ret, 0, $VM_POWER_OFF);
-
-    # Boot up the VM if it's powered off
     $powerops = 'power.on';
     $powerops_ret = take_vm_power_ops($vm_id, $powerops, $VM_POWER_OFF);
     check_vm_power_state($vm_id, $vm_ip, $powerops, $powerops_ret, 1, $VM_POWER_ON);
@@ -137,6 +140,7 @@ sub do_networking_tests {
     if (check_var('DISTRI', 'sle')) {
         # If nmap is not installed, install it
         install_package('nmap') if (script_run('command -v nmap'));
+        transactional::process_reboot(trigger => 1) if (is_transactional);
         die "SSH is not reachable" if (script_retry("nmap $vm_ip -PN -p ssh | grep open", delay => 10, retry => 12, timeout => 360) != 0);
     }
 
@@ -270,11 +274,12 @@ sub wait_for_vm_network {
 }
 
 sub login_vm_console {
+    console('sut')->disable_vnc_stalls;
+    console('svirt')->stop_serial_grab;
     reset_consoles;
     console('svirt')->start_serial_grab;
     select_console('sut');
-    assert_screen('grub2', 200);
-    wait_screen_change { send_key 'ret' };
+    send_key 'ret' if (check_screen('grub2', 180));
     assert_screen('linux-login', 120);
     select_console('root-console');
 }

@@ -10,7 +10,7 @@
 # Tags: tc#1436143
 
 
-use base 'x11test';
+use Mojo::Base 'x11test';
 use testapi;
 use version_utils qw(is_sle is_tumbleweed);
 
@@ -20,7 +20,7 @@ sub run {
     enter_cmd "ftp://ftp.suse.com";
     assert_screen 'nautilus-ftp-login';
     if (is_tumbleweed || is_sle('15-SP6+')) {
-        record_soft_failure("bsc#1205589 Enter key doesn't work on nautilus-ftp-login screen");
+        # bsc#1205589, Upstream change which is by design
         assert_and_click "nautilus-ftp-connect";
     }
     send_key 'ret';

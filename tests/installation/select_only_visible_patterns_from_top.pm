@@ -9,9 +9,9 @@
 #
 #    For this you need to have needles that provide base-pattern,
 #    minimal-pattern...
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base 'y2_installbase';
+use Mojo::Base 'y2_installbase';
 use testapi;
 
 sub run {

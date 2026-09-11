@@ -1,31 +1,52 @@
-name:          sle16-virt-guest-installation
-description:    >
+name: sle16-virt-guest-installation
+description: |
   Virtualization guest installation tests including extended feature tests schedule with agama and IPXE
 schedule:
   - '{{host_installation}}'
   - virt_autotest/login_console
-  - virt_autotest/prepare_non_transactional_server
+  - '{{do_preparation}}'
   - '{{prepare_nvram_for_snapshot}}'
+  - '{{virt_bridge_setup_test}}'
   - virt_autotest/unified_guest_installation
   - virt_autotest/set_config_as_glue
   - '{{uefi_guest_verification}}'
   - '{{sev_snp_validation}}'
   - '{{sev_es_guest_verification}}'
-  - '{{snapshot}}'
+  - '{{tdx_validation}}'
   - '{{sriov_network_card_pci_passthrough_test}}'
   - '{{virtual_network_test}}'
   - '{{hotplugging_test}}'
   - '{{storage_test}}'
+  - '{{snapshot}}'
 conditional_schedule:
   host_installation:
     DO_NOT_INSTALL_HOST:
       0:
         - installation/ipxe_install
         - installation/agama_reboot
+  do_preparation:
+    TRANSACTIONAL:
+      0:
+        - virt_autotest/prepare_non_transactional_server
+      1:
+        - virt_autotest/prepare_transactional_server
   prepare_nvram_for_snapshot:
     ENABLE_SNAPSHOT:
       1:
+        - '{{prepare_nvram_for_snapshot_DEV_version}}'
+        - '{{prepare_nvram_for_snapshot_QU_version}}'
+  prepare_nvram_for_snapshot_DEV_version:
+    VERSION_TO_INSTALL:
+      '16.0':
         - virt_autotest/prepare_nvram_for_snapshot
+  prepare_nvram_for_snapshot_QU_version:
+    VERSION:
+      '16.0':
+        - virt_autotest/prepare_nvram_for_snapshot
+  virt_bridge_setup_test:
+    ENABLE_VIRT_BRIDGE_SETUP_TEST:
+      1:
+        - virt_autotest/virt_bridge_setup
   uefi_guest_verification:
     VIRT_UEFI_GUEST_INSTALL:
       1:
@@ -34,6 +55,10 @@ conditional_schedule:
     VIRT_SEV_SNP_GUEST_INSTALL:
       1:
         - virt_autotest/sev_snp_validation
+  tdx_validation:
+    VIRT_TDX_GUEST_INSTALL:
+      1:
+        - virt_autotest/tdx_validation
   sev_es_guest_verification:
     VIRT_SEV_ES_GUEST_INSTALL:
       1:
@@ -68,3 +93,4 @@ conditional_schedule:
     ENABLE_STORAGE:
       1:
         - virtualization/universal/storage
+        - virt_autotest/libvirt_extend_storage_lvm

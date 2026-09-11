@@ -8,9 +8,9 @@
 # - Enter bootloader configuration option during install (unless is update)
 # - Set grub timeout to "-1" (60 if older than sle12sp1)
 # - Save screenshot
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base 'y2_installbase';
+use Mojo::Base 'y2_installbase';
 use testapi;
 use utils;
 use version_utils qw(is_sle is_leap is_upgrade);

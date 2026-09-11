@@ -7,13 +7,14 @@
 # Summary: Test FirewallD basic usage, including nftables/iptables
 # Maintainer: Alexandre Makoto Tanno <atanno@suse.com>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use utils qw(systemctl zypper_call script_retry);
 use version_utils qw(is_sle is_leap is_transactional is_sle_micro);
 use transactional qw(trup_call check_reboot_changes);
 use registration;
+use package_utils 'install_package';
 
 sub uses_iptables {
     return is_sle('<15-SP3') || is_leap('<15.3');
@@ -358,7 +359,7 @@ sub test_default_backend {
 sub run {
     select_serial_terminal;
 
-    zypper_call('in iptables') if is_sle('>=16');
+    install_package('iptables', trup_reboot => 1) if is_sle('>=16');
 
     # Check Service State, enable it if necessary, set default zone to public
     pre_test;

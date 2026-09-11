@@ -34,18 +34,17 @@ use Mojo::JSON qw(decode_json);
 use YAML::PP;
 use NetAddr::IP;
 use Exporter 'import';
-use Scalar::Util 'looks_like_number';
+use Scalar::Util qw(looks_like_number);
 use File::Basename;
 use utils qw(file_content_replace script_retry);
-use version_utils 'is_sle';
+use version_utils qw(is_sle);
 use publiccloud::utils qw(get_credentials detect_worker_ip);
 use sles4sap::qesap::aws;
 use sles4sap::qesap::azure;
 use sles4sap::qesap::utils;
 use sles4sap::azure_cli;
-use mmapi 'get_current_job_id';
+use mmapi qw(get_current_job_id);
 use testapi;
-
 
 my @log_files = ();
 
@@ -91,6 +90,7 @@ our @EXPORT = qw(
   qesap_terraform_ansible_deploy_retry
   qesap_create_cidr_from_ip
   qesap_ssh_intrusion_detection
+  qesap_gcp_delete_leftover_ncc_spokes
 );
 
 =head1 DESCRIPTION
@@ -223,6 +223,9 @@ sub qesap_ansible_create_section {
 
 =item B<RETRY> - number of retry attempts, default is 1
 
+=item B<PROGRESS> - instead of the command output, print a C<dd> style progress to stdout. If set to a number
+bigger than one, also print that number of lines from the output after the command finishes.
+
 =back
 =cut
 
@@ -232,17 +235,20 @@ sub qesap_venv_cmd_exec {
     $args{timeout} //= bmwqemu::scale_timeout(90);
     croak "Invalid timeout value $args{timeout}" unless $args{timeout} > 0;
     my $retry = $args{retry} // 1;
+    my $print_tail = ($args{progress} && looks_like_number($args{progress}) && $args{progress} > 1);
+    $args{progress} //= 0;
 
     my $cmd = $args{cmd};
     # pipefail is needed as at the end of the command line there could be a pipe
     # to redirect all output to a log_file.
     # pipefail allow script_run always getting the exit code of the cmd command
     # and not only the one from tee
-    if ($args{log_file}) {
-        script_run 'set -o pipefail';
-        # always use tee in append mode
-        $cmd .= " |& tee -a $args{log_file}";
-    }
+    script_run 'set -o pipefail' if ($args{log_file} || $args{progress});
+
+    # always use tee in append mode
+    $cmd .= " |& tee -a $args{log_file}" if ($args{log_file});
+    # pass the output to 'dd status=progress' to print a progress report instead of the output
+    $cmd .= ' |& dd status=progress of=/dev/null 2>&1' if ($args{progress});
 
     my $ret = script_run('source ' . QESAPDEPLOY_VENV . '/bin/activate');
     if ($ret) {
@@ -252,9 +258,34 @@ sub qesap_venv_cmd_exec {
     $ret = script_retry($cmd, timeout => $args{timeout}, retry => $retry, die => 0);
 
     # deactivate python virtual environment
-    script_run('deactivate');
+    eval { script_run('deactivate'); };
+    _check_bsc1258357($@) if ($@);
+
+    script_run "tail -n $args{progress} $args{log_file}" if ($print_tail);
 
     return $ret;
+}
+
+=head3 _check_bsc1258357
+
+  Check system for bsc#1258357 and report findings, then fail the test.
+=cut
+
+sub _check_bsc1258357 {
+    my $errmsg = shift;
+    # If this function was called, probably the active terminal used by the test is
+    # blocked due to bsc#1258357. We need to switch to a different terminal/console
+    # that allows the test to type in commands to confirm. The lines below will attempt
+    # to switch to 'root-console' unless test was already running in 'root-console'
+    my $console = current_console() eq 'root-console' ? 'user-console' : 'root-console';
+    reset_consoles;
+    select_console $console;
+    my $out = script_output(q@journalctl -b | grep -B 5 -A 5 'Disabling IRQ #25'@, proceed_on_failure => 1);
+    if ($out =~ /(Disabling IRQ #25|irq 25: nobody cared)/) {
+        record_info('bsc#1258357 Failure', "err_msg => $errmsg\nkernel trace => $out", result => 'fail');
+        die 'bsc#1258357 - [QE] Writing large amount of text into virtio console breaks input handling on 15-SP7';
+    }
+    die $errmsg;
 }
 
 =head3 qesap_py
@@ -535,7 +566,8 @@ sub qesap_execute {
     my $exec_rc = qesap_venv_cmd_exec(
         cmd => $qesap_cmd,
         timeout => $args{timeout},
-        log_file => $exec_log);
+        log_file => $exec_log,
+        progress => ($args{cmd} eq 'ansible' ? 10 : 0));
 
     my @qesap_logs;
 
@@ -893,16 +925,18 @@ sub qesap_ansible_softfail {
     croak 'Missing mandatory logfile argument' unless $args{logfile};
     # use grep as the log is huge
     my $ansible_output = script_output(
-        'grep -E "\[OSADO\]\[softfail\] ([a-zA-Z]+#\S+) (.*)" ' . $args{logfile},
+        'grep -E "\[OSADO\]\[softfail\] ([a-zA-Z]+#\S+)( .*)?" ' . $args{logfile},
         proceed_on_failure => 1);
     my $reference;
+    my $description;
     foreach my $ansible_line (split /\n/, $ansible_output) {
         chomp $ansible_line;
-        if ($ansible_line =~ qr/\[OSADO\]\[softfail\] ([a-zA-Z]+#\S+) (.*)/) {
+        if ($ansible_line =~ qr/\[OSADO\]\[softfail\] ([a-zA-Z]+#\S+)( .*)?/) {
             # Using a variable named $reference is needed to pass test-soft_failure-no-reference.
             # Refer to CONTRIBUTING.md
             $reference = $1;
-            record_soft_failure("$reference - $2");
+            $description = $2 ? ' - ' . $2 : '';
+            record_soft_failure($reference . $description);
         }
     }
 }
@@ -1368,7 +1402,7 @@ sub qesap_upload_supportconfig_logs {
         filter => "\"$args{host}\"",
         host_keys_check => 1,
         verbose => 1,
-        timeout => bmwqemu::scale_timeout(600),
+        timeout => bmwqemu::scale_timeout(1200),
         failok => $args{failok});
     qesap_ansible_cmd(cmd => "sudo chmod 755 /var/tmp/scc_$log_filename.txz",
         provider => $args{provider},
@@ -1441,6 +1475,18 @@ sub qesap_cluster_log_cmds {
         {
             Cmd => 'rpm -qa',
             Output => 'rpm-qa.txt',
+        },
+        {
+            Cmd => 'cat /tmp/hdblcm_before_jinja.cfg',
+            Output => 'hdblcm_before_jinja.cfg.txt'
+        },
+        {
+            Cmd => 'cat /tmp/hdblcm_template.j2',
+            Output => 'hdblcm_template.j2.txt'
+        },
+        {
+            Cmd => 'cat /tmp/hdblcm_processed_configfile.cfg',
+            Output => 'hdblcm_processed_configfile.cfg.txt'
         }
     );
     if ($args{provider} eq 'EC2') {
@@ -1688,7 +1734,7 @@ sub qesap_export_instances {
         "SSH keys and instances data uploaded to test results:\n" . join("\n", @upload_files));
 }
 
-=head2 qesap_aws_delete_leftover_tgw_attachments
+=head3 qesap_aws_delete_leftover_tgw_attachments
 
     Delete leftover peering resources for AWS jobs that finished without cleaning up.
     This only works for resources created by jobs that run on the same openqa server 
@@ -1733,7 +1779,7 @@ sub qesap_aws_delete_leftover_tgw_attachments {
     return 1;
 }
 
-=head2 qesap_terraform_ansible_deploy_retry
+=head3 qesap_terraform_ansible_deploy_retry
 
     qesap_terraform_ansible_deploy_retry( error_log=>$error_log )
         error_log - ansible error log file name
@@ -1830,7 +1876,7 @@ sub qesap_terraform_ansible_deploy_retry {
     return $detected_error;
 }
 
-=head2 qesap_ansible_error_detection
+=head3 qesap_ansible_error_detection
 
     qesap_ansible_error_detection( error_log=>$error_log )
 
@@ -1878,7 +1924,7 @@ sub qesap_ansible_error_detection {
     return $ret_code;
 }
 
-=head2 qesap_create_cidr_from_ip
+=head3 qesap_create_cidr_from_ip
 
     qesap_create_cidr_from_ip( proceed_on_failure )
 
@@ -1924,9 +1970,6 @@ sub qesap_ssh_intrusion_detection {
     my (%args) = @_;
     croak "Missing mandatory 'provider' argument" unless $args{provider};
     my $inventory = qesap_get_inventory(provider => $args{provider});
-    my $attempts;
-    my %users;
-    my %ips;
     my %report;
     my $log_filename;
 
@@ -1936,6 +1979,7 @@ sub qesap_ssh_intrusion_detection {
         $log_filename = "$host-intrusion-log.txt";
         $log_filename =~ s/[\[\]"]//g;
         my $out_file = qesap_ansible_script_output_file(
+            # quotation mark escaping needed here as this command is executed via inline ansibleplaybook command
             cmd => 'journalctl -u sshd | grep \"Connection closed by\"',
             provider => $args{provider},
             host => $host,
@@ -1948,11 +1992,9 @@ sub qesap_ssh_intrusion_detection {
         unless (script_run("test -e $out_file")) {
             upload_logs($out_file, failok => 1);
             my $output = script_output("cat $out_file");
-            $attempts = 0;
-            %users = ();
-            %ips = ();
-
-            next if $attempts == 0;
+            my $attempts = 0;
+            my %users = ();
+            my %ips = ();
 
             foreach my $line (split /\n/, $output) {
                 # Regular expression to capture user and IP for both 'authenticating user' and 'invalid user'
@@ -1964,6 +2006,8 @@ sub qesap_ssh_intrusion_detection {
                 }
             }
 
+            next if $attempts == 0;
+
             $report{$host}{attempts} = $attempts;
             $report{$host}{users} = [keys %users];
             $report{$host}{ips} = [keys %ips];
@@ -1971,6 +2015,141 @@ sub qesap_ssh_intrusion_detection {
                 "Found $report{$host}{attempts} login attempts. Users: @{$report{$host}{users}}. IPs: @{$report{$host}{ips}}");
         }
     }
+}
+
+=head3 qesap_gcp_get_ncc_spokes
+
+    qesap_gcp_get_ncc_spokes( [hub => $hub], [name => $name] )
+
+    Queries GCP for Network Connectivity Center (NCC) spokes matching the given
+    hub or spoke name.
+    Return:
+     - Array ref of spoke HASH references
+     - Empty array ref on failure or if no spokes are found
+
+=over
+
+=item B<hub> - Optional NCC hub name to filter spokes by
+
+=item B<name> - Optional spoke name to filter by
+
+=back
+=cut
+
+sub qesap_gcp_get_ncc_spokes {
+    my (%args) = @_;
+    my $filter = '';
+    if ($args{name}) {
+        $filter = "--filter='name:$args{name}'";
+    }
+    elsif ($args{hub}) {
+        $filter = "--filter='hub:$args{hub}'";
+    }
+
+    my $cmd = join(' ', 'gcloud network-connectivity spokes list',
+        '--global',
+        $filter,
+        '--format=json');
+
+    my $output = script_output($cmd, proceed_on_failure => 1);
+    return [] unless $output;
+
+    my $spokes = eval { decode_json($output) };
+    return ref($spokes) eq 'ARRAY' ? $spokes : [];
+}
+
+
+=head3 qesap_gcp_delete_ncc_spoke
+
+    qesap_gcp_delete_ncc_spoke( name => $name, [wait => 1], [timeout => 300] )
+
+    Deletes a GCP NCC spoke by name and optionally waits until deletion completes.
+    Return:
+     - 1 if deletion succeeded or wait flag is 0
+     - 0 if wait timed out before deletion completed
+
+=over
+
+=item B<name> - Mandatory spoke name to delete
+
+=item B<wait> - Optional boolean flag to wait for deletion completion (default: 1)
+
+=item B<timeout> - Optional max seconds to wait in seconds (default: 300)
+
+=back
+=cut
+
+sub qesap_gcp_delete_ncc_spoke {
+    my (%args) = @_;
+    croak 'Must provide spoke name' unless $args{name};
+    $args{timeout} //= bmwqemu::scale_timeout(300);
+    $args{wait} = $args{wait} // 1;
+
+    my $cmd = join(' ', 'gcloud network-connectivity spokes delete', $args{name}, '--global', '--quiet');
+    script_run($cmd);
+
+    return 1 unless $args{wait};
+
+    my $duration;
+    my $start_time = time();
+    my $res;
+    while (($duration = time() - $start_time) < $args{timeout}) {
+        sleep 5;
+        $res = qesap_gcp_get_ncc_spokes(name => $args{name});
+        last unless ref($res) eq 'ARRAY' && @$res;
+    }
+    return $duration < $args{timeout} ? 1 : 0;
+}
+
+
+=head3 qesap_gcp_delete_leftover_ncc_spokes
+
+    qesap_gcp_delete_leftover_ncc_spokes( hub => $hub )
+
+    Scans GCP NCC spokes attached to the given hub, identifies edge spokes left over
+    from finished openQA jobs, and initiates deletion. Ignores the center spoke.
+    Return:
+     - 0 if mandatory arguments are missing
+     - 1 on successful scan and cleanup execution
+
+=over
+
+=item B<hub> - Mandatory NCC hub name to inspect
+
+=back
+=cut
+
+sub qesap_gcp_delete_leftover_ncc_spokes {
+    my (%args) = @_;
+    return 0 unless $args{hub};
+
+    my $available_spokes = qesap_gcp_get_ncc_spokes(hub => $args{hub});
+
+    return 1 unless ref($available_spokes) eq 'ARRAY' && @$available_spokes;
+    record_info('GCP PEERING CLEANUP', 'Starting leftover NCC spoke cleanup (GCP)');
+
+    foreach my $spoke (@$available_spokes) {
+        my $spoke_name = $spoke->{name} // next;
+        $spoke_name =~ s{.*/}{};
+
+        # Ignore non-edge spokes and the permanent center spoke
+        next if $spoke_name eq 'ibsm-center-spoke' || ($spoke->{group} // '') eq 'center';
+
+        # Extract job ID appended at the end of the spoke name (e.g. edge-hanasr24276142)
+        next unless $spoke_name =~ /(\d+)$/;
+        my $job_id = $1;
+
+        # Delete spoke if the associated job is finished
+        next unless qesap_is_job_finished(job_id => $job_id);
+
+        record_info('LEFTOVER GCP SPOKE', "Spoke ${spoke_name}'s job $job_id has finished, deleting");
+
+        qesap_gcp_delete_ncc_spoke(
+            name => $spoke_name,
+            wait => 0
+        );
+    }
+    return 1;
 }
 
 1;

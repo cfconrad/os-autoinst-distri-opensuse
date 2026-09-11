@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     aws = {
-      version = "= 5.98.0"
+      version = "= 6.38.0"
       source  = "hashicorp/aws"
     }
     random = {
@@ -84,8 +84,28 @@ variable "ipv6_address_count" {
   default = 0
 }
 
+variable "ssh_key_algo" {
+  type        = string
+  default     = "ed25519"
+  description = "SSH key algorithm"
+}
+
 variable "ssh_public_key" {
-  default = "/root/.ssh/id_ed25519.pub"
+  type        = string
+  default     = ""
+  description = "Explicit path to the SSH public key. Overrides ssh_key_algo when non-empty."
+}
+
+locals {
+  ssh_public_key = var.ssh_public_key != "" ? var.ssh_public_key : "/root/.ssh/id_${var.ssh_key_algo}.pub"
+}
+
+variable "nitro_enclave" {
+  default = false
+}
+
+data "aws_iam_instance_profile" "ec2_cloudwatch" {
+  name       = "OpenQAEC2CloudWatchLogsRole" 
 }
 
 resource "random_id" "service" {
@@ -98,7 +118,7 @@ resource "random_id" "service" {
 
 resource "aws_key_pair" "openqa-keypair" {
   key_name   = "openqa-${element(random_id.service[*].hex, 0)}"
-  public_key = file(var.ssh_public_key)
+  public_key = file(local.ssh_public_key)
 }
 
 resource "aws_instance" "openqa" {
@@ -110,6 +130,8 @@ resource "aws_instance" "openqa" {
   availability_zone      = var.availability_zone
   subnet_id              = var.subnet_id
   ipv6_address_count     = var.ipv6_address_count
+
+  iam_instance_profile = data.aws_iam_instance_profile.ec2_cloudwatch.name
 
   tags = merge({
     openqa_created_by   = var.name
@@ -131,6 +153,11 @@ resource "aws_instance" "openqa" {
     content {
       amd_sev_snp = var.enable_confidential_vm
     }
+  }
+
+  # AWS Nitro Enclave
+  enclave_options {
+    enabled = var.nitro_enclave
   }
 
   user_data = var.cloud_init != "" ? file(var.cloud_init) : null

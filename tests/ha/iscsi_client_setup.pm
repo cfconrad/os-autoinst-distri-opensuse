@@ -7,7 +7,7 @@
 # Summary: Configure iSCSI target for HA tests
 # Maintainer: QE-SAP <qe-sap@suse.de>
 
-use base 'haclusterbasetest';
+use Mojo::Base 'haclusterbasetest';
 use Utils::Backends qw(is_remote_backend);
 use utils qw(zypper_call systemctl ping_size_check file_content_replace script_retry);
 use testapi;
@@ -15,6 +15,7 @@ use hacluster;
 use mmapi qw(get_parents get_current_job_id);
 use serial_terminal qw(select_serial_terminal);
 use version_utils qw(is_sle package_version_cmp);
+use package_utils qw(install_package);
 
 =head1 NAME
 
@@ -85,7 +86,6 @@ iSCSI target and LUNs.
 sub request_luns {
     my (%args) = @_;
     foreach (qw(instance jobid numluns)) { die "request_luns: missing [$_] argument" unless $args{$_} }
-    zypper_call 'in nfs-client';    # Make sure nfs-client is installed
     assert_script_run 'mount -t nfs ' . get_required_var('NFS_SUPPORT_SHARE') . ' /mnt';
     assert_script_run "mkdir /mnt/ondemand/$args{instance}_$args{jobid}_$args{numluns}";
     assert_script_run 'umount /mnt';
@@ -113,8 +113,9 @@ sub run {
     record_info 'iscsi initiator pre configuration', script_output('cat /etc/iscsi/initiatorname.iscsi', proceed_on_failure => 1);
     record_info 'rpm-qf', script_output('rpm -qf /etc/iscsi/initiatorname.iscsi', proceed_on_failure => 1);
 
-    # open-iscsi & iscsiuio
-    zypper_call 'in open-iscsi' if (script_run('rpm -q open-iscsi'));
+    # Install dependencies
+    install_package("open-iscsi nfs-client", trup_reboot => 1);
+
     record_info 'iscsi initiator configuration', script_output('cat /etc/iscsi/initiatorname.iscsi');
     record_info 'rpm-qf', script_output('rpm -qf /etc/iscsi/initiatorname.iscsi');
     record_info('open-iscsi version', script_output('rpm -q open-iscsi'));
@@ -134,10 +135,10 @@ sub run {
     die "Initator name $old_initator_name is not changed" if $old_initator_name eq $new_initator_name;
 
     # Save multipath wwids file as we may need it to blacklist iSCSI devices later
+    my $mpconf = '/etc/multipath.conf';
+    my $mpwwid = '/etc/multipath/wwids';
+    my $mptmp = '/tmp/multipath-wwids';
     if (get_var('MULTIPATH')) {
-        my $mpconf = '/etc/multipath.conf';
-        my $mpwwid = '/etc/multipath/wwids';
-        my $mptmp = '/tmp/multipath-wwids';
         script_run "cp $mpwwid $mptmp.orig";
     }
 

@@ -7,7 +7,7 @@
 # Maintainer: QE Security <none@suse.de>
 # Tags: poo#108485
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use utils;
 use eal4_test;
@@ -58,10 +58,6 @@ sub run {
             $self->result('fail');
         }
     }
-}
-
-sub test_flags {
-    return {always_rollback => 1};
 }
 
 1;

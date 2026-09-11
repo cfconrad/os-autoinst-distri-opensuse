@@ -50,6 +50,8 @@
 #
 # Maintainer: Ondřej Súkup <osukup@suse.cz>, Anton Pappas <apappas@suse.com>
 
+## no os-autoinst style
+
 use base "opensusebasetest";
 
 use utils;
@@ -84,11 +86,17 @@ my @conflicting_packages = (
     'libica-openssl1_1-tools', 'libica-devel', 'libica-devel-static',
     'cyrus-sasl-bdb-ntlm', 'cyrus-sasl-bdb-otp', 'cyrus-sasl-saslauthd-bdb', 'cyrus-sasl-otp',
     'cyrus-sasl-ntlm', 'cyrus-sasl-bdb-devel', 'cyrus-sasl-sqlauxprop',
-    'nvidia-open-driver-G06-signed-cuda-default-devel', 'nvidia-open-driver-G06-signed-azure-devel',
-    'nvidia-open-driver-G06-signed-cuda-64kb-devel',
-    'kernel-firmware-nvidia-gspx-G06-cuda', 'nvidia-open-driver-G06-signed-cuda-kmp-default',
-    'nv-prefer-signed-open-driver', 'nvidia-open-driver-G06-signed-cuda-kmp-azure',
-    'nvidia-open-driver-G06-signed-cuda-kmp-64kb',
+    'nv-prefer-signed-open-driver',
+    'nvidia-open-driver-G06-signed-kmp-default',
+    'nvidia-open-driver-G06-signed-cuda-kmp-default',
+    'nvidia-open-driver-G06-signed-cuda-default-devel',
+    'nvidia-open-driver-G06-signed-azure-devel',
+    'nvidia-open-driver-G06-signed-cuda-kmp-azure',
+    'kernel-firmware-nvidia-gspx-G06-cuda',
+    'nv-prefer-signed-open-driver-G07',
+    'nvidia-open-driver-G07-signed-kmp-default',
+    'nvidia-open-driver-G07-signed-cuda-kmp-default',
+    'nvidia-open-driver-G07-signed-cuda-default-devel',
     'kernel-default-base', 'kernel-default-extra',
     'patterns-base-fips-certified',
     'gnu-compilers-hpc-macros-devel', 'gnu12-compilers-hpc-macros-devel',
@@ -97,8 +105,10 @@ my @conflicting_packages = (
 );
 
 # https://progress.opensuse.org/issues/153388
-push(@conflicting_packages, ('dpdk-thunderx', 'dpdk-thunderx-devel', 'dpdk-thunderx-kmp-default')) if is_aarch64;
-push(@conflicting_packages, ('dpdk22-thunderx', 'dpdk22-thunderx-devel', 'dpdk22-thunderx-kmp-default')) if is_aarch64;
+push(@conflicting_packages, ('dpdk-thunderx', 'dpdk-thunderx-devel', 'dpdk-thunderx-kmp-default',
+        'dpdk22-thunderx', 'dpdk22-thunderx-devel', 'dpdk22-thunderx-kmp-default',
+        'nvidia-open-driver-G06-signed-cuda-64kb-devel', 'nvidia-open-driver-G06-signed-cuda-kmp-64kb',
+        'nvidia-open-driver-G07-signed-64kb-devel', 'nvidia-open-driver-G07-signed-cuda-kmp-64kb',)) if is_aarch64;
 
 my @conflicting_packages_sle12 = ('apache2-prefork', 'apache2-doc', 'apache2-example-pages', 'apache2-utils', 'apache2-worker',
     'apache2-tls13', 'apache2-tls13-doc', 'apache2-tls13-example-pages', 'apache2-tls13-prefork', 'apache2-tls13-worker',
@@ -201,6 +211,17 @@ sub run {
         zypper_call("rr sle-module-packagehub-subpackages:${version}::pool sle-module-packagehub-subpackages:${version}::update");
     }
 
+    # Enable PackageHub repos in case dependent packages are required.
+    # Note: avoid enabling by default as it may introduce new dependency issues,
+    # especially when LTSS repos are present.
+    if (get_var('QAM_ENABLE_PHUB_REPO')) {
+        my $version = get_var('VERSION');
+        my $arch = get_var('ARCH');
+        zypper_ar("http://dist.suse.de/ibs/SUSE/Products/SLE-Module-Packagehub-Subpackages/$version/$arch/product/",
+            name => "sle-module-packagehub-subpackages:${version}::pool");
+        zypper_ar("http://dist.suse.de/ibs/SUSE/Updates/SLE-Module-Packagehub-Subpackages/$version/$arch/update/",
+            name => "sle-module-packagehub-subpackages:${version}::update");
+    }
     my $zypper_version = script_output(q(rpm -q zypper|awk -F. '{print$2}'));
 
     zypper_call(q{mr -d $(zypper lr | awk -F '|' '/NVIDIA/ {print $2}')}, exitcode => [0, 3]);
@@ -438,7 +459,7 @@ sub run {
         record_info 'Reboot after patch', "system is bootable after patch $patch";
         reboot_and_login;
 
-        if ($patch_info_status_status !~ /Status\s+: applied/ && script_run("grep '$patch already installed' /tmp/zypper_$patch.log") == 1) {
+        if ($patch_info_status !~ /Status\s+: applied/ && script_run("grep '$patch already installed' /tmp/zypper_$patch.log") == 1) {
             # After and only if the patches have been applied and the new binaries
             # have been installed, check the version again and based on that
             # determine if the update was succesfull.

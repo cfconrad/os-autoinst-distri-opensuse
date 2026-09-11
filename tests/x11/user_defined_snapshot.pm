@@ -16,12 +16,14 @@
 # - Make sure machine is back to original system
 # Maintainer: Dumitru Gutu <dgutu@suse.com>
 
-use base "x11test";
+## no os-autoinst compile-check
+
+use Mojo::Base 'x11test';
 use testapi;
 use utils;
 use Utils::Backends 'is_remote_backend';
 use power_action_utils 'power_action';
-use y2snapper_common qw(y2snapper_close_snapper_module);
+use y2snapper_common;
 use x11utils 'default_gui_terminal';
 use version_utils;
 

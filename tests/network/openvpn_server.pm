@@ -11,7 +11,7 @@
 #  * After client connects, both sides perform ping, then disconnect
 # Maintainer: QE Security <none@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use lockapi;
@@ -19,7 +19,7 @@ use y2_module_guitest;
 use mm_network;
 use mmapi 'wait_for_children';
 use utils qw(systemctl zypper_call exec_and_insert_password script_retry);
-use version_utils qw(is_sle is_opensuse);
+use version_utils qw(is_sle is_opensuse package_version_cmp);
 use repo_tools 'add_qa_head_repo';
 use registration qw(add_suseconnect_product get_addon_fullname is_phub_ready);
 use Utils::Architectures;
@@ -55,13 +55,16 @@ sub run {
     zypper_call("install openssl") if (script_run("which openssl") != 0);
     assert_script_run('cd /etc/openvpn');
     assert_script_run('openvpn --genkey --secret static.key');
-    mutex_create 'OPENVPN_STATIC_KEY';
 
     # Download the server config
     assert_script_run('curl -o static.conf ' . data_url('openvpn/static_server.conf'));
 
     # Remove unsupported configuration options on older SLE versions
     assert_script_run('sed -i "/^cipher/d; /^data-ciphers/d" static.conf') if (is_sle('<15-sp4'));
+
+    # openvpn 2.7 only starts a static key (non TLS) config with this opt-in, poo#205689
+    my $openvpn_version = script_output('rpm -q --qf "%{version}" openvpn');
+    assert_script_run('echo allow-deprecated-insecure-static-crypto >> static.conf') if (package_version_cmp($openvpn_version, '2.7') >= 0);
 
     # Send client key
     if (is_s390x) {
@@ -70,6 +73,9 @@ sub run {
         assert_script_run 'firewall-cmd --reload';
     }
     my $server_pid = background_script_run "python3 -m http.server -b $server_ip 8008";
+    # Wait for the http server to actually listen before unblocking the client
+    script_retry("ss -Hltn 'sport = :8008' | grep -q LISTEN", delay => 1, retry => 30, timeout => 5);
+    mutex_create 'OPENVPN_STATIC_KEY';
 
     # Start the server
     systemctl('start openvpn@static');

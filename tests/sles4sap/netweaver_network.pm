@@ -6,7 +6,7 @@
 # Summary: Configure NetWeaver network
 # Maintainer: QE-SAP <qe-sap@suse.de>, Loic Devulder <ldevulder@suse.de>
 
-use base 'sles4sap';
+use Mojo::Base 'sles4sap';
 use testapi;
 use serial_terminal 'select_serial_terminal';
 use lockapi;
@@ -45,7 +45,7 @@ sub run {
         assert_script_run 'mv /tmp/hosts.nw /etc/hosts';
 
         # Synchronize the hosts file
-        add_file_in_csync(value => '/etc/hosts');
+        sync_path('/etc/hosts');
     }
 }
 

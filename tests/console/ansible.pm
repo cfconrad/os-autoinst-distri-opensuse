@@ -12,7 +12,7 @@
 #   6. Ansible Vault
 # Maintainer: QE Core <qe-core@suse.de>, Pavel Dostál <pdostal@suse.cz>
 
-use base "consoletest";
+use Mojo::Base 'consoletest';
 use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal 'select_serial_terminal';
 use utils qw(zypper_call random_string systemctl file_content_replace ensure_serialdev_permissions);
@@ -108,7 +108,7 @@ sub run {
     # 2. Ansible basics
 
     # Check Ansible version
-    record_info('ansible --version', script_output('ansible --version'));
+    record_info('ansible --version', script_output('ansible --version', timeout => 300));
 
     # older sles with wicked changes its transient hostname after reboot to s390kvm0XX
     # wicked can leave the hostname configuration for DHCP
@@ -124,7 +124,7 @@ sub run {
 
     # Install config_manager role from ansible-network
     # https://galaxy.ansible.com/ansible-network/config_manager
-    assert_script_run 'ansible-galaxy install ansible-network.config_manager', timeout => 300;
+    assert_script_run 'ansible-galaxy install ansible-network.config_manager', timeout => 700;
 
     # Verify that the config_manager is installed
     my $galaxy_installed = script_output 'ansible-galaxy list';

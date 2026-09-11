@@ -5,14 +5,15 @@
 #
 # Summary: Set environmental variables which differ between the products involved in the upgrade
 # with the possibility to restore it later.
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base "opensusebasetest";
+use Mojo::Base 'opensusebasetest';
 use testapi;
 use migration 'reset_consoles_tty';
 
 sub run {
     # Read product variables of the product to migrate from/to
+    my $agama = get_var('VERSION_UPGRADE_FROM') =~ /^16/ ? '1' : '0';
     my $version = get_var('VERSION_UPGRADE_FROM', get_var('VERSION_UPGRADE_TO'));
     my $scc_addons =
       get_var('SCC_ADDONS_UPGRADE_FROM',
@@ -20,15 +21,15 @@ sub run {
             get_var('SCC_ADDONS')));
 
     # Save the original value of the variables in order to restore it later if needed
-    foreach my $var (qw(AGAMA SCC_ADDONS SCC_URL VERSION)) {
+    foreach my $var (qw(AGAMA BETA SCC_ADDONS VERSION)) {
         set_var($var . "_ENV", get_var($var)) if (get_var($var));
     }
 
     # Change variables to the other version that we want to migrate from/to
     my %vars_to_set = (
-        AGAMA => '0',
+        AGAMA => $agama,
+        BETA => '0',
         SCC_ADDONS => $scc_addons,
-        SCC_URL => 'https://scc.suse.com',
         VERSION => $version,
     );
     my $env_content = '';

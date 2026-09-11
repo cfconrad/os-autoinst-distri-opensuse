@@ -29,6 +29,8 @@
 # "F10"
 # Maintainer: QE LSG <qa-team@suse.de>
 
+## no os-autoinst style
+
 package bootloader_uefi;
 
 use base "installbasetest";
@@ -41,8 +43,8 @@ use lockapi 'mutex_wait';
 use bootloader_setup;
 use registration;
 use utils;
-use version_utils qw(is_jeos is_microos is_opensuse is_sle is_selfinstall is_sle_micro is_leap_micro is_bootloader_sdboot is_bootloader_grub2_bls);
-use Utils::Backends qw(is_ipmi);
+use version_utils qw(is_jeos is_microos is_opensuse is_sle is_selfinstall is_sle_micro is_leap_micro is_bootloader_sdboot is_bootloader_grub2_bls is_transactional);
+use Utils::Backends qw(is_ipmi is_qemu);
 
 # hint: press shift-f10 trice for highest debug level
 sub run {
@@ -113,14 +115,14 @@ sub run {
         assert_screen("bootloader-grub2-agama", $bootloader_timeout);
     }
     else {
-        assert_screen([qw(bootloader-shim-import-prompt bootloader-grub2 grub2-bls bootloader-sdboot)], $bootloader_timeout);
+        assert_screen([qw(bootloader-shim-import-prompt bootloader-grub2 grub2-bls systemd-boot)], $bootloader_timeout);
     }
     if (match_has_tag("bootloader-shim-import-prompt")) {
         send_key "down";
         send_key "ret";
-        assert_screen([qw(bootloader-grub2 bootloader-sdboot grub2-bls)], $bootloader_timeout);
+        assert_screen([qw(bootloader-grub2 systemd-boot grub2-bls)], $bootloader_timeout);
     }
-    if (match_has_tag("bootloader-sdboot")) {
+    if (match_has_tag("systemd-boot")) {
         return if is_bootloader_sdboot;
     }
 
@@ -128,8 +130,9 @@ sub run {
         return;
     }
 
-    my $efi_vars_have_nosb = get_var('UEFI_PFLASH_VARS', '') =~ /nosb/i;
-    if (!$efi_vars_have_nosb && get_var('DISABLE_SECUREBOOT') && (get_var('BACKEND') eq 'qemu')) {
+    my $secure_boot_disabled = get_var('UEFI_PFLASH_VARS', '') =~ /nosb/i
+      || check_var('UEFI_PFLASH_SECURE_BOOT', '0');
+    if (!$secure_boot_disabled && get_var('DISABLE_SECUREBOOT') && is_qemu) {
         $self->tianocore_disable_secureboot;
     }
     if ((get_var("ZDUP") && !is_jeos) || (get_var('ONLINE_MIGRATION') && check_var('BOOTFROM', 'd'))) {
@@ -154,10 +157,13 @@ sub run {
             send_key_until_needlematch("boot-live-" . get_var("DESKTOP"), 'down', 11, 3);
         } elsif (get_var("AGAMA")) {
             select_bootmenu_option;
+        } elsif (is_sle('>=16') && is_transactional) {
+            goto INST_BOOTMENU;
         } elsif (!(is_jeos || ((is_sle_micro || is_leap_micro) && !is_selfinstall)) && !is_microos('VMX')) {
             send_key_until_needlematch('inst-oninstallation', 'down', 11, 0.5);
         }
     }
+  INST_BOOTMENU:
 
     uefi_bootmenu_params;
 

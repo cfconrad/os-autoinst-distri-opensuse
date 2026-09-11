@@ -7,9 +7,9 @@
 # partition table to create RAID using data driven pattern. Data is provided
 # by yaml scheduling file.
 
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use parent 'y2_installbase';
+use Mojo::Base 'y2_installbase';
 
 
 use testapi;

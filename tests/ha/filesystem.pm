@@ -7,7 +7,7 @@
 # Summary: Create filesystem and check content
 # Maintainer: QE-SAP <qe-sap@suse.de>, Loic Devulder <ldevulder@suse.com>
 
-use base 'haclusterbasetest';
+use Mojo::Base 'haclusterbasetest';
 use utils qw(zypper_call write_sut_file);
 use version_utils qw(is_sle);
 use testapi;
@@ -98,7 +98,7 @@ sub run {
 
     # Format the Filesystem device
     if (is_node(1)) {
-        assert_script_run "mkfs.$fs_type $fs_opts{$fs_type} \"$fs_lun\"", $default_timeout;
+        assert_script_run "mkfs.$fs_type $fs_opts{$fs_type} \"$fs_lun\"", $default_timeout * 2;
     }
     else {
         diag 'Wait until Filesystem device is formatted...';
@@ -217,6 +217,12 @@ EDITOR='sed -ie \"\$ a order order_$fs_rsc Mandatory: vg_$resource $fs_rsc\"\' c
                 diag 'Wait until Filesystem content is checked on other nodes...';
             }
         }
+
+        # make sure DRBD passive filesystem is ready
+        my $cmd_timeout = ($default_timeout < 60) ? 60 : $default_timeout;
+        my $check_drbd_cmd = "timeout $cmd_timeout bash -c 'until mountpoint -q /srv/$fs_rsc; do sleep 2; done'";
+        assert_script_run("$check_drbd_cmd", $cmd_timeout + 5);
+        assert_script_run 'sync';
 
         # Check if files/data are different in the Filesystem
         assert_script_run "cd /srv/$fs_rsc/bin ; find . -type f -exec md5sum {} \\; > ../out_$node", $default_timeout;

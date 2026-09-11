@@ -7,9 +7,9 @@
 # Summary: Verify Kdump service status, Kdump kernel parameters
 #          and crush dump after triggering a kernel crash.
 #
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
-use base 'consoletest';
+use Mojo::Base 'consoletest';
 use power_action_utils 'power_action';
 use Utils::Architectures 'is_s390x';
 use utils 'systemctl';

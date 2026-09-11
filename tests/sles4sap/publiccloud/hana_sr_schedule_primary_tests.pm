@@ -1,11 +1,11 @@
 # Copyright SUSE LLC
 # SPDX-License-Identifier: FSFAP
-# Maintainer: QE-SAP <qe-sap@suse.de>
 # Summary: Test module for scheduling multiple instances of tests which target "Master" HANA database.
+# Maintainer: QE-SAP <qe-sap@suse.de>
 
 =head1 NAME
 
-hana_sr_schedule_primary_tests.pm - Schedules tests targeting the primary HANA database.
+sles4sap/publiccloud/hana_sr_schedule_primary_tests.pm - Schedules tests targeting the primary HANA database.
 
 =head1 DESCRIPTION
 
@@ -34,13 +34,13 @@ QE-SAP <qe-sap@suse.de>
 
 package hana_sr_schedule_primary_tests;
 
-use base 'sles4sap_publiccloud_basetest';
-use sles4sap_publiccloud;
+use Mojo::Base 'sles4sap::publiccloud_basetest';
+use sles4sap::publiccloud;
 use testapi;
 use main_common 'loadtest';
 
 sub test_flags {
-    return {fatal => 1, publiccloud_multi_module => 1};
+    return {fatal => 1};
 }
 
 sub run {

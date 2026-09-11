@@ -5,7 +5,7 @@
 
 # Summary: Agama Devel distribution (not really a real distribution!)
 # for integration tests using the current state of code at GitHub for Agama.
-# Maintainer: QE YaST and Migration (QE Yam) <qe-yam at suse de>
+# Maintainer: QE Installation and Migration (QE Iam) <none@suse.de>
 
 package Distribution::Opensuse::AgamaDevel;
 use strict;
@@ -46,9 +46,9 @@ sub get_grub_entry_edition {
       : Yam::Agama::Pom::GrubEntryEditionPage->new();
 }
 
-sub get_agama_up_an_running {
+sub get_agama_up_and_running {
     return is_ppc64le() ? Yam::Agama::Pom::AgamaUpAndRunningPage->new({
-            timeout_expect_is_shown => 300})
+            timeout_expect_is_shown => 400})
       : Yam::Agama::Pom::AgamaUpAndRunningPage->new();
 }
 

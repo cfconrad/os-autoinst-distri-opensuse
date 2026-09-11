@@ -18,7 +18,7 @@
 #    - for each of the plugging/unplugging step above, check domain network status and host&guest status.
 # Maintainer: Julie CAO <JCao@suse.com>, qe-virt@suse.de
 
-use base "virt_feature_test_base";
+use Mojo::Base 'virt_feature_test_base';
 use utils;
 use testapi;
 use virt_autotest::common;
@@ -53,7 +53,7 @@ sub run_test {
     # Back up /etc/resolv.conf as it will refresh by creating VFs
     assert_script_run("cp /etc/resolv.conf /etc/resolv_before_enable_vf.conf");
 
-    record_info("Before enable VF", script_output("ip a"));
+    record_info("Before enabling VF", script_output("ip a"));
     script_run("ip r");
     script_run("nmcli con");
 
@@ -65,7 +65,7 @@ sub run_test {
         reset_consoles;
         select_console('root-ssh');
     }
-    script_run("ip a");
+    record_info("After enabling VF", script_output("ip a", proceed_on_failure => 1));
     script_run("nmcli con");
 
     # Restore /etc/resolv.conf after VFs are created
@@ -77,8 +77,11 @@ sub run_test {
             record_info("Skip SR-IOV test on $guest", "SEV/SEV-ES guest $guest does not support SR-IOV");
             next;
         }
+        if (is_pv_guest($guest)) {
+            record_soft_failure("bsc#1262599 - SR-IOV PCI passthrough is not supported on Xen PV guest $guest, skipping.");
+            next;
+        }
         record_info("Test $guest");
-        check_guest_health($guest);
         prepare_guest_for_sriov_passthrough($guest);
         save_network_device_status_logs($guest, "1-initial");
 
@@ -115,7 +118,7 @@ sub run_test {
         save_network_device_status_logs($guest, "2-after_hotplug_$vfs[0]->{host_id}");
         #check the networking of the plugged interface
         #use br123 as ssh connection
-        test_network_interface($guest, gateway => $gateway, mac => $vfs[0]->{vm_mac}, net => 'br123');
+        test_network_interface($guest, gateway => $gateway, mac => $vfs[0]->{vm_mac});
 
         #unplug the first vf from vm
         unplug_vf_from_vm($guest, $vfs[0]);
@@ -128,7 +131,7 @@ sub run_test {
         #test network after reboot as dhcp lease spends time
         for (my $i = 1; $i < $passthru_vf_count; $i++) {
             plugin_vf_device($guest, $vfs[$i]);
-            test_network_interface($guest, gateway => $gateway, mac => $vfs[$i]->{vm_mac}, net => 'br123') if $i == 1;
+            test_network_interface($guest, gateway => $gateway, mac => $vfs[$i]->{vm_mac}) if $i == 1;
             save_network_device_status_logs($guest, $i + 3 . "-after_hotplug_$vfs[$i]->{host_id}");
         }
 
@@ -140,7 +143,7 @@ sub run_test {
 
         #check the remaining vf(s) inside vm
         for (my $i = 1; $i < $passthru_vf_count; $i++) {
-            test_network_interface($guest, gateway => $gateway, mac => $vfs[$i]->{vm_mac}, net => 'br123');
+            test_network_interface($guest, gateway => $gateway, mac => $vfs[$i]->{vm_mac});
         }
 
         #unplug the remaining vf(s) from vm
@@ -262,35 +265,40 @@ sub prepare_guest_for_sriov_passthrough {
         #set e820_host for pv guest
         #refer to bug #1167217 and but #1185081 for the reason
         unless (is_fv_guest($vm) && is_sle('<15-SP2')) {
-            unless (script_run("xmlstarlet sel -t -c /domain/features $changed_xml_dir/$vm.xml") == 0) {
-                assert_script_run "xmlstarlet edit -L -s /domain -t elem -n features -v '' $changed_xml_dir/$vm.xml";
-            }
-            unless (script_run("xmlstarlet sel -t -c /domain/features/xen $changed_xml_dir/$vm.xml") == 0) {
-                assert_script_run "xmlstarlet edit -L -s /domain/features -t elem -n xen -v '' $changed_xml_dir/$vm.xml";
-            }
-            if (is_sle('>=15-SP2') && script_run("xmlstarlet sel -t -c /domain/features/xen/passthrough $changed_xml_dir/$vm.xml") != 0) {
-                assert_script_run "xmlstarlet edit -L \\
+            # Use scoped classic serial markers for checking the nic is removed from vm
+            {
+                my $marker_guard = $testapi::distri->pretty_serial_marker_guard(0);
+                unless (script_run("xmlstarlet sel -t -c /domain/features $changed_xml_dir/$vm.xml") == 0) {
+                    assert_script_run "xmlstarlet edit -L -s /domain -t elem -n features -v '' $changed_xml_dir/$vm.xml";
+                }
+                unless (script_run("xmlstarlet sel -t -c /domain/features/xen $changed_xml_dir/$vm.xml") == 0) {
+                    assert_script_run "xmlstarlet edit -L -s /domain/features -t elem -n xen -v '' $changed_xml_dir/$vm.xml";
+                }
+                if (is_sle('>=15-SP2') && script_run("xmlstarlet sel -t -c /domain/features/xen/passthrough $changed_xml_dir/$vm.xml") != 0) {
+                    assert_script_run "xmlstarlet edit -L \\
                                    -s /domain/features/xen -t elem -n passthrough -v '' \\
                                    -s ////passthrough -t attr -n state -v on \\
                                    $changed_xml_dir/$vm.xml";
-            }
-            if (is_pv_guest($vm) and script_run("xmlstarlet sel -t -c /domain/features/xen/e820_host $changed_xml_dir/$vm.xml") != 0) {
-                assert_script_run "xmlstarlet edit -L \\
+                }
+                if (is_pv_guest($vm) and script_run("xmlstarlet sel -t -c /domain/features/xen/e820_host $changed_xml_dir/$vm.xml") != 0) {
+                    assert_script_run "xmlstarlet edit -L \\
                                    -s /domain/features/xen -t elem -n e820_host -v '' \\
                                    -s ////e820_host -t attr -n state -v on \\
                                    $changed_xml_dir/$vm.xml";
+                }
             }
         }
 
         script_run "virsh undefine $vm || virsh undefine $vm --keep-nvram";
-        assert_script_run(" ! virsh list --all | grep $vm");
+        assert_script_run("! virsh list --all | grep $vm");
         assert_script_run "virsh define $changed_xml_dir/$vm.xml";
         assert_script_run "virsh start $vm";
         wait_guest_online($vm);
     }
 
     #passwordless access to guest
-    save_guest_ip($vm, name => "br123");    #get the guest ip via key words in 'virsh domiflist'
+    save_guest_ip($vm);
+    check_guest_health($vm);
 
     # Enable udev debug logs
     my $udev_conf_file = "/etc/udev/udev.conf";
@@ -404,7 +412,7 @@ sub unplug_vf_from_vm {
     assert_script_run("virsh detach-device $vm $vf_xml_file --persistent", 60);
 
     #check if the nic is removed from vm
-    assert_script_run(" ! ssh root\@$vm \"ip l show $vf->{vm_nic}\"", fail_message => "ERROR: vf is unplugged from vm, but nic still exists!");
+    assert_script_run("! ssh root\@$vm \"ip l show $vf->{vm_nic}\"", fail_message => "ERROR: vf is unplugged from vm, but nic still exists!");
 }
 
 #print logs for debugging

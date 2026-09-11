@@ -51,6 +51,10 @@ variable "sku" {
   default = "gen2"
 }
 
+variable "root-disk-size" {
+  default = 30
+}
+
 variable "storage-account" {
   # Note: Don't delete the default value!!!
   # Not all of our `terraform destroy` calls pass this variable and neither is it necessary.
@@ -72,8 +76,20 @@ variable "subnet_id" {
   default = ""
 }
 
+variable "ssh_key_algo" {
+  type        = string
+  default     = "rsa"
+  description = "SSH key algorithm"
+}
+
 variable "ssh_public_key" {
-  default = "/root/.ssh/id_rsa.pub"
+  type        = string
+  default     = ""
+  description = "Explicit path to the SSH public key. Overrides ssh_key_algo when non-empty."
+}
+
+locals {
+  ssh_public_key = var.ssh_public_key != "" ? var.ssh_public_key : "/root/.ssh/id_${var.ssh_key_algo}.pub"
 }
 
 resource "random_id" "service" {
@@ -170,6 +186,12 @@ resource "azurerm_network_interface" "openqa-secondary-nic" {
     private_ip_address_version  = "IPv4"
     private_ip_address_allocation = "Dynamic"
   }
+
+  tags = merge({
+    openqa_created_by   = var.name
+    openqa_created_date = timestamp()
+    openqa_created_id   = element(random_id.service.*.hex, 0)
+  }, var.tags)
 }
 
 resource "azurerm_image" "image" {
@@ -183,7 +205,7 @@ resource "azurerm_image" "image" {
     os_type  = "Linux"
     os_state = "Generalized"
     blob_uri = "https://${var.storage-account}.blob.core.windows.net/sle-images/${var.image_id}"
-    size_gb  = 30
+    size_gb  = var.root-disk-size
   }
 }
 
@@ -208,7 +230,7 @@ resource "azurerm_linux_virtual_machine" "openqa-vm" {
 
   admin_ssh_key {
     username   = "azureuser"
-    public_key = file("${var.ssh_public_key}")
+    public_key = file(local.ssh_public_key)
   }
 
   os_disk {
@@ -217,7 +239,7 @@ resource "azurerm_linux_virtual_machine" "openqa-vm" {
     storage_account_type = "Standard_LRS"
     # SLE images are 30G by default. Uncomment this line in case we need to increase the disk size
     # note: value can not be decreased because 30 GB is minimum allowed by Azure
-    # disk_size_gb         = 30
+    disk_size_gb         = var.root-disk-size
   }
 
   source_image_id = var.image_uri != "" ? var.image_uri : (var.image_id != "" ? azurerm_image.image.0.id : null)
