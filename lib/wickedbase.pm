@@ -697,7 +697,7 @@ sub upload_wicked_logs {
         script_run("tar -C /tmp/ -cvzf /tmp/$dir_name.tar.gz $dir_name");
         $self->upload_log_file("/tmp/$dir_name.tar.gz");
     } else {
-        script_run(qq(for i in \$(find /tmp/$dir_name -type f); do echo -e "\n###\n### File: \$i\n###\n"; cat \$i; done > /tmp/$dir_name.txt));
+        script_output(qq(for i in \$(find /tmp/$dir_name -type f); do echo -e "\n###\n### File: \$i\n###\n"; cat \$i; done > /tmp/$dir_name.txt));
         $self->upload_log_file("/tmp/$dir_name.txt");
     }
 }
