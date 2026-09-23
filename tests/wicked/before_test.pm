@@ -34,8 +34,6 @@ sub run {
     my $escaped = $enable_command_logging =~ s/'/'"'"'/gr;
     assert_script_run("echo '$escaped' >> /root/.bashrc");
     assert_script_run($enable_command_logging);
-    record_info('INFO', 'Setting debug level for wicked logs');
-    file_content_replace('/etc/sysconfig/network/config', '--sed-modifier' => 'g', '^WICKED_DEBUG=.*' => 'WICKED_DEBUG="all"', '^WICKED_LOG_LEVEL=.*' => 'WICKED_LOG_LEVEL="debug2"');
     assert_script_run('mkdir -p /etc/systemd/journald.conf.d/');
     $self->write_cfg('/etc/systemd/journald.conf.d/99-openqa-wicked-tests.conf', <<EOT);
         [Journal]
@@ -55,6 +53,8 @@ EOT
     assert_script_run('mkdir -p /data/{static_address,dynamic_address}');
 
     $self->switch_to_wicked($ctx) if (systemctl('is-active NetworkManager', ignore_failure => 1) == 0);
+    record_info('INFO', 'Setting debug level for wicked logs');
+    file_content_replace('/etc/sysconfig/network/config', '--sed-modifier' => 'g', '^WICKED_DEBUG=.*' => 'WICKED_DEBUG="all"', '^WICKED_LOG_LEVEL=.*' => 'WICKED_LOG_LEVEL="debug2"');
 
     if (check_var('WICKED', 'ipv6')) {
         setup_static_network(ip => $self->get_ip(type => 'host', netmask => 1), silent => 1, ipv6 =>
