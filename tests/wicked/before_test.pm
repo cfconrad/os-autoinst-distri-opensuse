@@ -20,6 +20,7 @@ use wicked::wlan;
 use mm_network;
 use power_action_utils 'power_action';
 use Mojo::Util 'trim';
+use registration qw(get_addon_fullname);
 
 sub run {
     my ($self, $ctx) = @_;
