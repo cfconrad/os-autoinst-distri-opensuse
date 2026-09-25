@@ -803,7 +803,7 @@ sub setup_bond {
 
     for my $ifc (($iface0, $iface1)) {
         script_run(qq(ethtool -s $ifc speed 1000 duplex full autoneg off))
-            if script_run(qq(ethtool $ifc | grep "Speed: Unknown"));
+            if script_run(qq(ethtool $ifc | grep "Speed: Unknown")) == 0;
     }
 
     $self->wicked_command('ifup', 'all');
