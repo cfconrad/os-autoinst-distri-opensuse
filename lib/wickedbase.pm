@@ -802,8 +802,12 @@ sub setup_bond {
     file_content_replace($cfg_bond0, ipaddr4 => $ipaddr4, ipaddr6 => $ipaddr6, iface0 => $iface0, iface1 => $iface1, ping_ip_1 => $ping_ip_1, ping_ip_2 => $ping_ip_2, '--sed-modifier' => 'g');
 
     for my $ifc (($iface0, $iface1)) {
-        script_run(qq(ethtool -s $ifc speed 1000 duplex full autoneg off))
-            if script_run(qq(ethtool $ifc | grep "Speed: Unknown")) == 0;
+        set_nics_link_speed_duplex({
+                nics => [$ifc],
+                speed => 1000,
+                duplex => 'full',
+                autoneg => 'off'
+        }) if script_run(qq(ethtool $ifc | grep "Speed: Unknown")) == 0;
     }
 
     $self->wicked_command('ifup', 'all');
