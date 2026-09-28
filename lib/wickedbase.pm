@@ -16,7 +16,7 @@ use network_utils;
 use lockapi;
 use testapi qw(is_serial_terminal :DEFAULT);
 use serial_terminal 'select_serial_terminal';
-use version_utils 'is_sle';
+use version_utils qw(is_sle is_opensuse);
 use bmwqemu;
 use serial_terminal;
 use Carp;
@@ -599,10 +599,33 @@ Setups the openvpn client using the interface given by C<device>
 
 sub setup_openvpn_client {
     my ($self, $device) = @_;
-    my $openvpn_client = '/etc/openvpn/client.conf';
+    my $config = '/etc/openvpn/client.conf';
+    my $openvpn_cfg = 'wicked/openvpn/no-encryption/client.conf';
+    $openvpn_cfg = 'wicked/openvpn/tls/client.conf' if (is_opensuse() || is_sle('>=16.0'));
+
     my $remote_ip = $self->get_remote_ip(type => 'host');
-    $self->get_from_data('wicked/openvpn/client.conf', $openvpn_client);
-    file_content_replace($openvpn_client, remote_ip => $remote_ip, device => $device);
+    $self->get_from_data($openvpn_cfg, $config);
+    file_content_replace($config, remote_ip => $remote_ip, device => $device);
+}
+
+=head2 setup_openvpn_server
+
+Setup the openvpn server using wicked
+
+=cut
+
+sub setup_openvpn_server {
+    my ($self, $device) = @_;
+    my $openvpn_cfg_dest = '/etc/openvpn/server.conf';
+    my $ifc_cfg = "/etc/sysconfig/network/ifcfg-$device";
+    my $openvpn_cfg_source = 'wicked/openvpn/no-encryption/server.conf';
+    $openvpn_cfg_source = 'wicked/openvpn/tls/server.conf' if (is_opensuse() || is_sle('>=16.0'));
+
+    $self->get_from_data('wicked/ifcfg/' . $device . '_ref', $ifc_cfg);
+    $self->get_from_data($openvpn_cfg_source, $openvpn_cfg_dest);
+
+    file_content_replace($openvpn_cfg_dest, device => $device);
+    $self->setup_tuntap($ifc_cfg, $device);
 }
 
 =head2 get_test_result
@@ -693,7 +716,7 @@ sub upload_wicked_logs {
         }
     }
 
-    if (script_run('command -v tar') == 0){
+    if (script_run('command -v tar') == 0) {
         script_run("tar -C /tmp/ -cvzf /tmp/$dir_name.tar.gz $dir_name");
         $self->upload_log_file("/tmp/$dir_name.tar.gz");
     } else {
