@@ -19,15 +19,16 @@ sub run {
 
     return if $self->skip_by_wicked_version(">=0.6.76");
 
-    if ($self->{name} !~ m/t\d+_ifcfg_(test_\d+_\d+)/) {
+    if ($self->{name} !~ m/t\d+_(\w+)_(test_\d+_\d+)/) {
         die("Testname doesn't have expected format!");
     }
-    my $test = $1;
+    my $group = $1;
+    my $test = $2;
     $test =~ s/_/-/;
     $test =~ s/_/./g;
 
     $self->get_from_data('wicked/scripts', '/tmp/');
-    assert_script_run('cd /tmp/scripts/ifcfg/' . $test);
+    assert_script_run("cd /tmp/scripts/$group/$test");
     $self->run_test_shell_script($test, "time nicA=$ifc1 nicB=$ifc2 bash ./test.sh -d");
     $self->skip_check_logs_on_post_run();
 }
