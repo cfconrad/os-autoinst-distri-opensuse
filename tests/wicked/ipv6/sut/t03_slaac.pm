@@ -12,7 +12,7 @@
 #  - one global, dynamic, not tentative address from the SLAAC prefix,
 #  - the address lifetimes from the RA,
 #  - the EUI-64 interface identifier, if addr_gen_mode is eui64,
-#  - no DHCPv6 address,
+#  - wicked marks the address as SLAAC ([auto]) and no address as DHCPv6 ([dhcp]),
 #  - the prefix route and the default route from the RA,
 #  - IPv6 connectivity to the REF,
 #  - RDNSS and DNSSL in /etc/resolv.conf.
@@ -23,6 +23,7 @@ use Mojo::Base 'wickedbase';
 use testapi;
 use lockapi;
 
+# match data/wicked/radvd/radvd_03.conf
 use constant {
     RA_VALID_LFT => 3600,
     RA_PREFERRED_LFT => 2400,
@@ -51,9 +52,7 @@ sub run {
     my $prefix = $self->get_ip(type => 'slaac_prefix');    # 'fd00:dead:beef:5a0c::'
     my $gw = $self->get_ip(type => 'slaac_gw');
     my $dns = $self->get_ip(type => 'slaac_dns');
-    my $dhcp6 = $self->get_ip(type => 'dhcp6');
     (my $prefix64 = $prefix) =~ s/::$//;    # 'fd00:dead:beef:5a0c'
-    (my $dhcp6_range = $dhcp6) =~ s/::[0-9a-f]+$/::/;    # 'fd00:dead:beef:6021:d::'
     my $output;
     $self->{slaac_errors} = 0;
 
@@ -66,24 +65,34 @@ sub run {
 
     # Check the RA content.
     $output = script_output("rdisc6 $iface");
+    record_info('rdisc6', $output);
     $self->fail_check('RA M flag', 'Managed flag is not off') unless $output =~ /Stateful address conf\.\s*:\s*No/;
     $self->fail_check('RA O flag', 'OtherConfig flag is not off') unless $output =~ /Stateful other conf\.\s*:\s*No/;
     $self->fail_check('RA prefix', "Prefix $prefix/64 is missing") unless $output =~ /Prefix\s*:\s*\Q$prefix\E\/64/;
     $self->fail_check('RA RDNSS', "RDNSS $dns is missing") unless $output =~ /Recursive DNS server\s*:\s*\Q$dns\E/;
 
     # Wait for the SLAAC address. DAD must be complete.
-    my $addr_re = qr/inet6 (\Q$prefix64\E:[0-9a-f:]+)\/64 scope global dynamic/;
+    # The flags after "scope global" are checked one by one, as iproute2
+    # prints them in a fixed order (e.g. "tentative dynamic mngtmpaddr").
+    my $addr_re = qr/inet6 (\Q$prefix64\E:[0-9a-f:]+)\/64 scope global([^\n]*)/;
     my $slaac_addr;
     for (1 .. 12) {
         $output = script_output("ip -6 addr show dev $iface scope global");
-        if ($output =~ $addr_re && $output !~ /tentative/) {
-            $slaac_addr = $1;
+        while ($output =~ /$addr_re/g) {
+            my $addr = $1;
+            my $flags_str = $2;
+            my %flags = map { $_ => 1 } split(' ', $flags_str);
+            next unless $flags{dynamic};
+            # skip if one of the flags exists
+            next if grep { $flags{$_} } qw(temporary tentative dadfailed deprecated);
+            $slaac_addr = $addr;
             last;
         }
+        last if $slaac_addr;
         record_info('Waiting', 'Waiting for SLAAC address');
         sleep 5;
     }
-    die("No global dynamic SLAAC address from $prefix/64 on $iface:\n$output") unless $slaac_addr;
+    die("No global dynamic SLAAC address from $prefix/64 on $iface:\n$output\n") unless $slaac_addr;
     record_info('SLAAC address', $slaac_addr);
 
     # Check the lifetimes. The kernel decrements them, so they must be
@@ -110,13 +119,21 @@ sub run {
         record_info('EUI-64', "addr_gen_mode is $gen_mode, EUI-64 check is not applicable");
     }
 
-    # With M and O off, there must be no DHCPv6 address.
-    $output = script_output("ip -6 addr show dev $iface");
-    $self->fail_check('DHCPv6', "Unexpected DHCPv6 address from $dhcp6_range:\n$output")
-      if $output =~ /inet6 \Q$dhcp6_range\E/;
+    # Check the address owner. wicked ifstatus shows it in brackets after
+    # the address, e.g. "addr: ipv6 fd00:dead:beef:5a0c:.../64 [auto]".
+    # The SLAAC address must be "[auto]". With M and O off, no IPv6 address
+    # must be "[dhcp]". The positive check makes sure that the output format
+    # is as expected, thus the negative check is not void.
+    $output = script_output("wicked ifstatus $iface");
+    record_info('wicked ifstatus', $output);
+    $self->fail_check('Address owner', "SLAAC address $slaac_addr is not marked as [auto]:\n$output")
+      unless $output =~ /^\s*addr:\s+ipv6 \Q$slaac_addr\E\/64 \[auto\]/m;
+    $self->fail_check('DHCPv6', "Unexpected DHCPv6 address:\n$output")
+      if $output =~ /^\s*addr:\s+ipv6 \S+ \[dhcp\]/m;
 
     # Check the routes.
     $output = script_output("ip -6 -o route show dev $iface");
+    record_info('ip -6 route', $output);
     $self->fail_check('Prefix route', "Route for $prefix/64 is missing") unless $output =~ /^\Q$prefix\E\/64 /m;
     $self->fail_check('Default route', 'Default route from RA is missing')
       unless $output =~ /^default via fe80:[0-9a-f:]+ .*proto ra/m;
@@ -127,6 +144,7 @@ sub run {
     my $dns_ok = 0;
     for (1 .. 12) {
         $output = script_output('cat /etc/resolv.conf');
+        record_info('resolv.conf', $output);
         if ($output =~ /^nameserver \Q$dns\E$/m && $output =~ /^search .*\b\Q${\RA_DNSSL}\E\b/m) {
             $dns_ok = 1;
             last;

@@ -20,9 +20,9 @@ sub run {
 
     $self->get_from_data('wicked/radvd/radvd_03.conf', '/etc/radvd.conf');
     file_content_replace('/etc/radvd.conf',
-        xxx => $iface,
-        slaac_prefix => $self->get_ip(type => 'slaac_prefix', netmask => 1),
-        slaac_dns => $self->get_ip(type => 'slaac_dns'));
+        __IFACE__ => $iface,
+        __SLAAC_PREFIX__ => $self->get_ip(type => 'slaac_prefix', netmask => 1),
+        __SLAAC_DNS__ => $self->get_ip(type => 'slaac_dns'));
     $self->sync_start_of('radvd', 'radvdipv6t03');
 }
 
